@@ -1,0 +1,39 @@
+# Build outputs
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+coverage/
+
+# Visual Studio and IDE state
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+secrets.json
+
+# Downloaded terrain and raster data
+*.tif
+*.tiff
+*.asc
+data/downloads/
+downloads/
+
+# Logs and operating-system files
+*.log
+.firecrawl/
+.DS_Store
+Thumbs.db

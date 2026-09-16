@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SolidGround.Cli/SolidGround.Cli.csproj" />
+    <Project Path="src/SolidGround.Core/SolidGround.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SolidGround.Tests/SolidGround.Tests.csproj" />
+  </Folder>
+</Solution>
