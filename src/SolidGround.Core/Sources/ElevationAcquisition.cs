@@ -36,7 +36,16 @@ public sealed record ElevationAcquisition
 /// </summary>
 public sealed record ElevationSourceMetadata
 {
-    public ElevationSourceMetadata(string sourceName, string datasetIdentifier, CollectionPeriod collectionPeriod, string qualityLevel)
+    /// <param name="sourceName">The elevation source's display name. Required.</param>
+    /// <param name="datasetIdentifier">The source's own dataset identifier. Required.</param>
+    /// <param name="collectionPeriod">
+    /// The dataset's collection interval, or null when the source does not report one. Some sources,
+    /// such as OpenTopography's usgsdem endpoint, carry neither a collection period nor a catalog
+    /// quality level in their response; fabricating catalog values here would violate the project's
+    /// "fail rather than assume" rule, so both are optional.
+    /// </param>
+    /// <param name="qualityLevel">The dataset's quality level, or null when the source does not report one. When supplied, it cannot be blank.</param>
+    public ElevationSourceMetadata(string sourceName, string datasetIdentifier, CollectionPeriod? collectionPeriod = null, string? qualityLevel = null)
     {
         if (string.IsNullOrWhiteSpace(sourceName))
         {
@@ -48,10 +57,9 @@ public sealed record ElevationSourceMetadata
             throw new ArgumentException("A dataset identifier is required.", nameof(datasetIdentifier));
         }
 
-        ArgumentNullException.ThrowIfNull(collectionPeriod);
-        if (string.IsNullOrWhiteSpace(qualityLevel))
+        if (qualityLevel is not null && string.IsNullOrWhiteSpace(qualityLevel))
         {
-            throw new ArgumentException("A quality level is required.", nameof(qualityLevel));
+            throw new ArgumentException("Quality level cannot be blank when it is supplied.", nameof(qualityLevel));
         }
 
         SourceName = sourceName;
@@ -62,8 +70,8 @@ public sealed record ElevationSourceMetadata
 
     public string SourceName { get; }
     public string DatasetIdentifier { get; }
-    public CollectionPeriod CollectionPeriod { get; }
-    public string QualityLevel { get; }
+    public CollectionPeriod? CollectionPeriod { get; }
+    public string? QualityLevel { get; }
 }
 
 /// <summary>An inclusive, validated date interval for data collection.</summary>

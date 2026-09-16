@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently in **Phase 1: Core contracts and AAIGrid parsing established**. Core, CLI, and offline test projects compile on .NET 10; acquisition, transformations, clipping, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
+The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, and the OpenTopography USGS 1 m source established**. Core, CLI, and offline test projects compile on .NET 10; transformations, clipping, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md) and the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
 
 ## Scope
 
@@ -81,7 +81,7 @@ Run the scaffolded CLI with:
 dotnet run --project src/SolidGround.Cli/SolidGround.Cli.csproj
 ```
 
-Feature tests are offline by default. Parser tests use a small inspected synthetic fixture near the reference parcel scenario; it is not represented as measured terrain or an OpenTopography response. A later end-to-end fetch test will require an explicit opt-in plus `OPENTOPOGRAPHY_API_KEY` in the process environment. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
+Feature tests are offline by default. Parser tests use a small inspected synthetic fixture near the reference parcel scenario; it is not represented as measured terrain or an OpenTopography response. An opt-in end-to-end fetch test against the live OpenTopography endpoint runs only when both the `SOLIDGROUND_OPENTOPOGRAPHY_LIVE` environment variable is set to `1` and `OPENTOPOGRAPHY_API_KEY` is set to a non-empty value; otherwise it skips rather than failing the offline suite. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
 
 The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
 
