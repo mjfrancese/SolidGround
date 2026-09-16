@@ -21,6 +21,11 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: solidground-pve2
     timeout-minutes: 10
+    # The Homelab runner pod is unprivileged, so the SDK must install under the runner's writable temp directory instead of /usr/share/dotnet.
+    env:
+      DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
 
     steps:
       - name: Assert trusted Homelab routing
@@ -31,7 +36,9 @@ jobs:
           test "$GITHUB_EVENT_NAME" = "push"
           test "$GITHUB_REF" = "refs/heads/main"
           case "$RUNNER_NAME" in
-            solidground-pve2-*) ;;
+            solidground-pve2-*)
+              echo "runner_name=$RUNNER_NAME runner_os=$RUNNER_OS"
+              ;;
             *)
               echo "Unexpected runner identity: $RUNNER_NAME" >&2
               exit 1
