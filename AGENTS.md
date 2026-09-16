@@ -100,6 +100,22 @@ The agent must keep `packages.lock.json` files current and committed when packag
 
 GitHub Actions must remain ordinary .NET CI with no AI service. During Phase 1 it builds Core and CLI and runs offline tests on the repository-scoped `self-hosted` ephemeral the infrastructure project runner. Because the repository is public, this self-hosted workflow must accept trusted pushes to `main` only: no pull-request trigger, no fork code, and no automatic GitHub-hosted or a second self-hosted runner fallback. It must retain its repository, owner, event, ref, and runner-identity guards and must not use GitHub-hosted cache or artifact storage.
 
+The `self-hosted` lane was provisioned and audited under a prior infrastructure decision and a prior infrastructure decision, the decision naming this repository for a public-repository trusted-push ARC exception. a prior infrastructure decision recorded the owner's 2026-09-16 decision to harden this repository's own GitHub Actions settings to satisfy that ADR's ninth condition. Any change to the conditions below is a new the infrastructure project security decision, not a routine workflow edit, and the agent must keep each one true:
+
+1. The agent must trigger the workflow only on `push` to `main` in the canonical repository.
+2. The agent must not add a pull-request, fork, issue, comment, release, external-dispatch, or reusable-workflow entry path.
+3. The agent must keep a job-level guard checking the canonical repository, owner, push event, and `refs/heads/main` before runner allocation.
+4. The agent must keep a first step checking those same fields plus the `self-hosted-*` runner name before checkout.
+5. The agent must assume the GitHub App is installed on this repository alone, with Administration read/write and Metadata read only, no webhook, user permissions, or subscribed events.
+6. The agent must assume the runner pod is unprivileged and runner-only, with no Docker daemon or service container.
+7. The agent must not add repository secrets, deployment credentials, GitHub-hosted cache, or artifact storage to the job.
+8. The agent must not add a GitHub-hosted or a second self-hosted runner fallback.
+9. The agent must keep the repository's GitHub Actions settings at full-commit-SHA pinning required and an allow-list narrowed to exactly the actions the workflow uses, with fork pull-request contributor approval tightened beyond GitHub's stock default.
+
+The agent must also keep the infrastructure project runbook's never-list true here: never let this lane see a pull-request, fork, issue, comment, release, or external-dispatch event; never add a GitHub-hosted or a second self-hosted runner fallback; never give the job repository secrets, deployment credentials, hosted cache, or artifact storage beyond the default read-only `GITHUB_TOKEN`; never treat the `self-hosted` runner label itself as a security boundary, and never assume the owner's infrastructure repository's decision record covers any repository beyond the one it names; never let untrusted or fork code reach the runner under any label; and never perform the infrastructure project infrastructure changes (GitHub App, Kubernetes Secret, Helm release, or other self-hosted/a specific infrastructure host state) from within this repository, since that is the infrastructure project-session work under the infrastructure project's own protocol, not SolidGround's.
+
+Condition 9 is implemented today as: `sha_pinning_required=true`; `allowed_actions` narrowed to exactly `actions/checkout` and `actions/setup-dotnet`; fork pull-request contributor approval required for all outside collaborators; and the default workflow token permission read-only. If a run ever fails with an "action not allowed" message, the agent must report it and must not widen the allow-list without the owner.
+
 The current Linux the infrastructure project runner does not include Autodesk's Revit reference assemblies. The agent must not make Phase 1 CI depend on unofficial repackaged Autodesk binaries. Phase 2 CI is a separate design decision: it can compile the add-in only after the user chooses a lawful, reproducible reference-assembly source or a suitable Windows self-hosted runner.
 
 ## Authoritative references
