@@ -29,6 +29,7 @@ secrets.json
 *.tif
 *.tiff
 *.asc
+!tests/SolidGround.Tests/Fixtures/*.asc
 data/downloads/
 downloads/
 

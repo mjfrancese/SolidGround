@@ -38,6 +38,17 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void CoreExposesAnAaiGridParser()
+    {
+        Type? parser = typeof(Core.AssemblyMarker)
+            .Assembly
+            .GetType("SolidGround.Core.Rasters.AaiGridParser");
+
+        Assert.NotNull(parser);
+        Assert.NotNull(parser.GetMethod("Parse"));
+    }
+
+    [Fact]
     public void CoreDoesNotReferenceTheRevitApi()
     {
         AssemblyName[] references = typeof(Core.AssemblyMarker)

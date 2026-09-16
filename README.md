@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently in **Phase 1: Core contract model established**. Core, CLI, and offline test projects compile on .NET 10; acquisition, parsing, transformations, clipping, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
+The repository is currently in **Phase 1: Core contracts and AAIGrid parsing established**. Core, CLI, and offline test projects compile on .NET 10; acquisition, transformations, clipping, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
 
 ## Scope
 
@@ -10,7 +10,7 @@ The intended workflow is:
 
 1. Accept a WGS 84 bounding box, a latitude/longitude and radius, or a parcel polygon in GeoJSON or WKT.
 2. Request the USGS 1 m DEM from OpenTopography as Arc/Info ASCII Grid (`AAIGrid`).
-3. reject malformed grids and remove every `NODATA_value` cell.
+3. Reject malformed grids and remove every `NODATA_value` cell.
 4. Transform horizontal coordinates and make the output unit explicit.
 5. Clip to the parcel with an optional buffer.
 6. Shift the surface to a recorded local origin.
@@ -32,13 +32,14 @@ The following points were checked during setup on 2026-09-15:
 
 - Revit 2027 uses .NET 10. The local Revit API assemblies are version `27.0.10.13`.
 - OpenTopography's current OpenAPI definition exposes `GET /API/usgsdem`, accepts `datasetName=USGS1m`, and still lists `AAIGrid`. `GTiff` remains the default, so SolidGround will request `AAIGrid` explicitly.
+- The parser follows Esri's ASCII raster contract: positive dimensions and cell size, matched lower-left corner or center origins, optional `NODATA_VALUE` defaulting to `-9999`, and north-to-south row-major samples. It converts NODATA to missing cells before returning an elevation grid.
 - The same OpenAPI definition states that USGS 1 m access currently requires academic authorization or an enterprise API key. SolidGround will report access errors and will not substitute lower-resolution data silently.
 - The OpenTopography catalog still contains `USGS_LPC_MO_StLouis_2017_LAS_2018`, collected 2017-02-17 through 2017-02-27, with NAVD88 Geoid12B vertical metadata. Catalog metadata is provenance context; the raster response's own coordinate reference information remains authoritative for processing.
 - Revit 2027's installed `SiteDB.dll` contains `NativeToposolidMaxPointThreshold` and `LinkToposolidMaxPointThreshold`. Autodesk's public 2027 documentation found during setup did not restate their numeric limits, so the project uses a conservative application default near 15,000 and will re-check limits before the Revit phase.
 - Revit 2027 added explicit isolated-context manifest settings and dependency declarations. The planned add-in will use a private context and will not share managed geospatial assemblies by default.
 - Revit 2027 Extended Properties represent externally supplied, linked property data. SolidGround provenance is owned with the created element, so Extensible Storage is the current recommendation.
 
-Primary references are the [Revit 2027 API changes](https://help.autodesk.com/view/RVT/2027/ENU/?guid=f7165618-24c9-4160-a7a4-09979fe4a981), [Revit 2027 Extensible Storage guide](https://help.autodesk.com/view/RVT/2027/ENU/?guid=Revit_API_Revit_API_Developers_Guide_Advanced_Topics_Storing_Data_in_the_Revit_model_Extensible_Storage_html), [Revit SDK downloads](https://aps.autodesk.com/developer/overview/revit-api), [OpenTopography API documentation](https://portal.opentopography.org/apidocs/), and its [OpenAPI definition](https://portal.opentopography.org/apidocs/openapi.json).
+Primary references are the [Revit 2027 API changes](https://help.autodesk.com/view/RVT/2027/ENU/?guid=f7165618-24c9-4160-a7a4-09979fe4a981), [Revit 2027 Extensible Storage guide](https://help.autodesk.com/view/RVT/2027/ENU/?guid=Revit_API_Revit_API_Developers_Guide_Advanced_Topics_Storing_Data_in_the_Revit_model_Extensible_Storage_html), [Revit SDK downloads](https://aps.autodesk.com/developer/overview/revit-api), [OpenTopography API documentation](https://portal.opentopography.org/apidocs/), its [OpenAPI definition](https://portal.opentopography.org/apidocs/openapi.json), and the [Esri ASCII raster format](https://desktop.arcgis.com/en/arcmap/latest/manage-data/raster-and-images/esri-ascii-raster-format.htm).
 
 ## Architecture
 
@@ -80,15 +81,17 @@ Run the scaffolded CLI with:
 dotnet run --project src/SolidGround.Cli/SolidGround.Cli.csproj
 ```
 
-Feature tests will be offline by default. A later end-to-end fetch test will require an explicit opt-in plus `OPENTOPOGRAPHY_API_KEY` in the process environment. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
+Feature tests are offline by default. Parser tests use a small inspected synthetic fixture near the Robandee Lane scenario; it is not represented as measured terrain or an OpenTopography response. A later end-to-end fetch test will require an explicit opt-in plus `OPENTOPOGRAPHY_API_KEY` in the process environment. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
 
 The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
 
 ## Continuous integration and the Revit project
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, and runs the offline Core tests on a GitHub-hosted runner. Actions are pinned to immutable commit SHAs.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, and runs the offline Core tests on the repository-scoped `solidground-pve2` ephemeral runner in the Homelab. Actions are pinned to immutable commit SHAs, and the workflow does not use GitHub-hosted cache storage.
 
-`SolidGround.Revit` can compile in CI only when the runner has lawful access to the Revit 2027 reference assemblies. GitHub-hosted runners do not include them, and this repository will not commit Autodesk binaries or quietly depend on an unofficial repackaging. The recommended Phase 2 choices are an approved reproducible SDK/reference source or a suitable self-hosted runner, selected alongside the owner's add-in conventions.
+SolidGround is public, so the self-hosted workflow accepts only trusted pushes to `main`. It has no pull-request trigger, checks the repository, owner, event, ref, and runner identity before checkout, and has no GitHub-hosted or pve1 fallback. Pull requests therefore do not run this workflow. If pve2 is unavailable, the job remains visibly queued instead of moving to another runner.
+
+`SolidGround.Revit` can compile in CI only when the runner has lawful access to the Revit 2027 reference assemblies. The current Linux Homelab runner does not include them, and this repository will not commit Autodesk binaries or quietly depend on an unofficial repackaging. The recommended Phase 2 choices are an approved reproducible SDK/reference source or a suitable Windows self-hosted runner, selected alongside the owner's add-in conventions.
 
 ## Agent portability
 

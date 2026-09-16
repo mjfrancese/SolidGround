@@ -98,7 +98,9 @@ dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configu
 
 The agent must keep `packages.lock.json` files current and committed when package references change. The agent must run restore, build, and tests before presenting a code change as complete.
 
-GitHub Actions must remain ordinary .NET CI with no AI service. During Phase 1 it builds Core and CLI and runs offline tests. GitHub-hosted runners do not include Autodesk's Revit reference assemblies. The agent must not make Phase 1 CI depend on unofficial repackaged Autodesk binaries. Phase 2 CI is a separate design decision: it can compile the add-in only after the user chooses a lawful, reproducible reference-assembly source or a suitable self-hosted runner.
+GitHub Actions must remain ordinary .NET CI with no AI service. During Phase 1 it builds Core and CLI and runs offline tests on the repository-scoped `solidground-pve2` ephemeral Homelab runner. Because the repository is public, this self-hosted workflow must accept trusted pushes to `main` only: no pull-request trigger, no fork code, and no automatic GitHub-hosted or pve1 fallback. It must retain its repository, owner, event, ref, and runner-identity guards and must not use GitHub-hosted cache or artifact storage.
+
+The current Linux Homelab runner does not include Autodesk's Revit reference assemblies. The agent must not make Phase 1 CI depend on unofficial repackaged Autodesk binaries. Phase 2 CI is a separate design decision: it can compile the add-in only after the user chooses a lawful, reproducible reference-assembly source or a suitable Windows self-hosted runner.
 
 ## Authoritative references
 
