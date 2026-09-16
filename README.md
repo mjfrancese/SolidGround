@@ -91,6 +91,8 @@ The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the 
 
 SolidGround is public, so the self-hosted workflow accepts only trusted pushes to `main`. It has no pull-request trigger, checks the repository, owner, event, ref, and runner identity before checkout, and has no GitHub-hosted or pve1 fallback. Pull requests therefore do not run this workflow. If pve2 is unavailable, the job remains visibly queued instead of moving to another runner.
 
+The trust-boundary conditions this lane must keep true, the authorizing Homelab issue number, and the Homelab never-list it must honor are recorded in [`AGENTS.md`](AGENTS.md)'s "Build and CI" section, mirroring Homelab ADR 0029. Homelab Issue #42 authorized and audited the `solidground-pve2` lane under that ADR, and Homelab Issue #45 recorded the owner's decision to harden this repository's Actions settings, which now require full-commit-SHA pinning and limit the allow-list to exactly `actions/checkout` and `actions/setup-dotnet`.
+
 `SolidGround.Revit` can compile in CI only when the runner has lawful access to the Revit 2027 reference assemblies. The current Linux Homelab runner does not include them, and this repository will not commit Autodesk binaries or quietly depend on an unofficial repackaging. The recommended Phase 2 choices are an approved reproducible SDK/reference source or a suitable Windows self-hosted runner, selected alongside the owner's add-in conventions.
 
 ## Agent portability
