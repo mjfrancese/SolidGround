@@ -70,7 +70,7 @@ public sealed class ContractModelTests
     }
 
     [Fact]
-    public void SourceMetadataRequiresAValidCollectionPeriodAndQualityLevel()
+    public void SourceMetadataAcceptsAValidCollectionPeriodAndRejectsABlankQualityLevel()
     {
         CollectionPeriod period = new(new DateOnly(2017, 2, 17), new DateOnly(2017, 2, 27));
         ElevationSourceMetadata metadata = new("OpenTopography", "USGS1m", period, "QL2");
@@ -78,6 +78,19 @@ public sealed class ContractModelTests
         Assert.Equal(period, metadata.CollectionPeriod);
         Assert.Throws<ArgumentException>(() => new CollectionPeriod(new DateOnly(2017, 2, 27), new DateOnly(2017, 2, 17)));
         Assert.Throws<ArgumentException>(() => new ElevationSourceMetadata("source", "dataset", period, " "));
+    }
+
+    [Fact]
+    public void SourceMetadataAcceptsAnAbsentCollectionPeriodAndQualityLevel()
+    {
+        ElevationSourceMetadata metadata = new("OpenTopography", "USGS1m", null, null);
+
+        Assert.Null(metadata.CollectionPeriod);
+        Assert.Null(metadata.QualityLevel);
+
+        ElevationSourceMetadata defaulted = new("OpenTopography", "USGS1m");
+        Assert.Null(defaulted.CollectionPeriod);
+        Assert.Null(defaulted.QualityLevel);
     }
 
     [Fact]

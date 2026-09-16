@@ -59,4 +59,27 @@ public sealed class ArchitectureTests
             references,
             reference => reference.Name?.StartsWith("RevitAPI", StringComparison.OrdinalIgnoreCase) == true);
     }
+
+    [Fact]
+    public void OpenTopographyApiKeyExposesNoPublicMemberThatReturnsTheRawKey()
+    {
+        Type keyType = typeof(Core.Sources.OpenTopography.OpenTopographyApiKey);
+
+        foreach (PropertyInfo property in keyType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            Assert.NotEqual(typeof(string), property.PropertyType);
+        }
+
+        foreach (MethodInfo method in keyType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (method.Name == nameof(ToString))
+            {
+                continue;
+            }
+
+            Assert.NotEqual(typeof(string), method.ReturnType);
+        }
+
+        Assert.Equal("[REDACTED]", new Core.Sources.OpenTopography.OpenTopographyApiKey("super-secret-value").ToString());
+    }
 }
