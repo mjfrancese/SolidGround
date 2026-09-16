@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently at **Phase 0: scaffold complete, feature implementation not started**. Core, CLI, and test project shells compile on .NET 10. The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
+The repository is currently in **Phase 1: Core contract model established**. Core, CLI, and offline test projects compile on .NET 10; acquisition, parsing, transformations, clipping, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
 
 ## Scope
 
@@ -44,22 +44,23 @@ Primary references are the [Revit 2027 API changes](https://help.autodesk.com/vi
 
 ```text
 SolidGround.slnx
-├── src/
-│   ├── SolidGround.Core/     pure .NET 10; no Revit reference
-│   └── SolidGround.Cli/      console host over Core
-└── tests/
-    └── SolidGround.Tests/    xUnit tests against Core
++-- src/
+|   +-- SolidGround.Core/     pure .NET 10; no Revit reference
+|   `-- SolidGround.Cli/      console host over Core
+`-- tests/
+    `-- SolidGround.Tests/    xUnit tests against Core
 
 Phase 2 adds:
-└── src/SolidGround.Revit/    Revit 2027 host adapter and add-in manifest
+`-- src/SolidGround.Revit/    Revit 2027 host adapter and add-in manifest
 ```
 
 The central design rule is that acquisition, parsing, geometry, transformations, simplification, provenance models, and exports remain testable without Revit installed. [Groundit](https://github.com/lewismconte/groundit) demonstrates the useful architectural pattern of a pure core with offline tests and a thin Revit-specific build step. SolidGround does not adopt Groundit's Python, pyRevit, browser, multi-version, or data-source choices.
 
-Phase 1 may add two managed geospatial packages, each only with a pinned version:
+Phase 1 may add three managed geospatial packages, each only with a pinned version:
 
 - **ProjNet** for horizontal coordinate transformations, after its current API and coordinate-system coverage are verified. Vertical datum conversion is outside that justification.
-- **NetTopologySuite** for robust WKT/GeoJSON handling, buffered polygons, holes, multipolygons, and clipping. These operations are complex enough that a hand-written substitute would create unnecessary geometry risk.
+- **NetTopologySuite** for robust topology, buffered polygons, holes, multipolygons, and clipping. These operations are complex enough that a hand-written substitute would create unnecessary geometry risk.
+- **NetTopologySuite.IO.GeoJSON** for GeoJSON parsing at the geometry adapter boundary.
 
 No native dependency may be loaded into the Revit process. There is no Python or GDAL path.
 
@@ -81,7 +82,7 @@ dotnet run --project src/SolidGround.Cli/SolidGround.Cli.csproj
 
 Feature tests will be offline by default. A later end-to-end fetch test will require an explicit opt-in plus `OPENTOPOGRAPHY_API_KEY` in the process environment. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
 
-The Phase 0 test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
+The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
 
 ## Continuous integration and the Revit project
 
