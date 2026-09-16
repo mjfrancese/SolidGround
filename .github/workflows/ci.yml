@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
@@ -15,10 +14,30 @@ concurrency:
 jobs:
   core:
     name: Core, CLI, and offline tests
-    runs-on: ubuntu-latest
+    if: >-
+      github.repository == 'mjfrancese/SolidGround' &&
+      github.repository_owner == 'mjfrancese' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: solidground-pve2
     timeout-minutes: 10
 
     steps:
+      - name: Assert trusted the infrastructure project routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "mjfrancese/SolidGround"
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/main"
+          case "$RUNNER_NAME" in
+            solidground-pve2-*) ;;
+            *)
+              echo "Unexpected runner identity: $RUNNER_NAME" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -26,8 +45,6 @@ jobs:
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
 
       - name: Restore locked dependencies
         run: dotnet restore SolidGround.slnx --locked-mode

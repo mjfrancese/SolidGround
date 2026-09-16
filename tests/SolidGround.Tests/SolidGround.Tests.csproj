@@ -23,4 +23,8 @@
     <ProjectReference Include="..\..\src\SolidGround.Core\SolidGround.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
