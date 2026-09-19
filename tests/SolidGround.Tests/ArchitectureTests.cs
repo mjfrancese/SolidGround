@@ -49,6 +49,21 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void CoreExposesAGridTerrainSimplifierImplementingITerrainSimplifier()
+    {
+        Type? contract = typeof(Core.AssemblyMarker)
+            .Assembly
+            .GetType("SolidGround.Core.Simplification.ITerrainSimplifier");
+        Type? simplifier = typeof(Core.AssemblyMarker)
+            .Assembly
+            .GetType("SolidGround.Core.Simplification.GridTerrainSimplifier");
+
+        Assert.NotNull(contract);
+        Assert.NotNull(simplifier);
+        Assert.True(contract.IsAssignableFrom(simplifier));
+    }
+
+    [Fact]
     public void CoreDoesNotReferenceTheRevitApi()
     {
         AssemblyName[] references = typeof(Core.AssemblyMarker)
