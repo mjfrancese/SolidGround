@@ -64,6 +64,19 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void CoreExposesExactlyOnePublicTerrainExporterImplementingItAsFileSystemTerrainExporter()
+    {
+        Assembly assembly = typeof(Core.AssemblyMarker).Assembly;
+        Type contract = assembly.GetType("SolidGround.Core.Exports.ITerrainExporter")!;
+
+        Type[] implementations = [.. assembly.GetExportedTypes()
+            .Where(type => type.IsClass && contract.IsAssignableFrom(type))];
+
+        Type implementation = Assert.Single(implementations);
+        Assert.Equal("SolidGround.Core.Exports.FileSystemTerrainExporter", implementation.FullName);
+    }
+
+    [Fact]
     public void CoreDoesNotReferenceTheRevitApi()
     {
         AssemblyName[] references = typeof(Core.AssemblyMarker)

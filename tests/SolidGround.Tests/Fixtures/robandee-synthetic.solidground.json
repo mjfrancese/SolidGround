@@ -1,0 +1,107 @@
+{
+  "schema": "solidground.terrain-export",
+  "schemaVersion": 1,
+  "provenance": {
+    "source": {
+      "sourceName": "OpenTopography",
+      "datasetIdentifier": "USGS1m",
+      "collectionPeriod": null,
+      "qualityLevel": null
+    },
+    "horizontalTransformation": {
+      "sourceReference": {
+        "coordinateReferenceSystem": "EPSG:4326",
+        "datum": "WGS_1984",
+        "kind": "Geographic",
+        "unit": {
+          "referenceKind": "Geographic",
+          "linearUnit": null
+        },
+        "axisOrder": "LongitudeLatitude"
+      },
+      "targetReference": {
+        "coordinateReferenceSystem": "EPSG:26915",
+        "datum": "NAD83",
+        "kind": "Projected",
+        "unit": {
+          "referenceKind": "Projected",
+          "linearUnit": "Meter"
+        },
+        "axisOrder": "EastingNorthing"
+      },
+      "forwardOperation": {
+        "format": "WKT1",
+        "definition": "COMPD_CS[\u0022NAD_1983_UTM_Zone_15N \u002B NAVD88_height\u0022,\n    PROJCS[\u0022NAD_1983_UTM_Zone_15N\u0022,\n        GEOGCS[\u0022GCS_North_American_1983\u0022,\n            DATUM[\u0022NAD83\u0022,\n                SPHEROID[\u0022GRS_1980\u0022,6378137.0,298.257222101]],\n            PRIMEM[\u0022Greenwich\u0022,0.0],\n            UNIT[\u0022Degree\u0022,0.0174532925199433]],\n        PROJECTION[\u0022Transverse_Mercator\u0022],\n        PARAMETER[\u0022False_Easting\u0022,500000.0],\n        PARAMETER[\u0022False_Northing\u0022,0.0],\n        PARAMETER[\u0022Central_Meridian\u0022,-93.0],\n        PARAMETER[\u0022Scale_Factor\u0022,0.9996],\n        PARAMETER[\u0022Latitude_Of_Origin\u0022,0.0],\n        UNIT[\u0022Meter\u0022,1.0],\n        AUTHORITY[\u0022EPSG\u0022,\u002226915\u0022]],\n    VERT_CS[\u0022NAVD88_height\u0022,\n        VERT_DATUM[\u0022NAVD88\u0022,2005],\n        UNIT[\u0022Meter\u0022,1.0]]]\n"
+      },
+      "inverseOperation": {
+        "format": "WKT1",
+        "definition": "GEOGCS[\u0022WGS 84\u0022,\n    DATUM[\u0022WGS_1984\u0022,\n        SPHEROID[\u0022WGS 84\u0022,6378137,298.257223563]],\n    PRIMEM[\u0022Greenwich\u0022,0],\n    UNIT[\u0022degree\u0022,0.0174532925199433],\n    AUTHORITY[\u0022EPSG\u0022,\u00224326\u0022]]"
+      },
+      "engineName": "ProjNET",
+      "engineVersion": "2.1.0"
+    },
+    "sourceVerticalReference": {
+      "datum": "NAVD88",
+      "unit": "Meter",
+      "geoidModel": null
+    },
+    "localFrame": {
+      "origin": {
+        "x": 719348,
+        "y": 4286526,
+        "elevation": 183
+      },
+      "projectedHorizontalReference": {
+        "coordinateReferenceSystem": "EPSG:26915",
+        "datum": "NAD83",
+        "kind": "Projected",
+        "unit": {
+          "referenceKind": "Projected",
+          "linearUnit": "Meter"
+        },
+        "axisOrder": "EastingNorthing"
+      },
+      "verticalReference": {
+        "datum": "NAVD88",
+        "unit": "Meter",
+        "geoidModel": null
+      },
+      "outputUnit": "UsSurveyFoot"
+    },
+    "simplification": {
+      "pointBudget": 500,
+      "method": "CurvatureAware"
+    },
+    "originalPointCount": 7,
+    "retainedPointCount": 7,
+    "elevationRange": {
+      "minimum": 183.1,
+      "maximum": 184.2,
+      "unit": "Meter"
+    }
+  },
+  "unitDefinitions": [
+    {
+      "unit": "Meter",
+      "metersPerUnit": 1,
+      "definition": "1 m"
+    },
+    {
+      "unit": "UsSurveyFoot",
+      "metersPerUnit": 0.3048006096012192,
+      "definition": "1200/3937 m"
+    }
+  ],
+  "points": {
+    "file": "robandee-synthetic.points.csv",
+    "format": "csv",
+    "columns": [
+      "x",
+      "y",
+      "elevation"
+    ],
+    "unit": "UsSurveyFoot",
+    "count": 7,
+    "sha256": "ac3ee7a7db629a1da603108dda37ddefe4383aef424fd32708afeec7d768a5af"
+  }
+}

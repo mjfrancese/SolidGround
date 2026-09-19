@@ -9,6 +9,13 @@ namespace SolidGround.Core.Provenance;
 /// <summary>Reversible provenance retained with a terrain export or later Revit element.</summary>
 public sealed record TerrainProvenance
 {
+    /// <summary>
+    /// The schema version this build of SolidGround writes, and the only version its strict reader accepts.
+    /// See docs/architecture/provenance-and-deterministic-exports.md's "Versioning and compatibility policy"
+    /// section for what changing this constant means and why the old manifest stays documented.
+    /// </summary>
+    public const int CurrentSchemaVersion = 1;
+
     public TerrainProvenance(
         int schemaVersion,
         ElevationSourceMetadata source,
