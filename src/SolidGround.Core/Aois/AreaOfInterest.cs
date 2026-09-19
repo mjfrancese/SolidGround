@@ -1,4 +1,5 @@
 using SolidGround.Core.Metadata;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Core.Aois;
 
@@ -56,35 +57,40 @@ public sealed record Wgs84BoundingBoxAoi : AreaOfInterest
     }
 }
 
-/// <summary>A WGS 84 location and a positive radial distance in meters.</summary>
+/// <summary>A WGS 84 location and a positive radial distance.</summary>
 public sealed record Wgs84RadiusAoi : AreaOfInterest
 {
-    public Wgs84RadiusAoi(double latitude, double longitude, double radiusMeters)
+    public Wgs84RadiusAoi(double latitude, double longitude, LinearDistance radius)
     {
         Wgs84BoundingBoxAoi.ValidateLatitude(latitude, nameof(latitude));
         Wgs84BoundingBoxAoi.ValidateLongitude(longitude, nameof(longitude));
-        if (!double.IsFinite(radiusMeters) || radiusMeters <= 0d)
+        if (radius.Value <= 0d)
         {
-            throw new ArgumentOutOfRangeException(nameof(radiusMeters), radiusMeters, "Radius must be finite and positive.");
+            throw new ArgumentOutOfRangeException(nameof(radius), radius.Value, "Radius must be positive.");
         }
 
         Latitude = latitude;
         Longitude = longitude;
-        RadiusMeters = radiusMeters;
+        Radius = radius;
     }
 
     public double Latitude { get; }
     public double Longitude { get; }
-    public double RadiusMeters { get; }
+    public LinearDistance Radius { get; }
 }
 
 /// <summary>The serialization format used for a parcel boundary.</summary>
 public enum ParcelGeometryFormat { Wkt, GeoJson }
 
-/// <summary>A parcel boundary supplied as WKT or GeoJSON. BufferMeters is applied after projection into a suitable metric CRS.</summary>
+/// <summary>
+/// A parcel boundary supplied as WKT or GeoJSON. <see cref="Buffer"/> is a geometric buffer applied only by
+/// GridClipper, after the parcel has been transformed into a projected reference; it is never applied to
+/// angular coordinates. Separately, AoiNormalizer pads the fetch envelope by the buffer distance so the
+/// fetched raster covers the buffered parcel before clipping runs.
+/// </summary>
 public sealed record ParcelGeometryAoi : AreaOfInterest
 {
-    public ParcelGeometryAoi(ParcelGeometryFormat format, string geometry, HorizontalReference horizontalReference, double bufferMeters = 0d)
+    public ParcelGeometryAoi(ParcelGeometryFormat format, string geometry, HorizontalReference horizontalReference, LinearDistance? buffer = null)
     {
         if (!Enum.IsDefined(format))
         {
@@ -98,19 +104,14 @@ public sealed record ParcelGeometryAoi : AreaOfInterest
 
         ArgumentNullException.ThrowIfNull(horizontalReference);
 
-        if (!double.IsFinite(bufferMeters) || bufferMeters < 0d)
-        {
-            throw new ArgumentOutOfRangeException(nameof(bufferMeters), bufferMeters, "Buffer must be finite and non-negative.");
-        }
-
         Format = format;
         Geometry = geometry;
         HorizontalReference = horizontalReference;
-        BufferMeters = bufferMeters;
+        Buffer = buffer ?? LinearDistance.Zero;
     }
 
     public ParcelGeometryFormat Format { get; }
     public string Geometry { get; }
     public HorizontalReference HorizontalReference { get; }
-    public double BufferMeters { get; }
+    public LinearDistance Buffer { get; }
 }

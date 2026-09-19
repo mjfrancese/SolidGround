@@ -20,11 +20,31 @@ public sealed class ContractModelTests
             ParcelGeometryFormat.Wkt,
             "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
             GeographicReference(),
-            2.5d);
+            LinearDistance.Meters(2.5d));
 
         Assert.Equal(HorizontalReferenceKind.Geographic, parcel.HorizontalReference.Kind);
-        Assert.Equal(2.5d, parcel.BufferMeters);
+        Assert.Equal(LinearDistance.Meters(2.5d), parcel.Buffer);
         Assert.Throws<ArgumentNullException>(() => new ElevationSourceRequest(null!));
+    }
+
+    [Fact]
+    public void ParcelAoiDefaultsItsBufferToZeroWhenNoneIsSupplied()
+    {
+        ParcelGeometryAoi parcel = new(
+            ParcelGeometryFormat.Wkt,
+            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
+            GeographicReference());
+
+        Assert.Equal(LinearDistance.Zero, parcel.Buffer);
+    }
+
+    [Fact]
+    public void RadiusAoiCarriesItsLinearDistanceAndRejectsANonPositiveRadius()
+    {
+        Wgs84RadiusAoi radius = new([withheld], [withheld], LinearDistance.Meters(100d));
+
+        Assert.Equal(LinearDistance.Meters(100d), radius.Radius);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Wgs84RadiusAoi([withheld], [withheld], LinearDistance.Zero));
     }
 
     [Fact]

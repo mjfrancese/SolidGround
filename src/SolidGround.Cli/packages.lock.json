@@ -2,8 +2,16 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "NetTopologySuite": {
+        "type": "Transitive",
+        "resolved": "2.6.0",
+        "contentHash": "1B1OTacTd4QtFyBeuIOcThwSSLUdRZU3bSFIwM8vk36XiZlBMi3K36u74e4OqwwHRHUuJC1PhbDx4hyI266X1Q=="
+      },
       "solidground.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "NetTopologySuite": "[2.6.0, )"
+        }
       }
     }
   }

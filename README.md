@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, and the OpenTopography USGS 1 m source established**. Core, CLI, and offline test projects compile on .NET 10; transformations, clipping, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md) and the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
+The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, and AOI normalization and parcel clipping established**. Core, CLI, and offline test projects compile on .NET 10; horizontal coordinate transformations, simplification algorithms, and exports remain future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), and the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
 
 ## Scope
 
@@ -57,11 +57,10 @@ Phase 2 adds:
 
 The central design rule is that acquisition, parsing, geometry, transformations, simplification, provenance models, and exports remain testable without Revit installed. [Groundit](https://github.com/lewismconte/groundit) demonstrates the useful architectural pattern of a pure core with offline tests and a thin Revit-specific build step. SolidGround does not adopt Groundit's Python, pyRevit, browser, multi-version, or data-source choices.
 
-Phase 1 may add three managed geospatial packages, each only with a pinned version:
+Phase 1 may add managed geospatial packages, each only with a pinned version:
 
-- **ProjNet** for horizontal coordinate transformations, after its current API and coordinate-system coverage are verified. Vertical datum conversion is outside that justification.
-- **NetTopologySuite** for robust topology, buffered polygons, holes, multipolygons, and clipping. These operations are complex enough that a hand-written substitute would create unnecessary geometry risk.
-- **NetTopologySuite.IO.GeoJSON** for GeoJSON parsing at the geometry adapter boundary.
+- **NetTopologySuite 2.6.0** is referenced for robust topology, buffered polygons, holes, multipolygons, and clipping (`SolidGround.Core.Aois.PolygonalRegion`, `ParcelGeometryParser`'s WKT reader, and `SolidGround.Core.Clipping`). These operations are complex enough that a hand-written substitute would create unnecessary geometry risk. GeoJSON parcel geometry is parsed separately, by a bounded, hand-written reader over the inbox `System.Text.Json.JsonDocument` rather than a further NetTopologySuite.IO package — see [the AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md) for the full rationale.
+- **ProjNet** for horizontal coordinate transformations remains deferred, after its current API and coordinate-system coverage are verified. Vertical datum conversion is outside that justification.
 
 No native dependency may be loaded into the Revit process. There is no Python or GDAL path.
 

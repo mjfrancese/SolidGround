@@ -1,0 +1,21 @@
+{
+  "type": "Feature",
+  "properties": {
+    "parcel": "synthetic-example-site",
+    "note": "Synthetic illustrative lot for SolidGround parser and clipping tests; not a real parcel boundary and not an OpenTopography response.",
+    "areaSquareFeet": [withheld],
+    "areaSquareMeters": [withheld]
+  },
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [[withheld], [withheld]],
+        [[withheld], [withheld]],
+        [[withheld], [withheld]],
+        [[withheld], [withheld]],
+        [[withheld], [withheld]]
+      ]
+    ]
+  }
+}

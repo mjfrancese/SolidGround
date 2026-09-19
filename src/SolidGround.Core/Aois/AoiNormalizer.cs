@@ -1,0 +1,356 @@
+using System.Globalization;
+using SolidGround.Core.Geometry;
+using SolidGround.Core.Metadata;
+using SolidGround.Core.Transformations;
+using SolidGround.Core.Units;
+
+namespace SolidGround.Core.Aois;
+
+/// <summary>Identifies how <see cref="NormalizedAoi.FetchEnvelope"/> was derived from its source area of interest.</summary>
+public enum FetchEnvelopeBasis
+{
+    /// <summary>The source was already a WGS 84 bounding box, optionally padded by a margin.</summary>
+    BoundingBox,
+
+    /// <summary>The source was a WGS 84 center and radius; the envelope was built on the WGS 84 ellipsoid.</summary>
+    RadiusOnWgs84Ellipsoid,
+
+    /// <summary>The source was a parcel already in a geographic reference; its own envelope was padded.</summary>
+    GeographicParcelEnvelope,
+
+    /// <summary>The source was a parcel in a projected reference; its vertices were transformed to WGS 84 first.</summary>
+    TransformedParcelEnvelope,
+}
+
+/// <summary>An area of interest could not be normalized into a WGS 84 fetch envelope.</summary>
+public sealed class AoiNormalizationException : InvalidOperationException
+{
+    public AoiNormalizationException()
+    {
+    }
+
+    public AoiNormalizationException(string message)
+        : base(message)
+    {
+    }
+
+    public AoiNormalizationException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>Options controlling <see cref="AoiNormalizer.Normalize"/>. Every member has a safe default.</summary>
+public sealed record AoiNormalizationOptions
+{
+    /// <summary>
+    /// Extra padding applied only to the fetch envelope, on top of any parcel buffer. It is never applied to
+    /// clip geometry: a geometric buffer is applied only by <c>GridClipper</c>, after a parcel is in a
+    /// projected reference.
+    /// </summary>
+    public LinearDistance EnvelopeMargin { get; init; } = LinearDistance.Zero;
+}
+
+/// <summary>
+/// The result of normalizing one <see cref="AreaOfInterest"/> into a WGS 84 fetch envelope suitable for
+/// requesting source data, together with the AOI's own clip geometry where one exists.
+/// </summary>
+public sealed record NormalizedAoi
+{
+    public NormalizedAoi(
+        AreaOfInterest source,
+        Wgs84BoundingBoxAoi fetchEnvelope,
+        PolygonalRegion? parcel,
+        LinearDistance buffer,
+        FetchEnvelopeBasis basis,
+        LinearDistance envelopeMargin)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(fetchEnvelope);
+        if (!Enum.IsDefined(basis))
+        {
+            throw new ArgumentOutOfRangeException(nameof(basis), basis, "Unsupported fetch envelope basis.");
+        }
+
+        bool expectsParcel = basis is FetchEnvelopeBasis.GeographicParcelEnvelope or FetchEnvelopeBasis.TransformedParcelEnvelope;
+        if (expectsParcel != (parcel is not null))
+        {
+            throw new ArgumentException(
+                $"A parsed parcel is required exactly when basis is {nameof(FetchEnvelopeBasis.GeographicParcelEnvelope)} " +
+                $"or {nameof(FetchEnvelopeBasis.TransformedParcelEnvelope)}.",
+                nameof(parcel));
+        }
+
+        Source = source;
+        FetchEnvelope = fetchEnvelope;
+        Parcel = parcel;
+        Buffer = buffer;
+        Basis = basis;
+        EnvelopeMargin = envelopeMargin;
+    }
+
+    /// <summary>The area of interest this result was normalized from.</summary>
+    public AreaOfInterest Source { get; }
+
+    /// <summary>The WGS 84 bounding box an elevation source should be asked to cover.</summary>
+    public Wgs84BoundingBoxAoi FetchEnvelope { get; }
+
+    /// <summary>The parsed parcel boundary in its own declared reference; <see langword="null"/> for a bounding box or radius AOI.</summary>
+    public PolygonalRegion? Parcel { get; }
+
+    /// <summary>
+    /// The geometric buffer to apply during clipping (zero for a bounding box or radius AOI). This is a
+    /// conceptually distinct distance from <see cref="EnvelopeMargin"/> — a geometric clip buffer versus extra
+    /// fetch-envelope padding, never interchanged in behavior — but the two are ordinary <see cref="LinearDistance"/>
+    /// values and may coincidentally share a numeric value (for example, both are <see cref="LinearDistance.Zero"/>
+    /// for a bounding box AOI normalized with default options).
+    /// </summary>
+    public LinearDistance Buffer { get; }
+
+    /// <summary>How <see cref="FetchEnvelope"/> was derived.</summary>
+    public FetchEnvelopeBasis Basis { get; }
+
+    /// <summary>The extra fetch-envelope margin that was applied, from <see cref="AoiNormalizationOptions.EnvelopeMargin"/>.</summary>
+    public LinearDistance EnvelopeMargin { get; }
+}
+
+/// <summary>
+/// WGS 84 ellipsoid meters-per-degree factors, used to pad geographic envelopes by a distance measured in
+/// meters. Uses the WGS 84 defining constants (semi-major axis 6378137 m, inverse flattening
+/// 298.257223563) with the standard meridional and prime-vertical radius-of-curvature formulas.
+/// </summary>
+public static class Wgs84Ellipsoid
+{
+    private const double SemiMajorAxisMeters = 6378137d;
+    private const double InverseFlattening = 298.257223563d;
+    private const double Flattening = 1d / InverseFlattening;
+    private const double EccentricitySquared = Flattening * (2d - Flattening);
+    private const double DegreesToRadians = Math.PI / 180d;
+
+    /// <summary>
+    /// The number of meters spanned by one degree of latitude at <paramref name="latitudeDegrees"/>, along
+    /// the meridian (north-south). Uses the meridional radius of curvature
+    /// <c>M = a(1-e^2) / (1-e^2 sin^2(phi))^1.5</c>.
+    /// </summary>
+    public static double MetersPerDegreeLatitude(double latitudeDegrees)
+    {
+        Wgs84BoundingBoxAoi.ValidateLatitude(latitudeDegrees, nameof(latitudeDegrees));
+        double sinPhiSquared = SinSquared(latitudeDegrees);
+        double denominator = 1d - (EccentricitySquared * sinPhiSquared);
+        double meridionalRadius = SemiMajorAxisMeters * (1d - EccentricitySquared) / Math.Pow(denominator, 1.5d);
+        return DegreesToRadians * meridionalRadius;
+    }
+
+    /// <summary>
+    /// The number of meters spanned by one degree of longitude at <paramref name="latitudeDegrees"/>, along
+    /// the parallel (east-west). Uses the prime-vertical radius of curvature <c>N = a / sqrt(1-e^2 sin^2(phi))</c>
+    /// scaled by <c>cos(phi)</c>. This is effectively zero at the poles (within floating-point precision,
+    /// ~1e-12), since a degree of longitude spans no distance there, but <c>cos(±90°)</c> is not bit-exact
+    /// <c>0.0</c> in IEEE-754 double precision — <c>Math.PI</c> is itself only an approximation of pi.
+    /// </summary>
+    public static double MetersPerDegreeLongitude(double latitudeDegrees)
+    {
+        Wgs84BoundingBoxAoi.ValidateLatitude(latitudeDegrees, nameof(latitudeDegrees));
+        double phi = latitudeDegrees * DegreesToRadians;
+        double primeVerticalRadius = SemiMajorAxisMeters / Math.Sqrt(1d - (EccentricitySquared * SinSquared(latitudeDegrees)));
+        return DegreesToRadians * primeVerticalRadius * Math.Cos(phi);
+    }
+
+    private static double SinSquared(double latitudeDegrees)
+    {
+        double sinPhi = Math.Sin(latitudeDegrees * DegreesToRadians);
+        return sinPhi * sinPhi;
+    }
+}
+
+/// <summary>
+/// Normalizes every <see cref="AreaOfInterest"/> form into a WGS 84 fetch envelope an elevation source can be
+/// asked to cover, keeping the AOI's own clip geometry (where one exists) in its own reference. See
+/// docs/architecture/aoi-normalization-and-clipping.md for the padding rule and its conservatism.
+/// </summary>
+public static class AoiNormalizer
+{
+    /// <summary>
+    /// Normalizes <paramref name="aoi"/>. <paramref name="parcelToWgs84"/> is required only when
+    /// <paramref name="aoi"/> is a <see cref="ParcelGeometryAoi"/> in a projected reference (SolidGround
+    /// Issue #6 supplies an implementation); every other AOI form ignores it.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="aoi"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ParcelGeometryException">A parcel AOI's geometry text is not valid.</exception>
+    /// <exception cref="AoiNormalizationException">
+    /// The padded envelope would cross the antimeridian or a pole, or a projected parcel was supplied with no
+    /// <paramref name="parcelToWgs84"/>.
+    /// </exception>
+    public static NormalizedAoi Normalize(
+        AreaOfInterest aoi,
+        AoiNormalizationOptions? options = null,
+        IHorizontalCoordinateTransform? parcelToWgs84 = null)
+    {
+        ArgumentNullException.ThrowIfNull(aoi);
+        LinearDistance margin = (options ?? new AoiNormalizationOptions()).EnvelopeMargin;
+
+        return aoi switch
+        {
+            Wgs84BoundingBoxAoi bbox => NormalizeBoundingBox(bbox, margin),
+            Wgs84RadiusAoi radius => NormalizeRadius(radius, margin),
+            ParcelGeometryAoi parcel => NormalizeParcel(parcel, margin, parcelToWgs84),
+            _ => throw new ArgumentException($"Unsupported area-of-interest type '{aoi.GetType().Name}'.", nameof(aoi)),
+        };
+    }
+
+    private static NormalizedAoi NormalizeBoundingBox(Wgs84BoundingBoxAoi bbox, LinearDistance margin)
+    {
+        (double west, double south, double east, double north) = PadEnvelope(
+            bbox.WestLongitude, bbox.SouthLatitude, bbox.EastLongitude, bbox.NorthLatitude,
+            margin.ToMeters());
+
+        Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
+        return new NormalizedAoi(bbox, fetchEnvelope, parcel: null, LinearDistance.Zero, FetchEnvelopeBasis.BoundingBox, margin);
+    }
+
+    /// <summary>
+    /// Pads a WGS 84 circle of <c>radius + margin</c> meters around the AOI's center. Both meters-per-degree
+    /// factors are evaluated at the center latitude, so the resulting box under-covers a true geodesic circle
+    /// by a residual below one centimeter for radii up to 5 km at mid latitudes; <see cref="AoiNormalizationOptions.EnvelopeMargin"/>
+    /// absorbs larger cases.
+    /// </summary>
+    private static NormalizedAoi NormalizeRadius(Wgs84RadiusAoi radiusAoi, LinearDistance margin)
+    {
+        double padMeters = radiusAoi.Radius.ToMeters() + margin.ToMeters();
+        (double west, double south, double east, double north) = PadAroundLatitudes(
+            radiusAoi.Longitude, radiusAoi.Latitude, radiusAoi.Longitude, radiusAoi.Latitude,
+            padMeters, radiusAoi.Latitude, radiusAoi.Latitude);
+
+        Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
+        return new NormalizedAoi(radiusAoi, fetchEnvelope, parcel: null, LinearDistance.Zero, FetchEnvelopeBasis.RadiusOnWgs84Ellipsoid, margin);
+    }
+
+    private static NormalizedAoi NormalizeParcel(ParcelGeometryAoi parcelAoi, LinearDistance margin, IHorizontalCoordinateTransform? parcelToWgs84)
+    {
+        PolygonalRegion parcel = ParcelGeometryParser.Parse(parcelAoi);
+        double padMeters = parcelAoi.Buffer.ToMeters() + margin.ToMeters();
+
+        return parcelAoi.HorizontalReference.Kind switch
+        {
+            HorizontalReferenceKind.Geographic => NormalizeGeographicParcel(parcelAoi, parcel, padMeters, margin),
+            HorizontalReferenceKind.Projected => NormalizeProjectedParcel(parcelAoi, parcel, padMeters, margin, parcelToWgs84),
+            _ => throw new ArgumentOutOfRangeException(nameof(parcelAoi), parcelAoi.HorizontalReference.Kind, "Unsupported horizontal reference kind."),
+        };
+    }
+
+    /// <summary>
+    /// A parcel already in a geographic reference pads its own envelope directly. This padding is a
+    /// fetch-coverage guarantee, not a geometric buffer — the geometric buffer is applied only by
+    /// <c>GridClipper</c> in a projected reference, so a buffer is still never applied to angular coordinates.
+    /// A non-WGS84 geographic datum such as NAD83 differs from WGS 84 by roughly 1-2 m; that residual is
+    /// covered by <see cref="AoiNormalizationOptions.EnvelopeMargin"/>, and the parcel itself keeps its
+    /// declared datum unchanged.
+    /// </summary>
+    private static NormalizedAoi NormalizeGeographicParcel(ParcelGeometryAoi parcelAoi, PolygonalRegion parcel, double padMeters, LinearDistance margin)
+    {
+        PlanarEnvelope envelope = parcel.Envelope;
+        (double west, double south, double east, double north) = PadEnvelope(envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY, padMeters);
+
+        Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
+        return new NormalizedAoi(parcelAoi, fetchEnvelope, parcel, parcelAoi.Buffer, FetchEnvelopeBasis.GeographicParcelEnvelope, margin);
+    }
+
+    /// <summary>
+    /// A parcel in a projected reference has every vertex of every ring (shell and holes, across every
+    /// polygon) transformed to WGS 84 with <paramref name="parcelToWgs84"/>; the fetch envelope is the padded
+    /// envelope of those transformed vertices. <see cref="NormalizedAoi.Parcel"/> keeps the untransformed,
+    /// originally-parsed geometry in its own projected reference — the transform is used only to size the
+    /// fetch envelope.
+    /// </summary>
+    private static NormalizedAoi NormalizeProjectedParcel(
+        ParcelGeometryAoi parcelAoi, PolygonalRegion parcel, double padMeters, LinearDistance margin, IHorizontalCoordinateTransform? parcelToWgs84)
+    {
+        if (parcelToWgs84 is null)
+        {
+            throw new AoiNormalizationException(
+                "Normalizing a parcel area of interest in a projected reference requires a horizontal coordinate " +
+                "transform to WGS 84 (SolidGround Issue #6 supplies one); none was provided.");
+        }
+
+        List<Coordinate2D> transformedVertices = [];
+        foreach (PolygonRings rings in parcel.Polygons)
+        {
+            transformedVertices.AddRange(rings.Shell.Select(parcelToWgs84.Forward));
+            foreach (IReadOnlyList<Coordinate2D> hole in rings.Holes)
+            {
+                transformedVertices.AddRange(hole.Select(parcelToWgs84.Forward));
+            }
+        }
+
+        double minLongitude = transformedVertices.Min(vertex => vertex.X);
+        double maxLongitude = transformedVertices.Max(vertex => vertex.X);
+        double minLatitude = transformedVertices.Min(vertex => vertex.Y);
+        double maxLatitude = transformedVertices.Max(vertex => vertex.Y);
+
+        (double west, double south, double east, double north) = PadEnvelope(minLongitude, minLatitude, maxLongitude, maxLatitude, padMeters);
+
+        Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
+        return new NormalizedAoi(parcelAoi, fetchEnvelope, parcel, parcelAoi.Buffer, FetchEnvelopeBasis.TransformedParcelEnvelope, margin);
+    }
+
+    /// <summary>
+    /// Pads a geographic envelope by <paramref name="padMeters"/>, conservatively: the longitude delta uses
+    /// the envelope latitude with the largest absolute value (where a degree of longitude spans the fewest
+    /// meters), and the latitude delta unconditionally uses latitude 0 (the equator), so the padded envelope
+    /// always over-covers a true geodesic pad, never under-covers it. <see
+    /// cref="Wgs84Ellipsoid.MetersPerDegreeLatitude"/> is monotonically increasing in absolute latitude, so
+    /// latitude 0 is its global minimum over the entire <c>[-90, 90]</c> domain — not merely over <c>[south,
+    /// north]</c> — which is what makes the latitude delta conservative unconditionally: every latitude the
+    /// padded edge could possibly cross on its way from <c>south</c> to <c>paddedSouth</c> (or <c>north</c>
+    /// to <c>paddedNorth</c>) has a meters-per-degree factor at least as large as the one used to size the
+    /// delta, so the true geodesic distance covered is always at least <paramref name="padMeters"/>. Using
+    /// each endpoint's own factor instead (as an earlier version of this method did whenever the envelope did
+    /// not straddle the equator) is only a *local* approximation — accurate for a small pad, but an
+    /// increasingly optimistic one as the pad grows, because the assumed rate does not fall as the padded
+    /// edge approaches the equator; it silently under-covers by single-digit meters once the pad reaches
+    /// tens of kilometers (confirmed against the actual runtime: about 1.9 m short at a 50 km pad, 7.7 m
+    /// short at a 100 km pad; negligible — sub-millimeter or smaller — at the single-meter buffer and margin
+    /// sizes this application actually uses). The longitude factor has no equivalent unconditional
+    /// simplification: it wants the *largest* absolute latitude in <c>[south, north]</c>, which a convex function like
+    /// <c>|latitude|</c> always attains at an endpoint of that specific closed interval, never at a global
+    /// constant, so it is still evaluated per envelope.
+    /// </summary>
+    private static (double West, double South, double East, double North) PadEnvelope(
+        double west, double south, double east, double north, double padMeters)
+    {
+        double latitudeForLongitudeFactor = Math.Abs(south) >= Math.Abs(north) ? south : north;
+        return PadAroundLatitudes(west, south, east, north, padMeters, latitudeForLongitudeFactor, latitudeForLatitudeFactor: 0d);
+    }
+
+    private static (double West, double South, double East, double North) PadAroundLatitudes(
+        double west, double south, double east, double north,
+        double padMeters, double latitudeForLongitudeFactor, double latitudeForLatitudeFactor)
+    {
+        double paddedWest = west;
+        double paddedEast = east;
+        double paddedSouth = south;
+        double paddedNorth = north;
+
+        if (padMeters != 0d)
+        {
+            double longitudeDelta = padMeters / Wgs84Ellipsoid.MetersPerDegreeLongitude(latitudeForLongitudeFactor);
+            double latitudeDelta = padMeters / Wgs84Ellipsoid.MetersPerDegreeLatitude(latitudeForLatitudeFactor);
+            paddedWest -= longitudeDelta;
+            paddedEast += longitudeDelta;
+            paddedSouth -= latitudeDelta;
+            paddedNorth += latitudeDelta;
+        }
+
+        if (paddedWest < -180d || paddedEast > 180d || paddedSouth < -90d || paddedNorth > 90d)
+        {
+            throw new AoiNormalizationException(
+                $"Padding the fetch envelope by {padMeters.ToString("R", CultureInfo.InvariantCulture)} m would move its bounds to " +
+                $"longitude [{GeometryInterop.FormatOrdinate(paddedWest)}, {GeometryInterop.FormatOrdinate(paddedEast)}] and latitude " +
+                $"[{GeometryInterop.FormatOrdinate(paddedSouth)}, {GeometryInterop.FormatOrdinate(paddedNorth)}], " +
+                "outside the supported range of longitude [-180, 180] and latitude [-90, 90]. SolidGround does not support an " +
+                "area of interest this close to the antimeridian or a pole.");
+        }
+
+        return (paddedWest, paddedSouth, paddedEast, paddedNorth);
+    }
+}

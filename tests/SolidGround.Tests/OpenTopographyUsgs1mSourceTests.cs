@@ -46,7 +46,7 @@ public sealed class OpenTopographyUsgs1mSourceTests
         var handler = new FakeHttpMessageHandler((_, _) => throw new InvalidOperationException("must not send a request"));
         using var httpClient = new HttpClient(handler);
         OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
-        var request = new ElevationSourceRequest(new Wgs84RadiusAoi(38.7, [withheld], 100d));
+        var request = new ElevationSourceRequest(new Wgs84RadiusAoi(38.7, [withheld], LinearDistance.Meters(100d)));
 
         OpenTopographyRequestValidationException error = await Assert.ThrowsAsync<OpenTopographyRequestValidationException>(
             () => source.AcquireAsync(request, TestContext.Current.CancellationToken).AsTask());

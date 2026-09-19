@@ -61,6 +61,28 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void EveryDeployedAssemblyIsManagedAndNoNativeRuntimesDirectoryExists()
+    {
+        // Guards the "no native binaries" rule (AGENTS.md's dependency policy): every package this solution
+        // references, including NetTopologySuite, must be pure managed code with no native runtime asset.
+        string baseDirectory = AppContext.BaseDirectory;
+        string[] dllPaths = Directory.GetFiles(baseDirectory, "*.dll", SearchOption.TopDirectoryOnly);
+        Assert.NotEmpty(dllPaths);
+
+        foreach (string dllPath in dllPaths)
+        {
+            // A native (non-managed) DLL throws BadImageFormatException here instead of returning a name.
+            AssemblyName name = AssemblyName.GetAssemblyName(dllPath);
+            Assert.NotNull(name.Name);
+        }
+
+        string runtimesDirectory = Path.Combine(baseDirectory, "runtimes");
+        Assert.False(
+            Directory.Exists(runtimesDirectory),
+            $"A native 'runtimes' directory was found at '{runtimesDirectory}'; SolidGround must not depend on native runtime assets.");
+    }
+
+    [Fact]
     public void OpenTopographyApiKeyExposesNoPublicMemberThatReturnsTheRawKey()
     {
         Type keyType = typeof(Core.Sources.OpenTopography.OpenTopographyApiKey);
