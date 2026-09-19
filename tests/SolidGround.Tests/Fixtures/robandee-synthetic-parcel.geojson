@@ -1,0 +1,21 @@
+{
+  "type": "Feature",
+  "properties": {
+    "parcel": "synthetic-robandee-191",
+    "note": "Synthetic illustrative lot for SolidGround parser and clipping tests; not a real parcel boundary and not an OpenTopography response.",
+    "areaSquareFeet": 14496,
+    "areaSquareMeters": 1346.72246784
+  },
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [-90.477824432, 38.699983807],
+        [-90.477479568, 38.699983807],
+        [-90.477479568, 38.700388193],
+        [-90.477824432, 38.700388193],
+        [-90.477824432, 38.699983807]
+      ]
+    ]
+  }
+}

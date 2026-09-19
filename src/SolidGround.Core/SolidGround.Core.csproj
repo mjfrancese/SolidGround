@@ -4,4 +4,17 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      NetTopologySuite (BSD-3-Clause) is the one geospatial package this issue adds. It is pure managed
+      code: the netstandard2.1 asset (the one net10.0 restores) has zero further dependencies and there is
+      no runtimes/ folder or DllImport anywhere in the package. It supplies robust polygon validity
+      (IsValidOp), buffering (BufferOp), prepared-geometry point-in-polygon tests, holes, multipolygons, and
+      an OGC WKT geometry reader: substantive geometry operations AGENTS.md names as the reason
+      NetTopologySuite is an acceptable dependency. See docs/architecture/aoi-normalization-and-clipping.md
+      for the full dependency decision, including why NetTopologySuite.IO.GeoJSON was not added.
+    -->
+    <PackageReference Include="NetTopologySuite" Version="2.6.0" />
+  </ItemGroup>
+
 </Project>
