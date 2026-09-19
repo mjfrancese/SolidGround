@@ -17,4 +17,10 @@ public sealed class LengthConverterTests
     {
         Assert.Equal(0.3048d, LengthConverter.MetersPerUnit(LengthUnit.InternationalFoot));
     }
+
+    [Fact]
+    public void DefaultOutputUnitIsUsSurveyFoot()
+    {
+        Assert.Equal(LengthUnit.UsSurveyFoot, LengthConverter.DefaultOutputUnit);
+    }
 }

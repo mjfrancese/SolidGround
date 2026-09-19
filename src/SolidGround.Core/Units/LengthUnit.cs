@@ -15,6 +15,9 @@ public enum LengthUnit
 /// </summary>
 public static class LengthConverter
 {
+    /// <summary>The default output unit wherever Core chooses one without an explicit caller override.</summary>
+    public const LengthUnit DefaultOutputUnit = LengthUnit.UsSurveyFoot;
+
     public static double Convert(double value, LengthUnit from, LengthUnit to)
     {
         if (!double.IsFinite(value))

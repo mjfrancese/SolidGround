@@ -75,6 +75,14 @@ public sealed class ContractModelTests
     }
 
     [Fact]
+    public void LocalFrameDefaultsItsOutputUnitToUsSurveyFootWhenNoneIsSupplied()
+    {
+        LocalCoordinateFrame frame = new(new Coordinate3D(0d, 0d, 0d), ProjectedReference(), VerticalReference());
+
+        Assert.Equal(LengthUnit.UsSurveyFoot, frame.OutputUnit);
+    }
+
+    [Fact]
     public void LocalFrameRejectsGeographicHorizontalReferences()
     {
         Assert.Throws<ArgumentException>(() => new LocalCoordinateFrame(new Coordinate3D(0d, 0d, 0d), GeographicReference(), VerticalReference(), LengthUnit.UsSurveyFoot));

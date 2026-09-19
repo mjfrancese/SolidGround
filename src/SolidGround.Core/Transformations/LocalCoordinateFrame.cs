@@ -11,7 +11,7 @@ public sealed record LocalCoordinateFrame
         Coordinate3D origin,
         HorizontalReference projectedHorizontalReference,
         VerticalReference verticalReference,
-        LengthUnit outputUnit)
+        LengthUnit outputUnit = LengthConverter.DefaultOutputUnit)
     {
         ArgumentNullException.ThrowIfNull(projectedHorizontalReference);
         ArgumentNullException.ThrowIfNull(verticalReference);
