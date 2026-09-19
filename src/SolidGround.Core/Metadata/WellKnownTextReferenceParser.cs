@@ -180,19 +180,21 @@ public static class WellKnownTextReferenceParser
             return LengthUnit.Meter;
         }
 
-        if (Math.Abs(factor - 0.3048d) < 1e-12)
+        if (Math.Abs(factor - LengthConverter.MetersPerUnit(LengthUnit.InternationalFoot)) < 1e-12)
         {
             return LengthUnit.InternationalFoot;
         }
 
-        if (Math.Abs(factor - (1200d / 3937d)) < 1e-12)
+        if (Math.Abs(factor - LengthConverter.MetersPerUnit(LengthUnit.UsSurveyFoot)) < 1e-12)
         {
             return LengthUnit.UsSurveyFoot;
         }
 
         throw new FormatException(
             $"Unsupported linear unit '{unitName}' with conversion factor {factor.ToString("G17", CultureInfo.InvariantCulture)}. " +
-            "SolidGround supports only meter, US survey foot (1200/3937 m), and international foot (0.3048 m).");
+            "SolidGround supports only meter, US survey foot " +
+            $"({LengthConverter.MetersPerUnit(LengthUnit.UsSurveyFoot).ToString("R", CultureInfo.InvariantCulture)} m), and international foot " +
+            $"({LengthConverter.MetersPerUnit(LengthUnit.InternationalFoot).ToString("R", CultureInfo.InvariantCulture)} m).");
     }
 
     /// <summary>

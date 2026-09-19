@@ -15,6 +15,21 @@
       for the full dependency decision, including why NetTopologySuite.IO.GeoJSON was not added.
     -->
     <PackageReference Include="NetTopologySuite" Version="2.6.0" />
+
+    <!--
+      ProjNET (LGPL-2.1-or-later) is the one managed horizontal-coordinate-transformation package this issue
+      adds. It is pure managed code: the netstandard2.1 asset (the one net10.0 restores) has zero further
+      dependencies, no runtimes/ folder, and no DllImport anywhere in the package (the netstandard2.0 asset
+      alone needs System.Memory 4.6.0, which net10.0 does not restore) — confirmed by inspecting
+      ~/.nuget/packages/projnet/2.1.0/projnet.nuspec and both lib/ folders. It supplies
+      CoordinateSystemFactory.CreateFromWkt and CoordinateTransformationFactory.CreateFromCoordinateSystems, the
+      managed WKT1 parsing and coordinate-transformation-construction operations AGENTS.md's dependency policy
+      and Issue #6 require. Unlike NetTopologySuite (BSD-3-Clause), ProjNET's license is LGPL-2.1-or-later —
+      the repository's first copyleft dependency; unmodified binary PackageReference consumption imposes no
+      copyleft obligation on SolidGround's own code, but this is flagged for the owner's awareness. See
+      docs/architecture/coordinate-transformation-and-units.md for the full dependency decision.
+    -->
+    <PackageReference Include="ProjNET" Version="2.1.0" />
   </ItemGroup>
 
 </Project>

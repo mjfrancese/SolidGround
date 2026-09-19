@@ -83,6 +83,77 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void ProjNetTypesNeverAppearInAnyPublicCoreSignature()
+    {
+        // Extends the CoreDoesNotReferenceTheRevitApi-style encapsulation pattern above: decision #2 for
+        // SolidGround Issue #6 requires that no ProjNET type or null ever escapes SolidGround's own adapter.
+        // This checks the assembly-surface level, independent of any specific unit test's own coverage.
+        Assembly assembly = typeof(Core.AssemblyMarker).Assembly;
+
+        foreach (Type type in assembly.GetExportedTypes())
+        {
+            foreach (ConstructorInfo constructor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+            {
+                foreach (ParameterInfo parameter in constructor.GetParameters())
+                {
+                    AssertNotProjNetType(parameter.ParameterType, $"{type.FullName}..ctor(...) parameter '{parameter.Name}'");
+                }
+            }
+
+            const BindingFlags MemberFlags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (MethodInfo method in type.GetMethods(MemberFlags))
+            {
+                AssertNotProjNetType(method.ReturnType, $"{type.FullName}.{method.Name}(...) return type");
+                foreach (ParameterInfo parameter in method.GetParameters())
+                {
+                    AssertNotProjNetType(parameter.ParameterType, $"{type.FullName}.{method.Name}(...) parameter '{parameter.Name}'");
+                }
+            }
+
+            foreach (PropertyInfo property in type.GetProperties(MemberFlags))
+            {
+                AssertNotProjNetType(property.PropertyType, $"{type.FullName}.{property.Name}");
+            }
+
+            foreach (FieldInfo field in type.GetFields(MemberFlags))
+            {
+                AssertNotProjNetType(field.FieldType, $"{type.FullName}.{field.Name}");
+            }
+
+            foreach (EventInfo eventInfo in type.GetEvents(MemberFlags))
+            {
+                if (eventInfo.EventHandlerType is not null)
+                {
+                    AssertNotProjNetType(eventInfo.EventHandlerType, $"{type.FullName}.{eventInfo.Name}");
+                }
+            }
+        }
+    }
+
+    private static void AssertNotProjNetType(Type type, string location)
+    {
+        Type effectiveType = type.IsByRef || type.IsPointer ? type.GetElementType()! : type;
+
+        if (effectiveType.IsArray)
+        {
+            AssertNotProjNetType(effectiveType.GetElementType()!, location);
+            return;
+        }
+
+        string? ns = effectiveType.Namespace;
+        bool isProjNetType = ns is not null && (ns == "ProjNet" || ns.StartsWith("ProjNet.", StringComparison.Ordinal));
+        Assert.False(isProjNetType, $"{location} exposes ProjNET type '{effectiveType.FullName}'.");
+
+        if (effectiveType.IsGenericType)
+        {
+            foreach (Type typeArgument in effectiveType.GetGenericArguments())
+            {
+                AssertNotProjNetType(typeArgument, location);
+            }
+        }
+    }
+
+    [Fact]
     public void OpenTopographyApiKeyExposesNoPublicMemberThatReturnsTheRawKey()
     {
         Type keyType = typeof(Core.Sources.OpenTopography.OpenTopographyApiKey);
