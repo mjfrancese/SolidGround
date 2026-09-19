@@ -203,4 +203,28 @@ public sealed class ArchitectureTests
 
         Assert.Equal("[REDACTED]", new Core.Sources.OpenTopography.OpenTopographyApiKey("super-secret-value").ToString());
     }
+
+    [Fact]
+    public void CliReferencesNoRevitAssemblyAndNoPackageBeyondCores()
+    {
+        // See docs/architecture/cli-workflow.md's "Testing strategy" section: SolidGround.Cli adds no new
+        // package, so every non-framework assembly it references must be SolidGround.Core itself or one
+        // of Core's own existing third-party dependencies -- never a new one, and never a Revit assembly.
+        AssemblyName[] references = typeof(SolidGround.Cli.CliApplication).Assembly.GetReferencedAssemblies();
+
+        Assert.DoesNotContain(
+            references,
+            reference => reference.Name?.StartsWith("RevitAPI", StringComparison.OrdinalIgnoreCase) == true);
+
+        string[] allowedNames = ["SolidGround.Core", "NetTopologySuite", "ProjNET", "System.Private.CoreLib", "System.Runtime", "netstandard"];
+        foreach (AssemblyName reference in references)
+        {
+            string name = reference.Name ?? string.Empty;
+            bool isFrameworkAssembly = name.StartsWith("System.", StringComparison.Ordinal) || name.StartsWith("Microsoft.", StringComparison.Ordinal);
+            bool isAllowedThirdParty = allowedNames.Contains(name, StringComparer.Ordinal);
+            Assert.True(
+                isFrameworkAssembly || isAllowedThirdParty,
+                $"SolidGround.Cli references '{name}', which is neither a framework assembly nor one of: {string.Join(", ", allowedNames)}.");
+        }
+    }
 }

@@ -61,6 +61,28 @@ public sealed class ContractModelTests
     }
 
     [Fact]
+    public void GridComputesItsCornerEnvelopeConsistentlyWithBothAnchorConventions()
+    {
+        double?[,] input = { { 1d, 2d }, { 3d, 4d }, { 5d, 6d } };
+
+        ElevationGrid cornerAnchored = new(ProjectedReference(), VerticalReference(), new Coordinate2D(10d, 20d), 2d, 3d, GridAnchorConvention.LowerLeftCorner, GridRowOrder.NorthToSouth, input);
+        PlanarEnvelope cornerEnvelope = cornerAnchored.GetCornerEnvelope();
+
+        Assert.Equal(10d, cornerEnvelope.MinX);
+        Assert.Equal(20d, cornerEnvelope.MinY);
+        Assert.Equal(14d, cornerEnvelope.MaxX);
+        Assert.Equal(29d, cornerEnvelope.MaxY);
+
+        ElevationGrid centerAnchored = new(ProjectedReference(), VerticalReference(), new Coordinate2D(10d, 20d), 2d, 3d, GridAnchorConvention.CellCenter, GridRowOrder.NorthToSouth, input);
+        PlanarEnvelope centerEnvelope = centerAnchored.GetCornerEnvelope();
+
+        Assert.Equal(9d, centerEnvelope.MinX);
+        Assert.Equal(18.5d, centerEnvelope.MinY);
+        Assert.Equal(13d, centerEnvelope.MaxX);
+        Assert.Equal(27.5d, centerEnvelope.MaxY);
+    }
+
+    [Fact]
     public void LocalFrameRoundTripsMixedHorizontalAndVerticalUnits()
     {
         LocalCoordinateFrame frame = new(new Coordinate3D(100d, 200d, 300d), ProjectedReference(LengthUnit.UsSurveyFoot), VerticalReference(LengthUnit.InternationalFoot), LengthUnit.Meter);

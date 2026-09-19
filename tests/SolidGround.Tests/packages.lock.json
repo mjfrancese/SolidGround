@@ -173,6 +173,12 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
+      "solidground.cli": {
+        "type": "Project",
+        "dependencies": {
+          "SolidGround.Core": "[1.0.0, )"
+        }
+      },
       "solidground.core": {
         "type": "Project",
         "dependencies": {

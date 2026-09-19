@@ -1,3 +1,4 @@
+using SolidGround.Core.Aois;
 using SolidGround.Core.Geometry;
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Units;
@@ -112,6 +113,29 @@ public sealed class ElevationGrid : ElevationData
             : row;
         double y = SouthwestAnchor.Y + ((southBasedRow + halfCellOffset) * CellSizeY);
         return new Coordinate2D(x, y);
+    }
+
+    /// <summary>
+    /// This grid's cell-corner axis-aligned envelope, in <see cref="ElevationData.HorizontalReference"/>'s own
+    /// ordinate units. For <see cref="GridAnchorConvention.LowerLeftCorner"/>, <see cref="SouthwestAnchor"/>
+    /// already names a corner, so no shift applies; for <see cref="GridAnchorConvention.CellCenter"/>,
+    /// <see cref="SouthwestAnchor"/> names the southwest-most cell's own center, so its corner is half a cell
+    /// further out in each axis. This is the same anchor-convention distinction <see cref="GetCellCenter"/>
+    /// applies in the opposite direction (a cell center adds a half-cell offset when the anchor is a corner; a
+    /// corner envelope subtracts one when the anchor is a center). The far corner extends the near corner by
+    /// <see cref="ColumnCount"/> * <see cref="CellSizeX"/> and <see cref="RowCount"/> * <see cref="CellSizeY"/>.
+    /// This math stays a Core member rather than a duplicated CLI helper so the anchor-convention adjustment
+    /// is defined exactly once; see docs/architecture/cli-workflow.md's "Local origin selection and its
+    /// consequences" section for how the CLI's southwest/centroid local-origin choices consume this envelope.
+    /// </summary>
+    public PlanarEnvelope GetCornerEnvelope()
+    {
+        double halfCellOffset = AnchorConvention == GridAnchorConvention.CellCenter ? 0.5d : 0d;
+        double minX = SouthwestAnchor.X - (halfCellOffset * CellSizeX);
+        double minY = SouthwestAnchor.Y - (halfCellOffset * CellSizeY);
+        double maxX = minX + (ColumnCount * CellSizeX);
+        double maxY = minY + (RowCount * CellSizeY);
+        return new PlanarEnvelope(minX, minY, maxX, maxY);
     }
 }
 

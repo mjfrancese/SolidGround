@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, and provenance with deterministic exports established**. Core, CLI, and offline test projects compile on .NET 10; the end-to-end CLI workflow remains future Phase 1 work. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), and the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
+The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, provenance with deterministic exports, and the end-to-end CLI workflow established**. Core, CLI, and offline test projects compile on .NET 10; the `process`/`fetch`/`run`/`verify` CLI workflow is implemented and tested — see [Usage](#usage) below. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md), and the [CLI workflow design note](docs/architecture/cli-workflow.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
 
 ## Scope
 
@@ -15,7 +15,7 @@ The intended workflow is:
 5. Clip to the parcel with an optional buffer.
 6. Shift the surface to a recorded local origin.
 7. Reduce the grid to an approximately 15,000-point budget with a terrain-aware method that preserves ridges and swales.
-8. Export development artifacts from the CLI; in Phase 2, create the bounded toposolid through the Revit API.
+8. Export development artifacts from the CLI (implemented today by the `process`/`fetch`/`run` commands); in Phase 2, create the bounded toposolid through the Revit API.
 9. Attach source, datum, quality, statistics, simplification, units, and local-origin provenance to the created element.
 
 The primary fixture is [withheld] at [withheld] the reference parcel, the area, the area, centered at `[withheld], [withheld]`. The approximately [withheld]-square-foot lot has extensive mature tree canopy, so sparse ground returns and interpolation roughness are expected source-quality concerns.
@@ -78,15 +78,54 @@ dotnet build SolidGround.slnx --configuration Release --no-restore
 dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release --no-build
 ```
 
-Run the scaffolded CLI with:
+Run the CLI with a real command; see [Usage](#usage) below for one example per command:
 
 ```powershell
-dotnet run --project src/SolidGround.Cli/SolidGround.Cli.csproj
+dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/[withheld].solidground.json
 ```
 
 Feature tests are offline by default. Parser tests use a small inspected synthetic fixture near the reference parcel scenario; it is not represented as measured terrain or an OpenTopography response. An opt-in end-to-end fetch test against the live OpenTopography endpoint runs only when both the `SOLIDGROUND_OPENTOPOGRAPHY_LIVE` environment variable is set to `1` and `OPENTOPOGRAPHY_API_KEY` is set to a non-empty value; otherwise it skips rather than failing the offline suite. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
 
 The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
+
+## Usage
+
+Each command prints one line per stage by default; add `--verbose` for full diagnostics. Every command's
+own `--help` lists its complete option set, and `--version` prints the CLI's version.
+
+Process a local AAIGrid file offline:
+
+```powershell
+dotnet run --project src/SolidGround.Cli --configuration Release -- process --asc terrain.asc --parcel lot.geojson --buffer 3 --output out --name [withheld]
+```
+
+Fetch a raster set from OpenTopography:
+
+```powershell
+dotnet run --project src/SolidGround.Cli --configuration Release -- fetch --bbox [withheld],[withheld],[withheld],[withheld] --output out --name [withheld]
+```
+
+Fetch and process in one step:
+
+```powershell
+dotnet run --project src/SolidGround.Cli --configuration Release -- run --center [withheld],[withheld] --radius 60 --output out --name [withheld]
+```
+
+Verify a written export bundle:
+
+```powershell
+dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/[withheld].solidground.json
+```
+
+`fetch` and `run` acquire data online and require an OpenTopography API key. Set `OPENTOPOGRAPHY_API_KEY`
+in the process environment, or register one with the .NET user-secrets tool:
+
+```powershell
+dotnet user-secrets set OPENTOPOGRAPHY_API_KEY "<key>" --id solidground-cli
+```
+
+See the [CLI workflow design note](docs/architecture/cli-workflow.md) for the full option table, exit
+codes, secrets resolution order, and known limitations.
 
 ## Continuous integration and the Revit project
 

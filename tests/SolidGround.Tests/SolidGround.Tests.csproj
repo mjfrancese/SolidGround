@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SolidGround.Core\SolidGround.Core.csproj" />
+    <ProjectReference Include="..\..\src\SolidGround.Cli\SolidGround.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1058,7 +1058,7 @@ public sealed class OpenTopographyUsgs1mSourceTests
     private static string ReadFixture(string fileName) =>
         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName));
 
-    private static byte[] CreateZipArchive(params (string EntryName, string Content)[] entries)
+    internal static byte[] CreateZipArchive(params (string EntryName, string Content)[] entries)
     {
         using var stream = new MemoryStream();
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))

@@ -7,6 +7,14 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+
+    <!--
+      Backs CliOpenTopographyApiKeyProvider's user-secrets fallback: this is only the identifier the
+      `dotnet user-secrets` SDK tool keys its secrets.json folder by (see docs/architecture/cli-workflow.md's
+      "Secrets and key resolution" section). It does not add a package reference or any build-time secrets
+      tooling.
+    -->
+    <UserSecretsId>solidground-cli</UserSecretsId>
   </PropertyGroup>
 
 </Project>
