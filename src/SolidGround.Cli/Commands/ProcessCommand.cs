@@ -346,7 +346,7 @@ internal static class ProcessCommand
             $"{diagnostics.CurvatureSelectedPointCount.ToString(CultureInfo.InvariantCulture)}, coverage-floor " +
             $"{diagnostics.CoverageFloorPointCount.ToString(CultureInfo.InvariantCulture)}, uniform " +
             $"{diagnostics.UniformlySampledPointCount.ToString(CultureInfo.InvariantCulture)}, interior-exhausted " +
-            $"{diagnostics.InteriorCandidatesExhausted}.");
+            $"{diagnostics.InteriorCandidatesExhausted}, retained-every-candidate {diagnostics.RetainedEveryCandidate}.");
         host.StandardOutput.WriteLine(
             $"{verb}: removed-candidate curvature max {diagnostics.MaxRemovedCurvatureMagnitude.ToString("R", CultureInfo.InvariantCulture)} mean " +
             $"{diagnostics.MeanRemovedCurvatureMagnitude.ToString("R", CultureInfo.InvariantCulture)}, removed-candidate elevation residual max " +

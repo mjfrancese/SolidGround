@@ -540,6 +540,14 @@ non-verbose path. `--coverage-floor` is the one processing input never recorded 
 itself (see "Known limitations and follow-ups"), so the CLI always prints it, verbose or not, as the only
 record of which value produced a given run's result.
 
+**Update, Issue #24 (2026-09-20):** the verbose `simplification diagnostics:` line gained one more token,
+`retained-every-candidate True|False`, printed immediately after `interior-exhausted {bool}` and rendered from
+`SimplificationDiagnostics.RetainedEveryCandidate`. It is `True` whenever the retained count equals the
+candidate count — because `GridTerrainSimplifier`'s retain-all branch ran (candidate count at or below the
+budget) or because `SimplifyUniform`'s own candidate-count-at-or-below-budget check retained everything — so the
+console line never implies a curvature or coverage-floor selection dropped something when nothing was actually
+dropped. See `docs/architecture/terrain-aware-decimation.md`'s "Budget invariant" section.
+
 **Update, Issue #21 (2026-09-19):** `fetch`, `run`, and `process` now print one additional non-verbose line —
 `{verb}: horizontal reference {crs} from {origin description}; vertical reference {datum} ({unit}) from
 {origin description}.` — immediately after the acquisition stage line and before any "wrote" line for

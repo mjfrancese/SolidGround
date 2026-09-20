@@ -59,6 +59,14 @@ as a tie-break and honest removed-point diagnostics need both statistics regardl
 
 ## Three-pass budget allocation
 
+**Update, Issue #24 (2026-09-20):** Pass 2 and Pass 3 (curvature-ranked interior fill and the coverage floor) run
+only when `candidates.Count` exceeds `SimplificationRequest.PointBudget`; Pass 1's structural retention always runs
+first, unconditionally, before that check. `SimplifyCurvatureAware` checks that inequality once, immediately after
+Pass 1's structural retention and the cancellation checkpoint that follows it, and when the whole candidate set
+already fits the budget it retains every candidate directly — in the same row-major order Pass 0 built it in —
+instead of running Pass 2 or Pass 3 at all. See "Budget invariant" below for why this bypass was needed, not
+merely convenient.
+
 Pass 1 (structural, mandatory) retains every structural candidate unless `StructuralCandidateCount` exceeds
 `SimplificationRequest.PointBudget`, in which case it sorts by `(MissingNeighborCount desc, CurvatureMagnitude
 desc, Row asc, Column asc)` and truncates to the budget (see "Budget enforcement" below). Pass 2 (curvature-ranked
@@ -111,6 +119,14 @@ fewer distinct blocks than `coverageBudgetFinal`, some of that reserve genuinely
 "budget comfortably exceeds supply" case sizes its budget so Pass 2 alone already exhausts every interior
 candidate, rather than relying on Pass 3 to finish the job.
 
+**Update, Issue #24 (2026-09-20):** this per-block cap is exactly why a budget with room to spare could still
+drop a handful of non-structural candidates before this issue: an unselected candidate whose block already
+contributed that block's one pick was never revisited, even though `coverageBudgetFinal` (and the overall
+`PointBudget`) had unused headroom. The retain-all branch added above bypasses this mechanism entirely whenever
+`candidates.Count <= PointBudget`, so the per-block cap can no longer discard a candidate the budget could
+actually afford; the whole-grid re-run recorded in `docs/architecture/phase-1-validation.md`'s "Point reduction
+observed" section is the concrete example.
+
 ### Budget invariant (proved, not merely asserted)
 
 `coverageBudgetFinal = remainingBudget - curvatureSelected.Count` (since `coverageReserve + curvatureAllotment =
@@ -122,6 +138,18 @@ Pass 1 was not truncated, or both terms are exactly `0` when it was (`remainingB
 `SimplifyUniform`'s own `retained.Count = min(PointBudget, CandidatePointCount) <= PointBudget` always.
 `SimplificationResult`'s existing, unmodified constructor check (`retainedSamples.Length > request.PointBudget`
 throws) remains an untouched second line of defense behind both derivations.
+
+**Update, Issue #24 (2026-09-20):** the invariant above governs Pass 2/Pass 3's own bookkeeping when the budget
+binds (`candidates.Count > PointBudget`); it says nothing about whether a non-binding budget retains everything
+it could, which was exactly the gap the retain-all branch closes. When `candidates.Count <= PointBudget`,
+`SimplifyCurvatureAware` returns before either pass runs, with `StructuralPointCount = structural.Count`,
+`CurvatureSelectedPointCount = nonStructural.Count`, `CoverageFloorPointCount = 0`, and
+`InteriorCandidatesExhausted = true` — the same bucket accounting `SimplificationResult`'s constructor already
+requires to sum to the retained count. `SimplificationDiagnostics.RetainedEveryCandidate`
+(`StructuralPointCount + CurvatureSelectedPointCount + CoverageFloorPointCount + UniformlySampledPointCount ==
+CandidatePointCount`) is `true` in exactly this case, and also whenever `SimplifyUniform`'s own `candidateCount
+<= PointBudget` check retains everything, letting a caller distinguish "nothing needed to be dropped" from an
+actual curvature or coverage-floor selection having taken place.
 
 ## Total ordering and determinism
 

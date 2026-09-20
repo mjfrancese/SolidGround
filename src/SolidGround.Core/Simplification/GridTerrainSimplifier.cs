@@ -114,6 +114,31 @@ public sealed class GridTerrainSimplifier : ITerrainSimplifier
         // docs/architecture/terrain-aware-decimation.md for the resulting OperationCanceledException contract.
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Retain-all branch (SolidGround Issue #24): when every candidate already fits the budget, retain the
+        // full row-major candidate list directly instead of routing it through Pass 2/3's block-quota
+        // bookkeeping. That bookkeeping exists to choose WHICH candidates to drop under a binding budget;
+        // asked to keep everything, it can still drop a handful of non-structural candidates even though the
+        // budget had room, because Pass 3 visits each spatial block at most once per call and a
+        // remainingForCoverage candidate sharing a block with an already-picked one is never revisited. See
+        // the "Three-pass budget allocation" section of docs/architecture/terrain-aware-decimation.md.
+        if (candidates.Count <= pointBudget)
+        {
+            SimplificationDiagnostics retainAllDiagnostics = BuildDiagnostics(
+                grid, candidates, candidates, noDataOrExcludedCellCount, minElevation, maxElevation,
+                structuralCandidateCount: structural.Count,
+                structuralPointCount: structural.Count,
+                curvatureSelectedPointCount: nonStructural.Count,
+                coverageFloorPointCount: 0,
+                uniformlySampledPointCount: 0,
+                interiorCandidatesExhausted: true);
+
+            List<TerrainSample> retainAllSamples = [.. candidates
+                .OrderBy(candidate => candidate.Row)
+                .ThenBy(candidate => candidate.Column)
+                .Select(candidate => ToSample(grid, candidate))];
+            return new SimplificationResult(candidates.Count, retainAllSamples, request, retainAllDiagnostics);
+        }
+
         List<Candidate> curvatureSelected = [];
         List<Candidate> coverageSelected = [];
 

@@ -206,6 +206,16 @@ public sealed record SimplificationDiagnostics
     public int CurvatureSelectedPointCount { get; }
     public int CoverageFloorPointCount { get; }
     public int UniformlySampledPointCount { get; }
+    /// <summary>
+    /// True when the retained count equals <see cref="CandidatePointCount"/>: nothing needed to be dropped,
+    /// whether because <see cref="GridTerrainSimplifier"/>'s retain-all branch ran (CurvatureAware, candidate
+    /// count at or below the budget) or because SimplifyUniform's own candidate-count-at-or-below-budget check
+    /// did. Lets a caller print "every candidate retained" instead of implying a curvature or coverage-floor
+    /// selection actually dropped anything. See the "Three-pass budget allocation" section of
+    /// docs/architecture/terrain-aware-decimation.md.
+    /// </summary>
+    public bool RetainedEveryCandidate =>
+        StructuralPointCount + CurvatureSelectedPointCount + CoverageFloorPointCount + UniformlySampledPointCount == CandidatePointCount;
     /// <summary>True when interior selection ran out of eligible candidates before it ran out of budget (always true for UniformSampler).</summary>
     public bool InteriorCandidatesExhausted { get; }
     public double? MinElevation { get; }

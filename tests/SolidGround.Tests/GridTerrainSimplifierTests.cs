@@ -489,7 +489,122 @@ public sealed class GridTerrainSimplifierTests
                 grid, new SimplificationRequest(pointBudget: budget), TestContext.Current.CancellationToken);
             Assert.True(result.RetainedPointCount <= budget);
             Assert.True(result.RetainedPointCount <= result.OriginalPointCount);
+
+            // SolidGround Issue #24: once the budget reaches or exceeds every valid cell, the retain-all
+            // branch (or, below it, the ordinary passes with room to spare) must retain the whole candidate
+            // set exactly, not merely "at most the budget".
+            if (budget >= totalValidCells)
+            {
+                Assert.Equal(totalValidCells, result.RetainedPointCount);
+            }
         }
+    }
+
+    [Fact]
+    public async Task ATightSurplusGridWithBudgetAboveCandidateCountRetainsEveryCandidateWithRetainAllDiagnostics()
+    {
+        ElevationGrid grid = BuildGrid(20, 20, TightSurplusElevation);
+        GridTerrainSimplifier simplifier = new();
+
+        SimplificationResult probe = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: 10_000), TestContext.Current.CancellationToken);
+        int candidateCount = probe.OriginalPointCount;
+        int structuralCount = probe.Diagnostics!.StructuralCandidateCount;
+
+        SimplificationResult result = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: candidateCount + 3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(candidateCount, result.RetainedPointCount);
+        SimplificationDiagnostics diagnostics = result.Diagnostics!;
+        Assert.Equal(structuralCount, diagnostics.StructuralPointCount);
+        Assert.Equal(candidateCount - structuralCount, diagnostics.CurvatureSelectedPointCount);
+        Assert.Equal(0, diagnostics.CoverageFloorPointCount);
+        Assert.Equal(0, diagnostics.UniformlySampledPointCount);
+        Assert.True(diagnostics.InteriorCandidatesExhausted);
+        Assert.True(diagnostics.RetainedEveryCandidate);
+        Assert.Equal(0d, diagnostics.MaxRemovedCurvatureMagnitude);
+        Assert.Equal(0d, diagnostics.MeanRemovedCurvatureMagnitude);
+        Assert.Equal(0d, diagnostics.MaxRemovedElevationResidual);
+        Assert.Equal(0d, diagnostics.MeanRemovedElevationResidual);
+
+        List<Coordinate3D> expectedPositions = ExpectedRowMajorPositions(grid, TightSurplusElevation, rowCount: 20, columnCount: 20);
+        List<Coordinate3D> actualPositions = [.. result.RetainedSamples.Select(sample => sample.Position)];
+        Assert.Equal(expectedPositions, actualPositions);
+    }
+
+    [Fact]
+    public async Task ATightSurplusGridWithBudgetExactlyEqualToCandidateCountRetainsEveryCandidate()
+    {
+        ElevationGrid grid = BuildGrid(20, 20, TightSurplusElevation);
+        GridTerrainSimplifier simplifier = new();
+        SimplificationResult probe = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: 10_000), TestContext.Current.CancellationToken);
+        int candidateCount = probe.OriginalPointCount;
+
+        SimplificationResult result = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: candidateCount), TestContext.Current.CancellationToken);
+
+        Assert.Equal(candidateCount, result.RetainedPointCount);
+        Assert.True(result.Diagnostics!.RetainedEveryCandidate);
+        List<Coordinate3D> expectedPositions = ExpectedRowMajorPositions(grid, TightSurplusElevation, rowCount: 20, columnCount: 20);
+        List<Coordinate3D> actualPositions = [.. result.RetainedSamples.Select(sample => sample.Position)];
+        Assert.Equal(expectedPositions, actualPositions);
+    }
+
+    [Fact]
+    public async Task ATightSurplusGridWithBudgetOneBelowCandidateCountRunsThePassesAndReportsNotEveryCandidateRetained()
+    {
+        ElevationGrid grid = BuildGrid(20, 20, TightSurplusElevation);
+        GridTerrainSimplifier simplifier = new();
+        SimplificationResult probe = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: 10_000), TestContext.Current.CancellationToken);
+        int candidateCount = probe.OriginalPointCount;
+
+        SimplificationResult result = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: candidateCount - 1), TestContext.Current.CancellationToken);
+
+        Assert.True(result.RetainedPointCount <= candidateCount - 1);
+        Assert.False(result.Diagnostics!.RetainedEveryCandidate);
+    }
+
+    [Fact]
+    public async Task ARetainAllCaseBypassesThePassesEvenWithAHighCoverageFloorFraction()
+    {
+        ElevationGrid grid = BuildGrid(20, 20, TightSurplusElevation);
+        GridTerrainSimplifier defaultSimplifier = new();
+        GridTerrainSimplifier highCoverageFloorSimplifier = new(coverageFloorFraction: 0.9d);
+
+        SimplificationResult probe = await defaultSimplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: 10_000), TestContext.Current.CancellationToken);
+        SimplificationRequest request = new(pointBudget: probe.OriginalPointCount + 3);
+
+        SimplificationResult defaultResult = await defaultSimplifier.SimplifyAsync(grid, request, TestContext.Current.CancellationToken);
+        SimplificationResult highCoverageFloorResult = await highCoverageFloorSimplifier.SimplifyAsync(grid, request, TestContext.Current.CancellationToken);
+
+        // coverageFloorFraction: 0.9 would, if Pass 2/3 ran, push most of the non-structural budget into
+        // CoverageFloorPointCount rather than CurvatureSelectedPointCount. The retain-all branch runs before
+        // either pass and never reads coverageFloorFraction, so a high-floor simplifier and the default one
+        // must produce byte-identical results here.
+        Assert.Equal(0, highCoverageFloorResult.Diagnostics!.CoverageFloorPointCount);
+        Assert.True(highCoverageFloorResult.Diagnostics.RetainedEveryCandidate);
+        Assert.Equal(defaultResult.RetainedSamples, highCoverageFloorResult.RetainedSamples);
+        Assert.Equal(defaultResult.Diagnostics, highCoverageFloorResult.Diagnostics);
+    }
+
+    [Fact]
+    public async Task ATightSurplusGridRetainAllBranchIsDeterministicAcrossRepeatedRuns()
+    {
+        ElevationGrid grid = BuildGrid(20, 20, TightSurplusElevation);
+        GridTerrainSimplifier simplifier = new();
+        SimplificationResult probe = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: 10_000), TestContext.Current.CancellationToken);
+        SimplificationRequest request = new(pointBudget: probe.OriginalPointCount + 3);
+
+        SimplificationResult first = await simplifier.SimplifyAsync(grid, request, TestContext.Current.CancellationToken);
+        SimplificationResult second = await simplifier.SimplifyAsync(grid, request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(first.RetainedSamples, second.RetainedSamples);
+        Assert.Equal(first.Diagnostics, second.Diagnostics);
     }
 
     [Fact]
@@ -807,10 +922,11 @@ public sealed class GridTerrainSimplifierTests
         GridTerrainSimplifier simplifier = new();
         const int perimeterCount = (2 * 6) + (2 * 6) - 4; // 20
 
-        // remainingBudget = 25 keeps curvatureAllotment (~80% of it) comfortably above the 16 true interior
-        // candidates on its own, so Pass 2 alone exhausts them and Pass 3's block-count-limited coverage floor
-        // (which can leave budget unused when candidates cluster into fewer blocks than its budget) never
-        // needs to run at all: remainingForCoverage is empty once Pass 2 has already taken every candidate.
+        // pointBudget = perimeterCount + 25 = 45 exceeds candidates.Count = 36 (a 6x6 grid with no NODATA), so
+        // this sub-case is intercepted by the Issue #24 retain-all branch (candidates.Count <= pointBudget)
+        // before Pass 2 or Pass 3 ever runs; the retain-all branch hardcodes InteriorCandidatesExhausted to
+        // true, which is what this assertion actually observes, not Pass 2 exhausting the 16 true interior
+        // candidates on its own.
         SimplificationResult comfortable = await simplifier.SimplifyAsync(
             grid, new SimplificationRequest(pointBudget: perimeterCount + 25), TestContext.Current.CancellationToken);
         Assert.True(comfortable.Diagnostics!.InteriorCandidatesExhausted);
@@ -1052,6 +1168,44 @@ public sealed class GridTerrainSimplifierTests
         double ridge = 12d - (0.4d * Math.Abs(column - 4));
         double swale = -0.3d * Math.Abs(row - 9);
         return ridge + swale;
+    }
+
+    /// <summary>A 20x20 grid with a few deterministic, interior-only NODATA holes (SolidGround Issue #24's
+    /// retain-all branch tests): "interior" here means the four holes never touch row/column 0 or 19, so every
+    /// structural point they create comes from the holes themselves, not the grid boundary.</summary>
+    private static double? TightSurplusElevation(int row, int column)
+    {
+        if ((row, column) is (5, 5) or (10, 12) or (14, 7) or (8, 15))
+        {
+            return null; // deterministic interior NODATA holes, away from the grid edge.
+        }
+
+        double ridge = 12d - (0.3d * Math.Abs(column - 10));
+        double swale = -0.2d * Math.Abs(row - 10);
+        return ridge + swale;
+    }
+
+    /// <summary>Independently reimplements the Pass 0 row-major candidate scan's ordering (skipping NODATA) so
+    /// a retain-all test can assert the exact retained sample ordering without depending on any of
+    /// <see cref="GridTerrainSimplifier"/>'s own internal sorts.</summary>
+    private static List<Coordinate3D> ExpectedRowMajorPositions(ElevationGrid grid, Func<int, int, double?> valueAt, int rowCount, int columnCount)
+    {
+        List<Coordinate3D> positions = [];
+        for (int row = 0; row < rowCount; row++)
+        {
+            for (int column = 0; column < columnCount; column++)
+            {
+                double? elevation = valueAt(row, column);
+                if (elevation is null)
+                {
+                    continue;
+                }
+
+                Coordinate2D center = grid.GetCellCenter(row, column);
+                positions.Add(new Coordinate3D(center.X, center.Y, elevation.Value));
+            }
+        }
+        return positions;
     }
 
     private static SimplificationDiagnostics ValidDiagnostics(
