@@ -660,11 +660,22 @@ above is enforced by a test, not only by review.
   schema version 2" section) — but `collectionPeriod` and `qualityLevel` still carry no such marker. A later
   schema version, adding an explicit origin marker for those two fields, is still needed before a reader can
   tell an operator-asserted collection period or quality level apart from a source-reported one.
-- **Only NAD83 UTM zones (EPSG 26901-26923) are supported for the GeoTIFF-GeoKeys hybrid flow.** A bare
-  AAIGrid response whose GeoTIFF metadata names any other EPSG family — including a NAD83(2011) UTM zone, a
-  state plane system, or a non-UTM projection — fails with `OpenTopographySourceMetadataException` naming the
-  observed code rather than being handled (`docs/architecture/opentopography-usgs1m-source.md`'s "GeoKey to
-  WKT synthesis" section). Supporting additional EPSG families is follow-up work, not part of this issue.
+- **Only 40 NAD83-family UTM zone codes (10N-19N under NAD83, NAD83(HARN), NAD83(NSRS2007), and NAD83(2011))
+  are supported for the GeoTIFF-GeoKeys hybrid flow.** **Update, Issue #22 (2026-09-20):** this widens the
+  single NAD83-only range this bullet originally named; the scope is now four verified realizations. Zones
+  10N-18N lie entirely within the conterminous United States; zone 19N also reaches Puerto Rico, so
+  `OpenTopographyUsgs1mSource.ValidateGeoTiffMetadata` additionally rejects a zone 19N result whose request
+  bounding box lies entirely south of `MinimumConusLatitudeForZone19N` (24.5 degrees north, south of the
+  Florida Keys) rather than assume there. This support is still bounded to the conterminous United States
+  because SolidGround has verified only the CONUS zones, and USGS's own Lidar Base Specification ties the
+  declared NAVD88 vertical reference to CONUS specifically — Alaska, Hawaii, Puerto Rico, the Virgin Islands,
+  and the territories use a per-project or local vertical datum instead (see
+  `docs/architecture/opentopography-usgs1m-source.md`'s "GeoKey to WKT synthesis", "CONUS scope and its
+  rationale", and "Declared vertical reference" sections). A bare AAIGrid response whose GeoTIFF metadata
+  names any other EPSG family or zone — a non-CONUS NAD83 zone such as Alaska's zone 1N, a state plane
+  system, or a non-UTM projection — still fails with `OpenTopographySourceMetadataException` naming the
+  observed code rather than being handled. Supporting additional EPSG families or non-CONUS zones remains
+  follow-up work, not part of this issue.
 - **No minimum-area padding.** OpenTopography rejects a request below an empirically observed, undocumented
   per-request area minimum with HTTP 400 (exit code 2, usage) rather than a source-quality failure
   (`docs/architecture/opentopography-usgs1m-source.md`'s "Fail rather than assume" section). Neither `fetch`

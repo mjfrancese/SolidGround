@@ -1068,6 +1068,113 @@ public sealed class OpenTopographyUsgs1mSourceTests
         Assert.Equal(tiffBytes.LongLength, metadataEvidence.ResponseByteCount);
     }
 
+    public static IEnumerable<object[]> VerifiedNonNad83RealizationScenarios()
+    {
+        // Zone 15N under each of the three other verified NAD83 realizations (NorthAmericanUtmWellKnownText's
+        // Definitions table). The GTCitationGeoKey text is the realization's own EPSG name -- exactly what a
+        // real GeoTIFF metadata response is expected to carry for GeoKey 1026 -- so this also proves that
+        // citation reaches OpenTopographyMetadataRequestEvidence.Citation unredacted (it never matches the
+        // fake API key).
+        yield return [3745, "NAD83(HARN) / UTM zone 15N", "NAD83(HARN)"];
+        yield return [3722, "NAD83(NSRS2007) / UTM zone 15N", "NAD83(NSRS2007)"];
+        yield return [6344, "NAD83(2011) / UTM zone 15N", "NAD83(2011)"];
+    }
+
+    [Theory]
+    [MemberData(nameof(VerifiedNonNad83RealizationScenarios))]
+    public async Task HybridFlowSucceedsForEveryVerifiedNonNad83RealizationAndReportsItsOwnDatumAndCode(
+        int epsgCode, string citation, string expectedDatum)
+    {
+        TiffScenario scenario = HappyPathScenario with { ProjectedCode = (ushort)epsgCode, Citation = citation };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        string codeText = epsgCode.ToString(CultureInfo.InvariantCulture);
+        HorizontalReference horizontal = result.Acquisition.Data.HorizontalReference;
+        Assert.Equal($"EPSG:{codeText}", horizontal.CoordinateReferenceSystem);
+        Assert.Equal(expectedDatum, horizontal.Datum);
+        Assert.Equal("NAVD88", result.Acquisition.Data.VerticalReference.Datum);
+
+        OpenTopographyMetadataRequestEvidence metadataEvidence = Assert.IsType<OpenTopographyMetadataRequestEvidence>(result.Evidence.MetadataRequest);
+        Assert.Equal(epsgCode, metadataEvidence.ProjectedCoordinateSystemCode);
+        Assert.Equal(citation, metadataEvidence.Citation);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnUnsupportedZone1nCodeFailsAsASourceMetadataExceptionNamingTheCodeAndNeverContainingTheKey()
+    {
+        // EPSG:26901 (NAD83 / UTM zone 1N, Alaska) is a real, registered EPSG code -- NorthAmericanUtmWellKnownText
+        // simply does not support it (SolidGround verified and tabulated only zones 10N-19N for the four NAD83
+        // realizations; see docs/architecture/opentopography-usgs1m-source.md's "GeoKey to WKT synthesis"
+        // section), so this must fail the same way any other unsupported family does, naming only the integer
+        // code, never the GeoKey number or the API key.
+        TiffScenario scenario = HappyPathScenario with { ProjectedCode = 26901 };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("EPSG:26901", error.Message, StringComparison.Ordinal);
+        Assert.Contains("10N to 19N", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.RedactedRequestUri, StringComparison.Ordinal);
+        AssertExceptionChainDoesNotContainTheKey(error);
+    }
+
+    [Fact]
+    public async Task AZone19NResultOverPuertoRicoFailsAsASourceMetadataExceptionInsteadOfDeclaringNavd88()
+    {
+        // EPSG:26919 (NAD83 / UTM zone 19N) is otherwise a supported code -- unlike EPSG:26901 above -- but
+        // zone 19N (-72 to -66 degrees west) is the one supported zone that is not entirely within the
+        // conterminous United States: it also covers Puerto Rico. A request bounding box entirely south of
+        // the Florida Keys cannot be a conterminous United States location, so this must fail rather than
+        // pair Puerto Rico with the declared NAVD88 vertical reference (which USGS documents as a per-project
+        // choice there, not NAVD88) -- see docs/architecture/opentopography-usgs1m-source.md's "CONUS scope
+        // and its rationale" section.
+        var request = new ElevationSourceRequest(new Wgs84BoundingBoxAoi(-66.11, 18.40, -66.10, 18.41));
+        TiffScenario scenario = HappyPathScenario with { ProjectedCode = 26919 };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(request, TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("EPSG:26919", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Puerto Rico", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.RedactedRequestUri, StringComparison.Ordinal);
+        AssertExceptionChainDoesNotContainTheKey(error);
+    }
+
+    [Fact]
+    public async Task AZone19NResultOverMaineStillSucceedsAndDeclaresNavd88()
+    {
+        // The same zone 19N code as above, but with a conterminous United States bounding box (central
+        // Maine, well north of the MinimumConusLatitudeForZone19N threshold), must still succeed: the new
+        // Puerto Rico guard must not reject every zone 19N request, only ones south of the threshold.
+        var request = new ElevationSourceRequest(new Wgs84BoundingBoxAoi(-68.01, 44.50, -68.00, 44.51));
+        TiffScenario scenario = HappyPathScenario with { ProjectedCode = 26919 };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal("EPSG:26919", result.Acquisition.Data.HorizontalReference.CoordinateReferenceSystem);
+        Assert.Equal("NAVD88", result.Acquisition.Data.VerticalReference.Datum);
+    }
+
     [Fact]
     public async Task HybridFlowWithTheObservedLiveGridDimensionsPassesTheCornerAgreementTolerance()
     {
@@ -1245,7 +1352,11 @@ public sealed class OpenTopographyUsgs1mSourceTests
     {
         yield return ["3072", "MissingProjectedCode"];
         yield return ["1024", "UnsupportedModelType"];
-        yield return ["3072", "UnsupportedProjectedCode"];
+        // Unlike every other row here, an unsupported projected code's message names the observed EPSG code
+        // itself (see OpenTopographyUsgs1mSource.ValidateGeoTiffMetadata), not the GeoKey number, since
+        // Issue #22 replaced "GeoTIFF GeoKey 3072 (ProjectedCSTypeGeoKey) is EPSG:<code>" with a message aimed
+        // at an operator rather than a GeoKey debugger.
+        yield return ["EPSG:32615", "UnsupportedProjectedCode"];
         yield return ["3076", "UnsupportedLinearUnits"];
         yield return ["1025", "UnsupportedRasterType"];
         yield return ["33550", "MissingPixelScale"];

@@ -252,6 +252,19 @@ constant itself contains no `\r` and remains multi-line, and `ArchitectureTests.
 "Determinism rules" in `docs/architecture/provenance-and-deterministic-exports.md` for the platform-neutral
 goldens rule this defect motivated.
 
+**Update, Issue #22 (2026-09-20):** `NorthAmericanUtmWellKnownText` now synthesizes a horizontal reference for
+four NAD83 realizations, not one — NAD83, NAD83(HARN), NAD83(NSRS2007), and NAD83(2011) — and every one of
+them is paired with the same hardcoded, `TOWGS84`-free `Wgs84WellKnownText` constant, so this zero-datum-shift
+approximation now applies identically across all four. The four realizations are successive refinements of
+the same reference frame, not four independent datums: NGS documents realization-to-realization shifts at
+roughly 0.3-1.0 m for the conterminous United States (the largest such jump — the original 1986 adjustment to
+HARN/FBN — is commonly cited at up to about a meter), so treating any one of them as
+numerically identical to WGS 84 stays within the 1-2 m approximation this section already accepts for plain
+NAD83 — it does not add a second, larger source of horizontal error. No test or exported value distinguishes
+which realization supplied a given transform's source side; only the target side's own datum name (recorded
+on `NorthAmericanUtmDefinition.DatumName` and carried through to `HorizontalReference.Datum`) records which
+realization was actually declared.
+
 ## `LengthConverter.DefaultOutputUnit`
 
 `LengthConverter.DefaultOutputUnit` is `LengthUnit.UsSurveyFoot`, the one named constant decision #3 requires. It is

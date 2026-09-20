@@ -260,6 +260,20 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
     /// </summary>
     public const double GridAgreementTolerance = 1e-6;
 
+    /// <summary>
+    /// The minimum latitude, in degrees north, at which a UTM zone 19N GeoTIFF result is accepted. Zone 19N
+    /// (EPSG 26919, 3749, 3726, and 6348) is the one <see cref="NorthAmericanUtmWellKnownText"/> zone that is
+    /// not entirely within the conterminous United States: it also covers Puerto Rico (roughly 17.9-18.5
+    /// degrees north), where the declared NAVD88 vertical reference
+    /// (<see cref="OpenTopographyUsgs1mSourceOptions.DeclaredVerticalReference"/>) is not established -- see
+    /// docs/architecture/opentopography-usgs1m-source.md's "CONUS scope and its rationale" section. A request
+    /// bounding box entirely south of the Florida Keys (roughly 24.5 degrees north) cannot be a conterminous
+    /// United States location, so <see cref="ValidateGeoTiffMetadata"/> rejects a zone 19N result there rather
+    /// than assume; every conterminous United States latitude zone 19N also reaches (for example Maine)
+    /// remains accepted.
+    /// </summary>
+    public const double MinimumConusLatitudeForZone19N = 24.5;
+
     private const string DatasetNameParameter = "datasetName";
     private const string SouthParameter = "south";
     private const string NorthParameter = "north";
@@ -720,7 +734,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                     new FormatException(redactedDetail));
             }
 
-            ValidateGeoTiffMetadata(metadata, redactedMetadataRequestUri, apiKey);
+            ValidateGeoTiffMetadata(metadata, box, redactedMetadataRequestUri, apiKey);
             EnsureGridsAgree(header, metadata, redactedMetadataRequestUri);
 
             EnsureOptionalIdentifierDoesNotEchoApiKey("GeoTIFF citation (GeoKey 1026)", metadata.Citation, apiKey, redactedMetadataRequestUri);
@@ -801,9 +815,12 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
     /// <summary>
     /// Validates that a GeoTIFF metadata response carries every GeoKey and tag SolidGround needs, and that
     /// each one is a value this source supports. See docs/architecture/opentopography-usgs1m-source.md's
-    /// "GeoKey to WKT synthesis" section for why exactly this set is required.
+    /// "GeoKey to WKT synthesis" section for why exactly this set is required. Also rejects a UTM zone 19N
+    /// result when <paramref name="box"/> lies entirely outside the conterminous United States, because zone
+    /// 19N also covers Puerto Rico; see <see cref="MinimumConusLatitudeForZone19N"/> and "CONUS scope and its
+    /// rationale" in the same design note.
     /// </summary>
-    private static void ValidateGeoTiffMetadata(GeoTiffMetadata metadata, string redactedMetadataRequestUri, OpenTopographyApiKey apiKey)
+    private static void ValidateGeoTiffMetadata(GeoTiffMetadata metadata, Wgs84BoundingBoxAoi box, string redactedMetadataRequestUri, OpenTopographyApiKey apiKey)
     {
         if (metadata.ModelType is not 1)
         {
@@ -823,9 +840,23 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
 
         if (!NorthAmericanUtmWellKnownText.IsSupported(projectedCode))
         {
+            string codeText = projectedCode.ToString(CultureInfo.InvariantCulture);
             throw new OpenTopographySourceMetadataException(
-                $"GeoTIFF GeoKey 3072 (ProjectedCSTypeGeoKey) is EPSG:{projectedCode.ToString(CultureInfo.InvariantCulture)}, " +
-                "which SolidGround does not support (only NAD83 UTM zones, EPSG:26901-26923, are supported).",
+                $"EPSG:{codeText} is not a supported projected coordinate system. SolidGround supports UTM zones " +
+                "10N to 19N (the conterminous United States) on NAD83, NAD83(HARN), NAD83(NSRS2007), and " +
+                "NAD83(2011); other zones and families are not verified and fail rather than assume.",
+                redactedMetadataRequestUri);
+        }
+
+        if (NorthAmericanUtmWellKnownText.ZoneOf(projectedCode) == 19 && box.NorthLatitude < MinimumConusLatitudeForZone19N)
+        {
+            string codeText = projectedCode.ToString(CultureInfo.InvariantCulture);
+            string thresholdText = MinimumConusLatitudeForZone19N.ToString(CultureInfo.InvariantCulture);
+            throw new OpenTopographySourceMetadataException(
+                $"EPSG:{codeText} is UTM zone 19N, which also covers Puerto Rico outside the conterminous " +
+                $"United States; the request's bounding box lies entirely south of {thresholdText} degrees " +
+                "north, so SolidGround's declared NAVD88 vertical reference is not established there and this " +
+                "fails rather than assume.",
                 redactedMetadataRequestUri);
         }
 
