@@ -500,6 +500,8 @@ and the Linux runner's C library. A full `process`/`run` invocation against a re
 deterministic only when run twice on one machine, exactly like the pipeline it wraps; reproducing identical
 bytes on a second machine is expected, not proven.
 
+**Update, Issue #10 (2026-09-19):** see "Determinism rules" in `docs/architecture/provenance-and-deterministic-exports.md` for the clean-checkout line-ending finding (a fresh Windows clone with `core.autocrlf=true` failed the golden export test) and its fix.
+
 ## Testing strategy
 
 CLI tests live in the existing `SolidGround.Tests` project, reached through a new project reference to

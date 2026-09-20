@@ -226,6 +226,22 @@ differs from WGS 84 by roughly 1-2 m." No vertical transformation is performed o
 issue, and `TerrainProvenance`'s own constructor invariant (requiring `sourceVerticalReference ==
 localFrame.VerticalReference`) already prevents any code path from smuggling one past provenance.
 
+**Update, Issue #10 (2026-09-19):** a fresh clone on Windows with `core.autocrlf=true` at commit `783e0dd`
+failed `TerrainExportGoldenFileTests.GoldenPipelineRendersBytesIdenticalToTheCommittedGoldenFiles`, because the
+compiled value of `Wgs84WellKnownText` — then a `public const string` multi-line raw string literal — silently
+inherited the source file's own checkout line endings, so a CRLF checkout of
+`ProjNetHorizontalCoordinateTransform.cs` baked `\r\n` into the constant even though the committed golden
+export was LF-only. A multi-line raw string literal is checkout-dependent for exactly this reason: the
+compiler preserves the literal's line endings as written in the source file, and the source file's own line
+endings are themselves subject to `.gitattributes` and `core.autocrlf` at checkout time, so the same source
+text can compile to two different string values on two different checkouts. The fix changes
+`Wgs84WellKnownText` from `public const string` to `public static readonly string`, initialized from the same
+raw string literal but piped through `.ReplaceLineEndings("\n")`, so the runtime value is always LF-only
+regardless of how the source file was checked out. Two guard tests now cover this: `ProjNetHorizontalCoordinateTransformFactoryTests.Wgs84WellKnownTextHasNoCarriageReturnAndIsMultiLine` asserts the
+constant itself contains no `\r` and remains multi-line, and `ArchitectureTests.NoPublicStaticStringInCoreContainsACarriageReturn` guards every public static string in Core against the same class of defect. See
+"Determinism rules" in `docs/architecture/provenance-and-deterministic-exports.md` for the platform-neutral
+goldens rule this defect motivated.
+
 ## `LengthConverter.DefaultOutputUnit`
 
 `LengthConverter.DefaultOutputUnit` is `LengthUnit.UsSurveyFoot`, the one named constant decision #3 requires.

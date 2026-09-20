@@ -21,6 +21,16 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     }
 
     [Fact]
+    public void Wgs84WellKnownTextHasNoCarriageReturnAndIsMultiLine()
+    {
+        // Regression guard for the source-checkout-dependent line-ending bug: this value must never bake in
+        // '\r' regardless of whether the source file itself was checked out with CRLF or LF line endings, and
+        // it must remain multi-line by design (it is a formatted, indented WKT1 block).
+        Assert.DoesNotContain('\r', ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText);
+        Assert.Contains('\n', ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText);
+    }
+
+    [Fact]
     public void EngineVersionIsThePinnedPackageVersionNotTheReflectedAssemblyVersion()
     {
         Assert.Equal("2.1.0", ProjNetHorizontalCoordinateTransformFactory.EngineVersion);

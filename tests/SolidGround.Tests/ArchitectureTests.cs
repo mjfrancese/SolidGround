@@ -205,6 +205,53 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void NoPublicStaticStringInCoreContainsACarriageReturn()
+    {
+        // Regression guard for the source-checkout-dependent line-ending bug (a multi-line raw string literal,
+        // such as the WKT1 constant this repository fixed, silently bakes in '\r' when the source file itself
+        // is checked out with CRLF line endings): no public static string value anywhere in Core -- field,
+        // const, or read-only property -- may ever contain a carriage return, because such a value can flow
+        // into a deterministic export and make its bytes depend on how the source was checked out.
+        Assembly assembly = typeof(Core.AssemblyMarker).Assembly;
+        const BindingFlags MemberFlags = BindingFlags.Public | BindingFlags.Static;
+
+        List<string> offendingMembers = [];
+
+        foreach (Type type in assembly.GetExportedTypes().OrderBy(type => type.FullName, StringComparer.Ordinal))
+        {
+            foreach (FieldInfo field in type.GetFields(MemberFlags).OrderBy(field => field.Name, StringComparer.Ordinal))
+            {
+                if (field.FieldType != typeof(string))
+                {
+                    continue;
+                }
+
+                if (field.GetValue(null) is string value && value.Contains('\r'))
+                {
+                    offendingMembers.Add($"{type.FullName}.{field.Name} (field)");
+                }
+            }
+
+            foreach (PropertyInfo property in type.GetProperties(MemberFlags).OrderBy(property => property.Name, StringComparer.Ordinal))
+            {
+                if (property.PropertyType != typeof(string) || property.GetMethod is null)
+                {
+                    continue;
+                }
+
+                if (property.GetValue(null) is string value && value.Contains('\r'))
+                {
+                    offendingMembers.Add($"{type.FullName}.{property.Name} (property)");
+                }
+            }
+        }
+
+        Assert.True(
+            offendingMembers.Count == 0,
+            $"Public static string member(s) contain '\\r': {string.Join(", ", offendingMembers)}");
+    }
+
+    [Fact]
     public void CliReferencesNoRevitAssemblyAndNoPackageBeyondCores()
     {
         // See docs/architecture/cli-workflow.md's "Testing strategy" section: SolidGround.Cli adds no new

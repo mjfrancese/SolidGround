@@ -38,16 +38,18 @@ public static class ProjNetHorizontalCoordinateTransformFactory
     /// already independently proven to parse to coordinate reference system <c>"EPSG:4326"</c>. Passing this
     /// as <see cref="Create"/>'s source argument (paired with a projected target) is the geographic-source
     /// orientation <see cref="Create"/> always builds; see <see cref="HorizontalCoordinateTransforms.Reverse"/>
-    /// for the opposite, projected-to-geographic orientation.
+    /// for the opposite, projected-to-geographic orientation. The line endings in this value are normalized to
+    /// LF regardless of how this source file itself was checked out, so this text -- and every export that
+    /// embeds it -- is byte-identical on every platform and every checkout line-ending setting.
     /// </summary>
-    public const string Wgs84WellKnownText = """
+    public static readonly string Wgs84WellKnownText = """
         GEOGCS["WGS 84",
             DATUM["WGS_1984",
                 SPHEROID["WGS 84",6378137,298.257223563]],
             PRIMEM["Greenwich",0],
             UNIT["degree",0.0174532925199433],
             AUTHORITY["EPSG","4326"]]
-        """;
+        """.ReplaceLineEndings("\n");
 
     /// <summary>
     /// The maximum acceptable residual of a projected-reference round trip (<c>Forward(Inverse(x))</c>), in

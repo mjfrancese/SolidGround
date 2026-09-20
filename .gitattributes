@@ -1,3 +1,2 @@
 * text=auto
-tests/SolidGround.Tests/Fixtures/*.json text eol=lf
-tests/SolidGround.Tests/Fixtures/*.csv  text eol=lf
+tests/SolidGround.Tests/Fixtures/** text eol=lf
