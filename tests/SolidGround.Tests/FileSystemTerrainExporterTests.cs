@@ -158,6 +158,8 @@ public sealed class FileSystemTerrainExporterTests
             new ElevationSourceMetadata("OpenTopography", "USGS1m"),
             Transformation(),
             vertical,
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             new LocalCoordinateFrame(new Coordinate3D(10d, 20d, 30d), ProjectedReference(), vertical, LengthUnit.UsSurveyFoot),
             new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
             2,

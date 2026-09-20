@@ -1,6 +1,6 @@
 {
   "schema": "solidground.terrain-export",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "provenance": {
     "source": {
       "sourceName": "OpenTopography",
@@ -45,6 +45,8 @@
       "unit": "Meter",
       "geoidModel": null
     },
+    "sourceHorizontalReferenceOrigin": "Operator",
+    "sourceVerticalReferenceOrigin": "Operator",
     "localFrame": {
       "origin": {
         "x": [withheld],

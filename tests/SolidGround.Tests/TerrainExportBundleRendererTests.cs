@@ -89,7 +89,10 @@ public sealed class TerrainExportBundleRendererTests
 
         JsonElement provenance = root.GetProperty("provenance");
         Assert.Equal(
-            ["source", "horizontalTransformation", "sourceVerticalReference", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange"],
+            [
+                "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+            ],
             PropertyNames(provenance));
 
         Assert.Equal(["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel"], PropertyNames(provenance.GetProperty("source")));
@@ -119,6 +122,37 @@ public sealed class TerrainExportBundleRendererTests
         }
 
         Assert.Equal(["file", "format", "columns", "unit", "count", "sha256"], PropertyNames(root.GetProperty("points")));
+    }
+
+    [Fact]
+    public void SourceReferenceOriginsAreWrittenAsTheirEnumMemberNamesImmediatelyAfterSourceVerticalReference()
+    {
+        TerrainProvenance provenance = new(
+            TerrainProvenance.CurrentSchemaVersion,
+            Source(),
+            Transformation(),
+            VerticalReference(),
+            ReferenceOrigin.SourceMetadataResponse,
+            ReferenceOrigin.DatasetDocumentation,
+            LocalFrame(),
+            new SimplificationRequest(),
+            originalPointCount: 1,
+            retainedPointCount: 1,
+            elevationRange: new ElevationRange(1d, 1d, LengthUnit.InternationalFoot));
+        TerrainExportPayload payload = new([new LocalTerrainSample(new LocalCoordinate(1d, 1d, 1d))], provenance);
+
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-reference-origins");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement provenanceElement = document.RootElement.GetProperty("provenance");
+        Assert.Equal(
+            [
+                "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+            ],
+            PropertyNames(provenanceElement));
+        Assert.Equal("SourceMetadataResponse", provenanceElement.GetProperty("sourceHorizontalReferenceOrigin").GetString());
+        Assert.Equal("DatasetDocumentation", provenanceElement.GetProperty("sourceVerticalReferenceOrigin").GetString());
     }
 
     [Fact]
@@ -189,6 +223,8 @@ public sealed class TerrainExportBundleRendererTests
             Source(),
             Transformation(),
             VerticalReference(),
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             LocalFrame(),
             new SimplificationRequest(),
             originalPointCount: 0,
@@ -205,10 +241,12 @@ public sealed class TerrainExportBundleRendererTests
     public void RenderRejectsASchemaVersionOtherThanTheCurrentSchemaVersionWithTerrainExportException()
     {
         TerrainProvenance provenance = new(
-            2,
+            3,
             Source(),
             Transformation(),
             VerticalReference(),
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             LocalFrame(),
             new SimplificationRequest(),
             originalPointCount: 1,
@@ -361,6 +399,8 @@ public sealed class TerrainExportBundleRendererTests
             Source(collectionPeriod, qualityLevel),
             Transformation(projected),
             vertical,
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             new LocalCoordinateFrame(new Coordinate3D(10.5d, 20.25d, 30.125d), projected, vertical, outputUnit),
             new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
             originalPointCount,

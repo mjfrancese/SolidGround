@@ -12,15 +12,19 @@ public sealed record TerrainProvenance
     /// <summary>
     /// The schema version this build of SolidGround writes, and the only version its strict reader accepts.
     /// See docs/architecture/provenance-and-deterministic-exports.md's "Versioning and compatibility policy"
-    /// section for what changing this constant means and why the old manifest stays documented.
+    /// section for what changing this constant means and why the old manifest stays documented. Version 2
+    /// (SolidGround Issue #21) added <see cref="SourceHorizontalReferenceOrigin"/> and
+    /// <see cref="SourceVerticalReferenceOrigin"/>; see "Export document manifest, schema version 2".
     /// </summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public TerrainProvenance(
         int schemaVersion,
         ElevationSourceMetadata source,
         HorizontalTransformationDefinition horizontalTransformation,
         VerticalReference sourceVerticalReference,
+        ReferenceOrigin sourceHorizontalReferenceOrigin,
+        ReferenceOrigin sourceVerticalReferenceOrigin,
         LocalCoordinateFrame localFrame,
         SimplificationRequest simplificationRequest,
         int originalPointCount,
@@ -37,6 +41,16 @@ public sealed record TerrainProvenance
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(horizontalTransformation);
         ArgumentNullException.ThrowIfNull(sourceVerticalReference);
+        if (!Enum.IsDefined(sourceHorizontalReferenceOrigin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(sourceHorizontalReferenceOrigin), sourceHorizontalReferenceOrigin, "Unsupported reference origin kind.");
+        }
+
+        if (!Enum.IsDefined(sourceVerticalReferenceOrigin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(sourceVerticalReferenceOrigin), sourceVerticalReferenceOrigin, "Unsupported reference origin kind.");
+        }
+
         ArgumentNullException.ThrowIfNull(localFrame);
         ArgumentNullException.ThrowIfNull(simplificationRequest);
         if (retainedPointCount > simplificationRequest.PointBudget)
@@ -71,6 +85,8 @@ public sealed record TerrainProvenance
         Source = source;
         HorizontalTransformation = horizontalTransformation;
         SourceVerticalReference = sourceVerticalReference;
+        SourceHorizontalReferenceOrigin = sourceHorizontalReferenceOrigin;
+        SourceVerticalReferenceOrigin = sourceVerticalReferenceOrigin;
         LocalFrame = localFrame;
         SimplificationRequest = simplificationRequest;
         OriginalPointCount = originalPointCount;
@@ -83,6 +99,13 @@ public sealed record TerrainProvenance
     public HorizontalTransformationDefinition HorizontalTransformation { get; }
     public HorizontalReference SourceHorizontalReference => HorizontalTransformation.SourceReference;
     public VerticalReference SourceVerticalReference { get; }
+
+    /// <summary>Where <see cref="SourceHorizontalReference"/> actually came from. See <see cref="ReferenceOrigin"/>.</summary>
+    public ReferenceOrigin SourceHorizontalReferenceOrigin { get; }
+
+    /// <summary>Where <see cref="SourceVerticalReference"/> actually came from. See <see cref="ReferenceOrigin"/>.</summary>
+    public ReferenceOrigin SourceVerticalReferenceOrigin { get; }
+
     public LocalCoordinateFrame LocalFrame { get; }
     public SimplificationRequest SimplificationRequest { get; }
     public int OriginalPointCount { get; }

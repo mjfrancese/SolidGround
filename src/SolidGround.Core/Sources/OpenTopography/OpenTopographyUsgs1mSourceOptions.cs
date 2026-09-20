@@ -1,3 +1,6 @@
+using SolidGround.Core.Metadata;
+using SolidGround.Core.Units;
+
 namespace SolidGround.Core.Sources.OpenTopography;
 
 /// <summary>
@@ -18,6 +21,7 @@ public sealed record OpenTopographyUsgs1mSourceOptions
     private readonly Uri endpointUri = DefaultEndpointUri;
     private readonly double maximumAreaSquareKilometers = DefaultMaximumAreaSquareKilometers;
     private readonly long maximumResponseBytes = DefaultMaximumResponseBytes;
+    private readonly VerticalReference declaredVerticalReference = new("NAVD88", LengthUnit.Meter);
 
     /// <summary>The usgsdem endpoint to call. Defaults to <see cref="DefaultEndpointUri"/>.</summary>
     public Uri EndpointUri
@@ -69,5 +73,19 @@ public sealed record OpenTopographyUsgs1mSourceOptions
 
             maximumResponseBytes = value;
         }
+    }
+
+    /// <summary>
+    /// The vertical reference OpenTopography's USGS 1 m dataset is declared to use. Neither the AAIGrid
+    /// data response nor the GeoTIFF metadata response OpenTopography returns for a USGS 1 m request
+    /// carries a vertical reference, so SolidGround declares one from the dataset's own published
+    /// documentation instead of assuming or omitting it; see
+    /// <c>docs/architecture/opentopography-usgs1m-source.md</c>'s "Declared vertical reference" section.
+    /// Defaults to NAVD88 height in metres.
+    /// </summary>
+    public VerticalReference DeclaredVerticalReference
+    {
+        get => declaredVerticalReference;
+        init => declaredVerticalReference = value ?? throw new ArgumentNullException(nameof(value));
     }
 }

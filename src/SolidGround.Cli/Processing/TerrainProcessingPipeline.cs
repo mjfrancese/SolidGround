@@ -41,6 +41,7 @@ internal static class TerrainProcessingPipeline
         ElevationGrid grid,
         IHorizontalCoordinateTransform wgs84ToGridTransform,
         VerticalReference verticalReference,
+        ReferenceOrigins referenceOrigins,
         ElevationSourceMetadata sourceMetadata,
         AoiSelection? aoi,
         LocalOriginSelection origin,
@@ -53,6 +54,7 @@ internal static class TerrainProcessingPipeline
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(wgs84ToGridTransform);
         ArgumentNullException.ThrowIfNull(verticalReference);
+        ArgumentNullException.ThrowIfNull(referenceOrigins);
         ArgumentNullException.ThrowIfNull(sourceMetadata);
         ArgumentNullException.ThrowIfNull(origin);
 
@@ -84,7 +86,7 @@ internal static class TerrainProcessingPipeline
 
         // Step 6: assemble.
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            sourceMetadata, wgs84ToGridTransform.Definition, verticalReference, localFrame, candidateGrid, simplification);
+            sourceMetadata, wgs84ToGridTransform.Definition, verticalReference, referenceOrigins, localFrame, candidateGrid, simplification);
 
         return new TerrainProcessingOutcome(payload, clipResult, simplification.Diagnostics);
     }

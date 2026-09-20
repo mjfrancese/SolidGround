@@ -13,12 +13,12 @@ using SolidGround.Core.Units;
 namespace SolidGround.Core.Exports;
 
 /// <summary>
-/// Strictly reads a schema version 1 export document (and, for <see cref="Read"/>, its points file) back into
+/// Strictly reads a schema version 2 export document (and, for <see cref="Read"/>, its points file) back into
 /// domain objects: every manifest property is required and exactly typed, every enum string must be an exact
 /// defined member name, every domain record is reconstructed through its own public constructor so existing
 /// invariants re-run, and any deviation is reported as a <see cref="TerrainExportException"/> naming the JSON
 /// path. See docs/architecture/provenance-and-deterministic-exports.md's "Export document manifest, schema
-/// version 1" and "Versioning and compatibility policy" sections for the manifest this reader enforces, and
+/// version 2" and "Versioning and compatibility policy" sections for the manifest this reader enforces, and
 /// its "Reconstructing source coordinates" section for how a caller uses the result.
 /// </summary>
 public static class TerrainExportBundleReader
@@ -29,7 +29,7 @@ public static class TerrainExportBundleReader
     /// against the reconstructed provenance (count, format, columns, unit); only the SHA-256 and line-by-line
     /// checks that need actual point bytes are skipped.
     /// </summary>
-    /// <exception cref="TerrainExportException">The bytes are not a well-formed, strict schema version 1 export document.</exception>
+    /// <exception cref="TerrainExportException">The bytes are not a well-formed, strict schema version 2 export document.</exception>
     public static TerrainProvenance ReadProvenance(ReadOnlySpan<byte> documentBytes)
     {
         (TerrainProvenance provenance, _) = ParseDocument(documentBytes);
@@ -43,7 +43,7 @@ public static class TerrainExportBundleReader
     /// invariant-culture, round-trippable numbers.
     /// </summary>
     /// <exception cref="TerrainExportException">
-    /// The document is not a well-formed, strict schema version 1 export document; the points bytes do not
+    /// The document is not a well-formed, strict schema version 2 export document; the points bytes do not
     /// match the document's recorded SHA-256 or sample count; or a points line is malformed.
     /// </exception>
     public static TerrainExportPayload Read(ReadOnlySpan<byte> documentBytes, ReadOnlySpan<byte> pointsBytes)
@@ -128,11 +128,16 @@ public static class TerrainExportBundleReader
     {
         RequireObject(obj, path);
         Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path,
-            ["source", "horizontalTransformation", "sourceVerticalReference", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange"]);
+            [
+                "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+            ]);
 
         ElevationSourceMetadata source = ParseSource(props["source"], $"{path}.source");
         HorizontalTransformationDefinition horizontalTransformation = ParseHorizontalTransformation(props["horizontalTransformation"], $"{path}.horizontalTransformation");
         VerticalReference sourceVerticalReference = ParseVerticalReference(props["sourceVerticalReference"], $"{path}.sourceVerticalReference");
+        ReferenceOrigin sourceHorizontalReferenceOrigin = RequireEnum<ReferenceOrigin>(props["sourceHorizontalReferenceOrigin"], $"{path}.sourceHorizontalReferenceOrigin");
+        ReferenceOrigin sourceVerticalReferenceOrigin = RequireEnum<ReferenceOrigin>(props["sourceVerticalReferenceOrigin"], $"{path}.sourceVerticalReferenceOrigin");
         LocalCoordinateFrame localFrame = ParseLocalFrame(props["localFrame"], $"{path}.localFrame");
         SimplificationRequest simplification = ParseSimplificationRequest(props["simplification"], $"{path}.simplification");
         int originalPointCount = RequireInt(props["originalPointCount"], $"{path}.originalPointCount");
@@ -146,6 +151,8 @@ public static class TerrainExportBundleReader
                 source,
                 horizontalTransformation,
                 sourceVerticalReference,
+                sourceHorizontalReferenceOrigin,
+                sourceVerticalReferenceOrigin,
                 localFrame,
                 simplification,
                 originalPointCount,
@@ -377,7 +384,7 @@ public static class TerrainExportBundleReader
             // provenance-and-deterministic-exports.md's "NODATA, empty candidate sets, and statistics"
             // section): the writer rejects an original point count of zero, and a positive original point
             // count always carries a non-null elevation range.
-            throw new TerrainExportException($"'{path}' must not be null in schema version 1.");
+            throw new TerrainExportException($"'{path}' must not be null in schema version 2.");
         }
 
         RequireObject(obj, path);
@@ -451,7 +458,7 @@ public static class TerrainExportBundleReader
         string format = RequireString(props["format"], $"{path}.format");
         if (!string.Equals(format, "csv", StringComparison.Ordinal))
         {
-            throw new TerrainExportException($"'{path}.format' is '{format}', but schema version 1 requires 'csv'.");
+            throw new TerrainExportException($"'{path}.format' is '{format}', but schema version 2 requires 'csv'.");
         }
 
         ValidateColumns(props["columns"], $"{path}.columns");
@@ -677,7 +684,9 @@ public static class TerrainExportBundleReader
         string text = RequireString(value, path);
         if (!Enum.GetNames<TEnum>().Contains(text, StringComparer.Ordinal))
         {
-            throw new TerrainExportException($"'{path}' has an unrecognized value '{text}'.");
+            // Never echo the document's actual value here -- see docs/architecture/cli-workflow.md's
+            // "Diagnostics and redaction" section, and RasterSourceSidecarIo.RequireEnum's identical guard.
+            throw new TerrainExportException($"'{path}' is not a recognized value.");
         }
 
         return Enum.Parse<TEnum>(text, ignoreCase: false);

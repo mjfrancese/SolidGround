@@ -6,6 +6,7 @@ using SolidGround.Cli.Secrets;
 using SolidGround.Core.Aois;
 using SolidGround.Core.Exports;
 using SolidGround.Core.Metadata;
+using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.OpenTopography;
@@ -84,6 +85,11 @@ internal static class RunCommand
             FetchCommand.PrintAcquisitionEvidence(host, "run", acquisition);
         }
 
+        FetchCommand.PrintReferenceLine(
+            host, "run",
+            acquisition.Acquisition.Data.HorizontalReference, acquisition.Evidence.HorizontalReferenceOrigin,
+            acquisition.Acquisition.Data.VerticalReference, acquisition.Evidence.VerticalReferenceOrigin);
+
         ElevationGrid grid = (ElevationGrid)acquisition.Acquisition.Data;
         IHorizontalCoordinateTransform transform = ProjNetHorizontalCoordinateTransformFactory.Create(
             ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText, acquisition.Evidence.WellKnownText);
@@ -106,8 +112,9 @@ internal static class RunCommand
             cliCollectionPeriod ?? acquisition.Acquisition.Source.CollectionPeriod,
             cliQualityLevel ?? acquisition.Acquisition.Source.QualityLevel);
 
+        ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
-                grid, transform, grid.VerticalReference, sourceMetadata, aoi, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
+                grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, aoi, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
             .ConfigureAwait(false);
 
         ProcessCommand.PrintClipStage(host, "run", verbose, aoi, grid, outcome.ClipResult);

@@ -161,10 +161,110 @@ public sealed class TerrainExportBundleReaderTests
         string tamperedText = ReplaceExactlyOnce(
             documentText,
             $"\"schemaVersion\": {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}",
-            "\"schemaVersion\": 2");
+            "\"schemaVersion\": 3");
         byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
 
         Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+    }
+
+    [Fact]
+    public void ReadProvenanceAcceptsSchemaVersionTwoAndReadsBothNewReferenceOriginFields()
+    {
+        TerrainExportPayload payload = CreatePayload(
+            horizontalReferenceOrigin: ReferenceOrigin.SourceMetadataResponse,
+            verticalReferenceOrigin: ReferenceOrigin.DatasetDocumentation);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-schema-version-two");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        Assert.Equal(2, document.RootElement.GetProperty("schemaVersion").GetInt32());
+
+        TerrainProvenance provenance = TerrainExportBundleReader.ReadProvenance(bundle.DocumentBytes.Span);
+        Assert.Equal(ReferenceOrigin.SourceMetadataResponse, provenance.SourceHorizontalReferenceOrigin);
+        Assert.Equal(ReferenceOrigin.DatasetDocumentation, provenance.SourceVerticalReferenceOrigin);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnUnrecognizedSourceHorizontalReferenceOriginValue()
+    {
+        TerrainExportPayload payload = CreatePayload();
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-horizontal-origin");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        string tamperedText = ReplaceExactlyOnce(
+            documentText,
+            $"\"sourceHorizontalReferenceOrigin\": \"{ReferenceOrigin.Operator}\"",
+            "\"sourceHorizontalReferenceOrigin\": \"NotARealOrigin\"");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("sourceHorizontalReferenceOrigin", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("NotARealOrigin", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnUnrecognizedSourceVerticalReferenceOriginValue()
+    {
+        TerrainExportPayload payload = CreatePayload();
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-vertical-origin");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        string tamperedText = ReplaceExactlyOnce(
+            documentText,
+            $"\"sourceVerticalReferenceOrigin\": \"{ReferenceOrigin.Operator}\"",
+            "\"sourceVerticalReferenceOrigin\": \"NotARealOrigin\"");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("sourceVerticalReferenceOrigin", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("NotARealOrigin", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAVersionOneDocumentBecauseVersionOneNeverWroteTheReferenceOriginFields()
+    {
+        // A genuine version 1 document (from before SolidGround Issue #21) never wrote
+        // sourceHorizontalReferenceOrigin/sourceVerticalReferenceOrigin at all; reconstructing one exactly
+        // means removing both properties in addition to changing the schemaVersion number, so this document
+        // is built by hand rather than by tampering with a version 2 rendering.
+        const string version1Document = """
+            {
+              "schema": "solidground.terrain-export",
+              "schemaVersion": 1,
+              "provenance": {
+                "source": { "sourceName": "OpenTopography", "datasetIdentifier": "USGS1m", "collectionPeriod": null, "qualityLevel": null },
+                "horizontalTransformation": {
+                  "sourceReference": { "coordinateReferenceSystem": "EPSG:4326", "datum": "WGS84", "kind": "Geographic", "unit": { "referenceKind": "Geographic", "linearUnit": null }, "axisOrder": "LongitudeLatitude" },
+                  "targetReference": { "coordinateReferenceSystem": "EPSG:26915", "datum": "NAD83(2011)", "kind": "Projected", "unit": { "referenceKind": "Projected", "linearUnit": "Meter" }, "axisOrder": "EastingNorthing" },
+                  "forwardOperation": { "format": "PROJJSON", "definition": "forward operation" },
+                  "inverseOperation": { "format": "PROJJSON", "definition": "inverse operation" },
+                  "engineName": "candidate-engine",
+                  "engineVersion": "1.0"
+                },
+                "sourceVerticalReference": { "datum": "NAVD88", "unit": "InternationalFoot", "geoidModel": "Geoid12B" },
+                "localFrame": {
+                  "origin": { "x": 10.5, "y": 20.25, "elevation": 30.125 },
+                  "projectedHorizontalReference": { "coordinateReferenceSystem": "EPSG:26915", "datum": "NAD83(2011)", "kind": "Projected", "unit": { "referenceKind": "Projected", "linearUnit": "Meter" }, "axisOrder": "EastingNorthing" },
+                  "verticalReference": { "datum": "NAVD88", "unit": "InternationalFoot", "geoidModel": "Geoid12B" },
+                  "outputUnit": "UsSurveyFoot"
+                },
+                "simplification": { "pointBudget": 15000, "method": "CurvatureAware" },
+                "originalPointCount": 1,
+                "retainedPointCount": 1,
+                "elevationRange": { "minimum": 1.5, "maximum": 3.75, "unit": "InternationalFoot" }
+              },
+              "unitDefinitions": [
+                { "unit": "Meter", "metersPerUnit": 1, "definition": "1 m" },
+                { "unit": "InternationalFoot", "metersPerUnit": 0.3048, "definition": "0.3048 m" },
+                { "unit": "UsSurveyFoot", "metersPerUnit": 0.3048006096012192, "definition": "1200/3937 m" }
+              ],
+              "points": { "file": "reader-version-one.points.csv", "format": "csv", "columns": ["x", "y", "elevation"], "unit": "UsSurveyFoot", "count": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000" }
+            }
+            """;
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(
+            () => TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(version1Document)));
+        Assert.Contains("schemaVersion", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("1", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -367,7 +467,9 @@ public sealed class TerrainExportBundleReaderTests
         LengthUnit projectedUnit = LengthUnit.Meter,
         LengthUnit outputUnit = LengthUnit.UsSurveyFoot,
         Coordinate3D? origin = null,
-        ElevationRange? elevationRange = null)
+        ElevationRange? elevationRange = null,
+        ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
+        ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator)
     {
         IReadOnlyList<LocalTerrainSample> effectiveSamples = samples ?? DefaultSamples(retainedPointCount);
         TerrainProvenance provenance = CreateProvenance(
@@ -380,7 +482,9 @@ public sealed class TerrainExportBundleReaderTests
             projectedUnit,
             outputUnit,
             origin,
-            elevationRange);
+            elevationRange,
+            horizontalReferenceOrigin,
+            verticalReferenceOrigin);
 
         return new TerrainExportPayload(effectiveSamples, provenance);
     }
@@ -395,7 +499,9 @@ public sealed class TerrainExportBundleReaderTests
         LengthUnit projectedUnit,
         LengthUnit outputUnit,
         Coordinate3D? origin,
-        ElevationRange? elevationRange)
+        ElevationRange? elevationRange,
+        ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
+        ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator)
     {
         VerticalReference vertical = VerticalReference(verticalUnit, geoidModel);
         HorizontalReference projected = ProjectedReference(projectedUnit);
@@ -404,6 +510,8 @@ public sealed class TerrainExportBundleReaderTests
             Source(collectionPeriod, qualityLevel),
             Transformation(projected),
             vertical,
+            horizontalReferenceOrigin,
+            verticalReferenceOrigin,
             new LocalCoordinateFrame(origin ?? new Coordinate3D(10.5d, 20.25d, 30.125d), projected, vertical, outputUnit),
             new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
             originalPointCount,

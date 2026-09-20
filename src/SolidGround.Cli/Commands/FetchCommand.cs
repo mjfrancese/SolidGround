@@ -76,6 +76,11 @@ internal static class FetchCommand
             PrintAcquisitionEvidence(host, "fetch", acquisition);
         }
 
+        PrintReferenceLine(
+            host, "fetch",
+            acquisition.Acquisition.Data.HorizontalReference, acquisition.Evidence.HorizontalReferenceOrigin,
+            acquisition.Acquisition.Data.VerticalReference, acquisition.Evidence.VerticalReferenceOrigin);
+
         RasterSourceSidecar sidecar = BuildSidecar(acquisition);
         await RasterSetIo.WriteAsync(paths, (ElevationGrid)acquisition.Acquisition.Data, acquisition.Evidence.WellKnownText, sidecar, cancellationToken)
             .ConfigureAwait(false);
@@ -105,6 +110,8 @@ internal static class FetchCommand
             acquisition.Acquisition.Data.VerticalReference.Datum,
             acquisition.Acquisition.Data.VerticalReference.Unit,
             acquisition.Acquisition.Data.VerticalReference.GeoidModel),
+        acquisition.Evidence.HorizontalReferenceOrigin,
+        acquisition.Evidence.VerticalReferenceOrigin,
         new RasterSourceAcquisition(
             acquisition.Evidence.RedactedRequestUri,
             (int)acquisition.Evidence.StatusCode,
@@ -112,12 +119,27 @@ internal static class FetchCommand
             acquisition.Evidence.ContentDispositionFileName,
             acquisition.Evidence.ArchiveEntryNames,
             acquisition.Evidence.ReferenceSource.ToString(),
-            acquisition.Evidence.ResponseByteCount));
+            acquisition.Evidence.ResponseByteCount,
+            acquisition.Evidence.MetadataRequest is { } metadataRequest
+                ? new RasterSourceMetadataRequest(
+                    metadataRequest.RedactedRequestUri,
+                    (int)metadataRequest.StatusCode,
+                    metadataRequest.ContentType,
+                    metadataRequest.ContentDispositionFileName,
+                    metadataRequest.ResponseByteCount,
+                    metadataRequest.ProjectedCoordinateSystemCode,
+                    metadataRequest.Citation,
+                    metadataRequest.RasterType,
+                    metadataRequest.ImageWidth,
+                    metadataRequest.ImageLength)
+                : null));
 
     /// <summary>
-    /// Prints every field of the acquisition's own redacted evidence. Every value here is already redacted
-    /// by Core before the CLI ever sees it (docs/architecture/cli-workflow.md's "Diagnostics and redaction"
-    /// section); this method performs no redaction of its own and never touches the API key.
+    /// Prints every field of the acquisition's own redacted evidence: the seven fields every acquisition
+    /// carries, plus, only when <see cref="OpenTopographyResponseEvidence.MetadataRequest"/> is present (the
+    /// hybrid GeoTIFF-GeoKeys flow), six more lines about the metadata request. Every value here is already
+    /// redacted by Core before the CLI ever sees it (docs/architecture/cli-workflow.md's "Diagnostics and
+    /// redaction" section); this method performs no redaction of its own and never touches the API key.
     /// </summary>
     internal static void PrintAcquisitionEvidence(CliHost host, string verb, OpenTopographyUsgs1mAcquisition acquisition)
     {
@@ -129,5 +151,48 @@ internal static class FetchCommand
         host.StandardOutput.WriteLine($"{verb}: archive entries: {string.Join(", ", evidence.ArchiveEntryNames)}.");
         host.StandardOutput.WriteLine($"{verb}: coordinate reference source: {evidence.ReferenceSource}.");
         host.StandardOutput.WriteLine($"{verb}: response byte count: {evidence.ResponseByteCount.ToString(CultureInfo.InvariantCulture)}.");
+
+        if (evidence.MetadataRequest is { } metadataRequest)
+        {
+            host.StandardOutput.WriteLine($"{verb}: metadata request uri: '{metadataRequest.RedactedRequestUri}'.");
+            host.StandardOutput.WriteLine(
+                $"{verb}: metadata status: {((int)metadataRequest.StatusCode).ToString(CultureInfo.InvariantCulture)} ({metadataRequest.StatusCode}).");
+            host.StandardOutput.WriteLine($"{verb}: metadata content type: '{metadataRequest.ContentType ?? "(none)"}'.");
+            host.StandardOutput.WriteLine(
+                $"{verb}: metadata content-disposition file name: '{metadataRequest.ContentDispositionFileName ?? "(none)"}'.");
+            host.StandardOutput.WriteLine(
+                $"{verb}: metadata response bytes: {metadataRequest.ResponseByteCount.ToString(CultureInfo.InvariantCulture)}.");
+            host.StandardOutput.WriteLine(
+                $"{verb}: metadata geokeys: EPSG:{metadataRequest.ProjectedCoordinateSystemCode.ToString(CultureInfo.InvariantCulture)} " +
+                $"\"{metadataRequest.Citation ?? "(none)"}\" {metadataRequest.RasterType} " +
+                $"{metadataRequest.ImageWidth.ToString(CultureInfo.InvariantCulture)}x{metadataRequest.ImageLength.ToString(CultureInfo.InvariantCulture)}.");
+        }
     }
+
+    /// <summary>
+    /// Prints the one-line, non-verbose summary of where the horizontal and vertical references acquisition
+    /// (or, for `process`, resolution) landed on came from. Printed immediately after the acquisition stage
+    /// line and before any "wrote" line for `fetch`/`run` (or after the read/clip stage for `process`), and,
+    /// in verbose mode, immediately after <see cref="PrintAcquisitionEvidence"/>'s own evidence block. See
+    /// docs/architecture/cli-workflow.md's "Raster set persistence" section.
+    /// </summary>
+    internal static void PrintReferenceLine(
+        CliHost host, string verb,
+        HorizontalReference horizontal, ReferenceOrigin horizontalOrigin,
+        VerticalReference vertical, ReferenceOrigin verticalOrigin)
+    {
+        host.StandardOutput.WriteLine(
+            $"{verb}: horizontal reference {horizontal.CoordinateReferenceSystem} from {OriginDescription(horizontalOrigin)}; " +
+            $"vertical reference {vertical.Datum} ({vertical.Unit}) from {OriginDescription(verticalOrigin)}.");
+    }
+
+    /// <summary>The operator-facing description of a <see cref="ReferenceOrigin"/>, per docs/architecture/cli-workflow.md's "Raster set persistence" section.</summary>
+    private static string OriginDescription(ReferenceOrigin origin) => origin switch
+    {
+        ReferenceOrigin.SourceResponse => "the response sidecar",
+        ReferenceOrigin.SourceMetadataResponse => "the GeoTIFF GeoKeys of the metadata request",
+        ReferenceOrigin.DatasetDocumentation => "dataset documentation",
+        ReferenceOrigin.Operator => "the operator",
+        _ => throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported reference origin kind."),
+    };
 }

@@ -35,7 +35,7 @@ The following points were checked during setup on 2026-09-15, unless otherwise d
 - The parser follows Esri's ASCII raster contract: positive dimensions and cell size, matched lower-left corner or center origins, optional `NODATA_VALUE` defaulting to `-9999`, and north-to-south row-major samples. It converts NODATA to missing cells before returning an elevation grid.
 - The same OpenAPI definition states that USGS 1 m access currently requires academic authorization or an enterprise API key. SolidGround reports access errors and does not substitute lower-resolution data silently. Verified live on 2026-09-19: a no-key run observed exit code 3 with the exact authorization message.
 - The OpenTopography catalog still contains `[withheld]`, collected 2017-02-17 through 2017-02-27, with NAVD88 Geoid12B vertical metadata. Catalog metadata is provenance context; the raster response's own coordinate reference information remains authoritative for processing.
-- Verified live on 2026-09-19: the `usgsdem` `AAIGrid` response is packaged as a bare `.asc` body with no `.prj`/`.aux.xml` sidecar and no reference metadata of any kind; a same-box `GTiff` response for the identical request carries `EPSG:26915` (NAD83 / UTM zone 15N) as its projected coordinate system but no vertical GeoKeys. See "Response packaging and metadata observed" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
+- Verified live on 2026-09-19: the `usgsdem` `AAIGrid` response is packaged as a bare `.asc` body with no `.prj`/`.aux.xml` sidecar and no reference metadata of any kind; a same-box `GTiff` response for the identical request carries `EPSG:26915` (NAD83 / UTM zone 15N) as its projected coordinate system but no vertical GeoKeys. See "Response packaging and metadata observed" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md). A live re-run on 2026-09-19 confirmed the CLI now completes end to end from this packaging, using that same `GTiff` response's GeoKeys for the horizontal reference and dataset documentation for the vertical reference; see "Live OpenTopography scenario, verified 2026-09-19" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 - Revit 2027's installed `SiteDB.dll` contains `NativeToposolidMaxPointThreshold` and `LinkToposolidMaxPointThreshold`. Autodesk's public 2027 documentation found during setup did not restate their numeric limits, so the project uses a conservative application default near 15,000 and will re-check limits before the Revit phase.
 - Revit 2027 added explicit isolated-context manifest settings and dependency declarations. The planned add-in will use a private context and will not share managed geospatial assemblies by default.
 - Revit 2027 Extended Properties represent externally supplied, linked property data. SolidGround provenance is owned with the created element, so Extensible Storage is the current recommendation.
@@ -67,7 +67,7 @@ No native dependency may be loaded into the Revit process. There is no Python or
 
 ## Exports and provenance
 
-`SolidGround.Core.Exports` and `SolidGround.Core.Provenance` turn a clipped, simplified terrain sample set into a deterministic, byte-reproducible export bundle: a `*.solidground.json` document carrying full reversible provenance (source, datums, units, the local-origin offset, and point counts) alongside a bare `*.points.csv` file shaped for Revit's toposolid points-file import, bound together by a recorded sample count and SHA-256 hash. `TerrainProvenance.CurrentSchemaVersion` (currently `1`) names the one manifest `TerrainExportBundleRenderer` and `TerrainExportBundleReader` write and strictly read; see [the provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md) for the full manifest, the determinism rules, and how a local coordinate is reconstructed back to its source datum.
+`SolidGround.Core.Exports` and `SolidGround.Core.Provenance` turn a clipped, simplified terrain sample set into a deterministic, byte-reproducible export bundle: a `*.solidground.json` document carrying full reversible provenance (source, datums, units, the local-origin offset, and point counts) alongside a bare `*.points.csv` file shaped for Revit's toposolid points-file import, bound together by a recorded sample count and SHA-256 hash. `TerrainProvenance.CurrentSchemaVersion` (currently `2`, adding `sourceHorizontalReferenceOrigin` and `sourceVerticalReferenceOrigin` alongside the rest of the manifest) names the one manifest `TerrainExportBundleRenderer` and `TerrainExportBundleReader` write and strictly read; see [the provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md) for the full manifest, the determinism rules, and how a local coordinate is reconstructed back to its source datum.
 
 ## Build
 
@@ -97,11 +97,17 @@ own `--help` lists its complete option set, and `--version` prints the CLI's ver
 `--verbose` prints the redacted acquisition request evidence for `fetch`/`run`, and, whenever an AOI is
 given, the clip's NODATA and region-excluded cell counts. `run --save-raster` keeps the raster set
 (`.asc`, `.prj`, `.source.json`) alongside the export bundle instead of discarding it after processing.
-Until the source-packaging decision recorded in the [Phase 1 validation note](docs/architecture/phase-1-validation.md)
-lands, a live `fetch` or `run` against a real-coverage area large enough to clear OpenTopography's
-undocumented area minimum ends with exit code 4; a smaller request — for example, the parcel-plus-5-meter-buffer
-case recorded in that note — instead ends with exit code 2 before any raster is returned, and `process` against
-a local `.asc` file with its own `.prj` runs end to end.
+A bare AAIGrid response — the observed USGS 1 m behaviour — triggers a second `GTiff` request whose GeoKeys
+supply the horizontal reference (`EPSG:26915` at the reference parcel fixture); the vertical reference is
+declared from the dataset's own published documentation and labelled as such, never read off either response.
+Each such acquisition costs two API calls against the configured key's daily quota instead of one, and
+`fetch`, `run`, and `process` each print a reference line stating both origins — see the
+[OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md)'s
+"Two-request contract, verified 2026-09-19" section and the
+[Phase 1 validation note](docs/architecture/phase-1-validation.md)'s "Live OpenTopography scenario, verified
+2026-09-19" section. A request whose area falls below OpenTopography's own undocumented per-request minimum —
+for example, the parcel-plus-5-meter-buffer case recorded in that note — still ends with exit code 2 before
+any raster is returned, and `process` against a local `.asc` file with its own `.prj` runs end to end.
 
 Process a local AAIGrid file offline:
 

@@ -1,4 +1,6 @@
+using SolidGround.Core.Metadata;
 using SolidGround.Core.Sources.OpenTopography;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Tests;
 
@@ -115,12 +117,19 @@ public sealed class OpenTopographyUsgs1mSourceOptionsTests
         Assert.Equal(OpenTopographyUsgs1mSourceOptions.DefaultEndpointUri, options.EndpointUri);
         Assert.Equal(250d, options.MaximumAreaSquareKilometers);
         Assert.Equal(256L * 1024 * 1024, options.MaximumResponseBytes);
+        Assert.Equal(new VerticalReference("NAVD88", LengthUnit.Meter), options.DeclaredVerticalReference);
     }
 
     [Fact]
     public void ConstructionRejectsANullEndpoint()
     {
         Assert.Throws<ArgumentNullException>(() => new OpenTopographyUsgs1mSourceOptions { EndpointUri = null! });
+    }
+
+    [Fact]
+    public void ConstructionRejectsANullDeclaredVerticalReference()
+    {
+        Assert.Throws<ArgumentNullException>(() => new OpenTopographyUsgs1mSourceOptions { DeclaredVerticalReference = null! });
     }
 
     [Theory]
@@ -149,5 +158,6 @@ public sealed class OpenTopographyUsgs1mSourceOptionsTests
         Assert.Throws<ArgumentOutOfRangeException>(() => options with { MaximumAreaSquareKilometers = -1d });
         Assert.Throws<ArgumentOutOfRangeException>(() => options with { MaximumResponseBytes = 0L });
         Assert.Throws<ArgumentNullException>(() => options with { EndpointUri = null! });
+        Assert.Throws<ArgumentNullException>(() => options with { DeclaredVerticalReference = null! });
     }
 }

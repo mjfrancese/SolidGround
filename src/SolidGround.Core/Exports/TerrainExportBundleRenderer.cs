@@ -16,7 +16,7 @@ namespace SolidGround.Core.Exports;
 /// hand-written, property-order-fixed export document (never a reflection-based serializer) plus a bare
 /// points CSV, bound together by a SHA-256 hash and a sample count. Rendering the same payload twice, on any
 /// platform or thread culture, produces identical bytes. See
-/// docs/architecture/provenance-and-deterministic-exports.md's "Export document manifest, schema version 1",
+/// docs/architecture/provenance-and-deterministic-exports.md's "Export document manifest, schema version 2",
 /// "Points file format, version 1", and "Determinism rules" sections for the full contract this class
 /// implements.
 /// </summary>
@@ -135,6 +135,9 @@ public static class TerrainExportBundleRenderer
 
         writer.WritePropertyName("sourceVerticalReference");
         WriteVerticalReference(writer, provenance.SourceVerticalReference);
+
+        writer.WriteString("sourceHorizontalReferenceOrigin", provenance.SourceHorizontalReferenceOrigin.ToString());
+        writer.WriteString("sourceVerticalReferenceOrigin", provenance.SourceVerticalReferenceOrigin.ToString());
 
         writer.WritePropertyName("localFrame");
         WriteLocalFrame(writer, provenance.LocalFrame);

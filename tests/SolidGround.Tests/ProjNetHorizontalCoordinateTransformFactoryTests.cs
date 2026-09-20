@@ -328,6 +328,8 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
             new ElevationSourceMetadata("OpenTopography", "USGS1m"),
             transform.Definition,
             vertical,
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             frame,
             new SimplificationRequest(),
             0,

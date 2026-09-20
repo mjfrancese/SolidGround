@@ -380,6 +380,9 @@ public sealed class OpenTopographyUsgs1mSourceTests
         Assert.Contains("example-site-synthetic.prj", result.Evidence.ArchiveEntryNames);
         Assert.Equal(zipBytes.LongLength, result.Evidence.ResponseByteCount);
         Assert.DoesNotContain(FakeKey, result.Evidence.RedactedRequestUri, StringComparison.Ordinal);
+        Assert.Equal(ReferenceOrigin.SourceResponse, result.Evidence.HorizontalReferenceOrigin);
+        Assert.Equal(ReferenceOrigin.SourceResponse, result.Evidence.VerticalReferenceOrigin);
+        Assert.Null(result.Evidence.MetadataRequest);
 
         AssertSingleWellFormedRequest(handler);
     }
@@ -821,55 +824,576 @@ public sealed class OpenTopographyUsgs1mSourceTests
     }
 
     [Fact]
-    public async Task BareAaiGridBodyFailsMentioningMissingReferenceMetadata()
+    public async Task BareAaiGridBodyTriggersASecondRequestAndFailsWhenItIsNotGeoTiff()
     {
+        // Behavior change from the single-request source: a bare AAIGrid body (USGS 1 m's actual observed
+        // shape, with no .prj or .aux.xml sidecar) no longer fails immediately. It triggers a second,
+        // otherwise identical request with outputFormat=GTiff to recover reference metadata from GeoKeys.
+        // Here that second response is not GeoTIFF either (another bare AAIGrid-shaped text body), so the
+        // acquisition still fails, but now as an OpenTopographyUnexpectedResponseException about the
+        // *metadata* response rather than the single-request source's old "missing reference metadata"
+        // OpenTopographySourceMetadataException.
         var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.OK, ReadFixture("example-site-synthetic.asc")));
         using var httpClient = new HttpClient(handler);
         OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
 
-        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+        OpenTopographyUnexpectedResponseException error = await Assert.ThrowsAsync<OpenTopographyUnexpectedResponseException>(
             () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
 
-        Assert.Contains("coordinate reference", error.Message, StringComparison.OrdinalIgnoreCase);
-        AssertSingleWellFormedRequest(handler);
+        Assert.Contains("GeoTIFF", error.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.Requests.Count);
+        AssertAaiGridRequest(handler.Requests[0]);
+        AssertMetadataRequest(handler.Requests[1]);
     }
 
     [Fact]
-    public async Task BareAaiGridResponseRedactsAContentDispositionFileNameContainingTheApiKey()
+    public async Task MalformedAaiGridHeaderInABareBodyFailsAsASourceMetadataExceptionWithoutASecondRequest()
     {
-        // Regression test: HandleSuccessAsync's bare-AAIGrid branch read contentDispositionFileName straight
-        // from the response's Content-Disposition header and interpolated it into
-        // OpenTopographySourceMetadataException with no redaction, even though apiKey and
-        // OpenTopographyRedaction were already in scope and used two branches later in the same method.
-        var handler = new FakeHttpMessageHandler((_, _) =>
-            TextResponseWithFileName(HttpStatusCode.OK, ReadFixture("example-site-synthetic.asc"), $"grid-{FakeKey}.asc"));
+        const string malformedHeader = "ncols not-a-number\nnrows 2\nxllcorner 0\nyllcorner 0\ncellsize 1\n1 2\n3 4\n";
+        var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.OK, malformedHeader));
         using var httpClient = new HttpClient(handler);
         OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
 
         OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
             () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
 
-        Assert.Contains("coordinate reference", error.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
-        AssertExceptionChainDoesNotContainTheKey(error);
-        AssertSingleWellFormedRequest(handler);
+        Assert.Contains("ncols", error.Message, StringComparison.Ordinal);
+        AssertAaiGridRequest(Assert.Single(handler.Requests));
     }
 
     [Fact]
-    public async Task BareAaiGridResponseRedactsAContentTypeHeaderContainingTheApiKey()
+    public async Task MalformedAaiGridCellInABareBodyAfterAValidMetadataResponseDoesNotLeakTheApiKey()
     {
-        byte[] bodyBytes = Encoding.UTF8.GetBytes(ReadFixture("example-site-synthetic.asc"));
-        var handler = new FakeHttpMessageHandler((_, _) => BinaryResponse(HttpStatusCode.OK, bodyBytes, $"text/plain; x-echo={FakeKey}"));
+        // Regression test: HandleBareAaiGridAsync's final AaiGridParser.Parse catch (parsing the data
+        // response's own AAIGrid text with the reference recovered from the metadata response) used to wrap
+        // ex.Message and ex itself directly, unredacted, unlike every sibling catch in this same method that
+        // wraps a parse failure over server-controlled text (the AaiGridParser.ReadHeader catch exercised by
+        // MalformedAaiGridHeaderInABareBodyFailsAsASourceMetadataExceptionWithoutASecondRequest immediately
+        // above, the GeoTiffMetadataReader.Read catch, and both WellKnownTextReferenceParser catches). This
+        // scripts a malformed cell -- the fake key in place of a numeric elevation value -- to prove the fix:
+        // AaiGridParser itself never echoes a cell's raw text (only its row/column position), so this is a
+        // defense-in-depth proof, not a proof of an active leak.
+        string aaiGridTextWithAMalformedCell =
+            $"ncols 3\nnrows 2\nxllcorner 500000\nyllcorner 4000000\ncellsize 2\nNODATA_value -9999\n1 2 {FakeKey}\n4 5 -9999\n";
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(aaiGridTextWithAMalformedCell, tiffBytes));
         using var httpClient = new HttpClient(handler);
         OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
 
         OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
             () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
 
-        Assert.Contains("coordinate reference", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("row 1, column 3", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+        Assert.NotNull(error.InnerException);
+        Assert.DoesNotContain(FakeKey, error.InnerException!.Message, StringComparison.Ordinal);
+        AssertExceptionChainDoesNotContainTheKey(error);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task HybridFlowRedactsTheMetadataResponsesContentDispositionFileNameContainingTheApiKey()
+    {
+        // D8: the metadata (second) response's Content-Disposition file name is redacted before it reaches
+        // OpenTopographyMetadataRequestEvidence, exactly like the first response's own
+        // ContentDispositionFileName already is.
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            HappyPathAaiGridText,
+            (_, _) => BinaryResponseWithFileName(HttpStatusCode.OK, tiffBytes, $"metadata-{FakeKey}.tif", "image/tiff")));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        OpenTopographyMetadataRequestEvidence metadataEvidence = Assert.IsType<OpenTopographyMetadataRequestEvidence>(result.Evidence.MetadataRequest);
+        Assert.NotNull(metadataEvidence.ContentDispositionFileName);
+        Assert.DoesNotContain(FakeKey, metadataEvidence.ContentDispositionFileName, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HybridFlowRedactsTheMetadataResponsesContentTypeHeaderContainingTheApiKey()
+    {
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            HappyPathAaiGridText,
+            (_, _) => BinaryResponse(HttpStatusCode.OK, tiffBytes, $"image/tiff; x-echo={FakeKey}")));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        OpenTopographyMetadataRequestEvidence metadataEvidence = Assert.IsType<OpenTopographyMetadataRequestEvidence>(result.Evidence.MetadataRequest);
+        Assert.NotNull(metadataEvidence.ContentType);
+        Assert.DoesNotContain(FakeKey, metadataEvidence.ContentType, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HybridFlowRedactsTheDataResponsesContentDispositionFileNameContainingTheApiKey()
+    {
+        // Regression test restoring pre-hybrid-flow coverage: the single-request source's
+        // BareAaiGridResponseRedactsAContentDispositionFileNameContainingTheApiKey proved the bare-AAIGrid
+        // data response's own Content-Disposition file name was redacted; that failure path no longer exists
+        // now that a bare AAIGrid data response triggers a second, metadata request instead of failing
+        // immediately (see HandleBareAaiGridAsync), so this proves the same header is still redacted, here on
+        // the successful acquisition's OpenTopographyResponseEvidence.
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            (_, _) => TextResponseWithFileName(HttpStatusCode.OK, HappyPathAaiGridText, $"grid-{FakeKey}.asc"),
+            (_, _) => BinaryResponse(HttpStatusCode.OK, tiffBytes, "image/tiff")));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Evidence.ContentDispositionFileName);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ContentDispositionFileName, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HybridFlowRedactsTheDataResponsesContentTypeHeaderContainingTheApiKey()
+    {
+        // Regression test restoring pre-hybrid-flow coverage: see
+        // HybridFlowRedactsTheDataResponsesContentDispositionFileNameContainingTheApiKey immediately above.
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            (_, _) => BinaryResponse(HttpStatusCode.OK, Encoding.UTF8.GetBytes(HappyPathAaiGridText), $"text/plain; x-echo={FakeKey}"),
+            (_, _) => BinaryResponse(HttpStatusCode.OK, tiffBytes, "image/tiff")));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Evidence.ContentType);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ContentType, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, result.Evidence.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HybridFlowHappyPathSendsTwoRequestsAndProducesGeoTiffDerivedEvidence()
+    {
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.Requests.Count);
+        AssertAaiGridRequest(handler.Requests[0]);
+        AssertMetadataRequest(handler.Requests[1]);
+        AssertIdenticalAreaParameters(handler.Requests[0], handler.Requests[1]);
+
+        HorizontalReference horizontal = result.Acquisition.Data.HorizontalReference;
+        Assert.Equal("EPSG:26915", horizontal.CoordinateReferenceSystem);
+        Assert.Equal(HorizontalReferenceKind.Projected, horizontal.Kind);
+        Assert.Equal(LengthUnit.Meter, horizontal.Unit.LinearUnit);
+
+        VerticalReference vertical = result.Acquisition.Data.VerticalReference;
+        Assert.Equal("NAVD88", vertical.Datum);
+        Assert.Equal(LengthUnit.Meter, vertical.Unit);
+
+        ElevationGrid grid = Assert.IsType<ElevationGrid>(result.Acquisition.Data);
+        Assert.Equal(2, grid.RowCount);
+        Assert.Equal(3, grid.ColumnCount);
+
+        Assert.Equal(OpenTopographyReferenceSource.GeoTiffGeoKeys, result.Evidence.ReferenceSource);
+        Assert.Empty(result.Evidence.ArchiveEntryNames);
+        Assert.Equal(ReferenceOrigin.SourceMetadataResponse, result.Evidence.HorizontalReferenceOrigin);
+        Assert.Equal(ReferenceOrigin.DatasetDocumentation, result.Evidence.VerticalReferenceOrigin);
+        Assert.Equal(
+            NorthAmericanUtmWellKnownText.Create(26915, new OpenTopographyUsgs1mSourceOptions().DeclaredVerticalReference),
+            result.Evidence.WellKnownText);
+        Assert.DoesNotContain(FakeKey, result.Evidence.RedactedRequestUri, StringComparison.Ordinal);
+
+        OpenTopographyMetadataRequestEvidence metadataEvidence = Assert.IsType<OpenTopographyMetadataRequestEvidence>(result.Evidence.MetadataRequest);
+        Assert.Equal(HttpStatusCode.OK, metadataEvidence.StatusCode);
+        Assert.Equal(26915, metadataEvidence.ProjectedCoordinateSystemCode);
+        Assert.Equal("PixelIsArea", metadataEvidence.RasterType);
+        Assert.Equal(3, metadataEvidence.ImageWidth);
+        Assert.Equal(2, metadataEvidence.ImageLength);
+        Assert.Equal(tiffBytes.LongLength, metadataEvidence.ResponseByteCount);
+        Assert.DoesNotContain(FakeKey, metadataEvidence.RedactedRequestUri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HybridFlowHappyPathWithABigEndianMetadataResponseProducesTheIdenticalEvidence()
+    {
+        // Every other hybrid-flow test builds its GeoTIFF metadata response through BuildTiffBytes' default
+        // TiffScenario, which is always little-endian, so the full pipeline this feeds -- ValidateGeoTiffMetadata,
+        // EnsureGridsAgree's corner-agreement math, WKT synthesis, and OpenTopographyMetadataRequestEvidence
+        // assembly -- was otherwise never proven end-to-end against a big-endian response (only
+        // GeoTiffMetadataReader itself is covered for big-endian, in GeoTiffMetadataReaderTests). This is the
+        // one test that exercises OpenTopographyUsgs1mSource.BigEndianTiffSignature's branch as true.
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario with { BigEndian = true });
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.Requests.Count);
+        AssertAaiGridRequest(handler.Requests[0]);
+        AssertMetadataRequest(handler.Requests[1]);
+
+        HorizontalReference horizontal = result.Acquisition.Data.HorizontalReference;
+        Assert.Equal("EPSG:26915", horizontal.CoordinateReferenceSystem);
+        Assert.Equal(HorizontalReferenceKind.Projected, horizontal.Kind);
+        Assert.Equal(LengthUnit.Meter, horizontal.Unit.LinearUnit);
+
+        VerticalReference vertical = result.Acquisition.Data.VerticalReference;
+        Assert.Equal("NAVD88", vertical.Datum);
+        Assert.Equal(LengthUnit.Meter, vertical.Unit);
+
+        ElevationGrid grid = Assert.IsType<ElevationGrid>(result.Acquisition.Data);
+        Assert.Equal(2, grid.RowCount);
+        Assert.Equal(3, grid.ColumnCount);
+
+        Assert.Equal(OpenTopographyReferenceSource.GeoTiffGeoKeys, result.Evidence.ReferenceSource);
+        Assert.Equal(ReferenceOrigin.SourceMetadataResponse, result.Evidence.HorizontalReferenceOrigin);
+        Assert.Equal(ReferenceOrigin.DatasetDocumentation, result.Evidence.VerticalReferenceOrigin);
+        Assert.Equal(
+            NorthAmericanUtmWellKnownText.Create(26915, new OpenTopographyUsgs1mSourceOptions().DeclaredVerticalReference),
+            result.Evidence.WellKnownText);
+
+        OpenTopographyMetadataRequestEvidence metadataEvidence = Assert.IsType<OpenTopographyMetadataRequestEvidence>(result.Evidence.MetadataRequest);
+        Assert.Equal(HttpStatusCode.OK, metadataEvidence.StatusCode);
+        Assert.Equal(26915, metadataEvidence.ProjectedCoordinateSystemCode);
+        Assert.Equal("PixelIsArea", metadataEvidence.RasterType);
+        Assert.Equal(3, metadataEvidence.ImageWidth);
+        Assert.Equal(2, metadataEvidence.ImageLength);
+        Assert.Equal(tiffBytes.LongLength, metadataEvidence.ResponseByteCount);
+    }
+
+    [Fact]
+    public async Task HybridFlowWithTheObservedLiveGridDimensionsPassesTheCornerAgreementTolerance()
+    {
+        // Reconstructs the live the reference parcel scenario's AAIGrid header and GeoTIFF tiepoint (Issue #21
+        // setup facts): the AAIGrid's yllcorner ([withheld]) and the corner derived from the
+        // GeoTIFF's tiepoint ([withheld] minus 117 rows of 1-unit cells = [withheld]) disagree
+        // by roughly 4e-10, which must still pass GridAgreementTolerance (1e-6).
+        string data = string.Join(' ', Enumerable.Repeat("0", 124 * 117));
+        string aaiGridText =
+            "ncols 124\nnrows 117\nxllcorner [withheld]\nyllcorner [withheld]\n" +
+            $"cellsize 1.000000000000\nNODATA_value -999999\n{data}\n";
+        TiffScenario scenario = HappyPathScenario with
+        {
+            ImageWidth = 124,
+            ImageLength = 117,
+            ScaleX = 1d,
+            ScaleY = 1d,
+            TiepointX = [withheld],
+            TiepointY = [withheld],
+            NoDataText = "-999999",
+        };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(aaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        ElevationGrid grid = Assert.IsType<ElevationGrid>(result.Acquisition.Data);
+        Assert.Equal(124, grid.ColumnCount);
+        Assert.Equal(117, grid.RowCount);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NoContent, typeof(OpenTopographyNoDataException))]
+    [InlineData(HttpStatusCode.BadRequest, typeof(OpenTopographyRequestValidationException))]
+    [InlineData(HttpStatusCode.Unauthorized, typeof(OpenTopographyAuthorizationException))]
+    [InlineData(HttpStatusCode.Forbidden, typeof(OpenTopographyAuthorizationException))]
+    [InlineData(HttpStatusCode.TooManyRequests, typeof(OpenTopographyQuotaException))]
+    [InlineData(HttpStatusCode.InternalServerError, typeof(OpenTopographyServerException))]
+    public async Task SecondRequestNonSuccessStatusSurfacesTheSameExceptionTypeWithTheMetadataRequestsRedactedUri(
+        HttpStatusCode statusCode, Type expectedExceptionType)
+    {
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> metadataResponder = statusCode == HttpStatusCode.NoContent
+            ? (_, _) => EmptyResponse(statusCode)
+            : (_, _) => TextResponse(statusCode, $"server message mentioning {FakeKey}");
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, metadataResponder));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyException error = await Assert.ThrowsAnyAsync<OpenTopographyException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.IsType(expectedExceptionType, error);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("outputFormat=GTiff", error.RedactedRequestUri, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.RedactedRequestUri, StringComparison.Ordinal);
+        AssertExceptionChainDoesNotContainTheKey(error);
+    }
+
+    [Fact]
+    public async Task SecondRequestHttpRequestExceptionSurfacesAsANetworkExceptionWithTheMetadataRequestsRedactedUri()
+    {
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            HappyPathAaiGridText,
+            (HttpRequestMessage _, CancellationToken _) => throw new HttpRequestException("Simulated connection reset")));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyNetworkException error = await Assert.ThrowsAsync<OpenTopographyNetworkException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.IsType<HttpRequestException>(error.InnerException);
+        Assert.Contains("outputFormat=GTiff", error.RedactedRequestUri, StringComparison.Ordinal);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task SecondRequestTimeoutSurfacesAsANetworkExceptionWithTheMetadataRequestsRedactedUri()
+    {
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            HappyPathAaiGridText,
+            (HttpRequestMessage _, CancellationToken _) => throw new TaskCanceledException("Simulated timeout", new TimeoutException())));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyNetworkException error = await Assert.ThrowsAsync<OpenTopographyNetworkException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.IsType<TaskCanceledException>(error.InnerException);
+        Assert.Contains("outputFormat=GTiff", error.RedactedRequestUri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PropagatesACallerCancelledTokenUnwrappedOnTheSecondRequest()
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new FakeHttpMessageHandler(HybridResponder(
+            HappyPathAaiGridText,
+            (_, cancellationToken) =>
+            {
+                cts.Cancel();
+                cancellationToken.ThrowIfCancellationRequested();
+                return EmptyResponse(HttpStatusCode.OK);
+            }));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        // This test deliberately controls its own cancellation token (it must cancel it itself) rather
+        // than using TestContext.Current.CancellationToken, so xUnit1051 does not apply here.
+#pragma warning disable xUnit1051
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => source.AcquireAsync(SmallRequest(), cts.Token).AsTask());
+#pragma warning restore xUnit1051
+    }
+
+    [Fact]
+    public async Task SecondRequestReturningAZipBodyFailsAsAnUnexpectedGeoTiffResponse()
+    {
+        byte[] zipBytes = CreateZipArchive(("example-site-synthetic.asc", ReadFixture("example-site-synthetic.asc")));
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, (_, _) => ZipResponse(zipBytes)));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUnexpectedResponseException error = await Assert.ThrowsAsync<OpenTopographyUnexpectedResponseException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("GeoTIFF", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SecondRequestReturningAGzipBodyFailsAsAnUnexpectedGeoTiffResponse()
+    {
+        byte[] gzipBytes = [0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00];
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, (_, _) => BinaryResponse(HttpStatusCode.OK, gzipBytes, "application/gzip")));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUnexpectedResponseException error = await Assert.ThrowsAsync<OpenTopographyUnexpectedResponseException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("GeoTIFF", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SecondRequestReturningAnEmptyBodyFailsAsAnUnexpectedGeoTiffResponse()
+    {
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, (_, _) => EmptyResponse(HttpStatusCode.OK)));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUnexpectedResponseException error = await Assert.ThrowsAsync<OpenTopographyUnexpectedResponseException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("GeoTIFF", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SecondRequestOversizeBodyFailsAsAnUnexpectedResponseException()
+    {
+        byte[] oversizeTiffBytes = BuildTiffBytes(HappyPathScenario with { Citation = new string('x', 4096) });
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, (_, _) => BinaryResponse(HttpStatusCode.OK, oversizeTiffBytes, "image/tiff")));
+        using var httpClient = new HttpClient(handler);
+        var options = new OpenTopographyUsgs1mSourceOptions { MaximumResponseBytes = 150 };
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey, options);
+
+        OpenTopographyUnexpectedResponseException error = await Assert.ThrowsAsync<OpenTopographyUnexpectedResponseException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("byte limit", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static IEnumerable<object[]> GeoKeyGapScenarios()
+    {
+        yield return ["3072", "MissingProjectedCode"];
+        yield return ["1024", "UnsupportedModelType"];
+        yield return ["3072", "UnsupportedProjectedCode"];
+        yield return ["3076", "UnsupportedLinearUnits"];
+        yield return ["1025", "UnsupportedRasterType"];
+        yield return ["33550", "MissingPixelScale"];
+        yield return ["33922", "MissingTiepoint"];
+        yield return ["42113", "MissingNoData"];
+        yield return ["42113", "NonNumericNoData"];
+    }
+
+    [Theory]
+    [MemberData(nameof(GeoKeyGapScenarios))]
+    public async Task GeoKeyGapInTheMetadataResponseFailsNamingTheKey(string expectedKeyToken, string scenarioKey)
+    {
+        byte[] tiffBytes = BuildTiffBytes(GeoKeyGapScenarioLookup[scenarioKey]);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains(expectedKeyToken, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+    }
+
+    public static IEnumerable<object[]> GridDisagreementFailureScenarios()
+    {
+        yield return ["ImageWidth", "ImageWidth"];
+        yield return ["ImageLength", "ImageLength"];
+        yield return ["ModelPixelScale X", "ScaleX"];
+        yield return ["ModelPixelScale Y", "ScaleY"];
+        yield return ["lower-left X", "TiepointX"];
+        yield return ["lower-left Y", "TiepointY"];
+        yield return ["GDAL_NODATA", "NoDataMismatch"];
+    }
+
+    [Theory]
+    [MemberData(nameof(GridDisagreementFailureScenarios))]
+    public async Task GridDisagreementBetweenTheTwoResponsesFailsNamingTheField(string expectedFieldToken, string scenarioKey)
+    {
+        byte[] tiffBytes = BuildTiffBytes(GridDisagreementScenarioLookup[scenarioKey]);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains(expectedFieldToken, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CornerAgreementWithinToleranceStillSucceeds()
+    {
+        TiffScenario scenario = HappyPathScenario with { TiepointX = 500000d + 5e-7, TiepointY = 4000004d - 5e-7 };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(OpenTopographyReferenceSource.GeoTiffGeoKeys, result.Evidence.ReferenceSource);
+    }
+
+    [Fact]
+    public async Task PixelIsPointTiepointShiftAgreesWithTheAaiGridCornerAndSucceeds()
+    {
+        TiffScenario scenario = HappyPathScenario with { RasterType = 2, TiepointX = 500001d, TiepointY = 4000003d };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal("PixelIsPoint", result.Evidence.MetadataRequest!.RasterType);
+    }
+
+    [Fact]
+    public async Task CenterAnchoredAaiGridHeaderAgreesWithAPixelIsAreaGeoTiffAndSucceeds()
+    {
+        const string centerAnchoredAaiGridText = "ncols 3\nnrows 2\nxllcenter 500001\nyllcenter 4000001\ncellsize 2\nNODATA_value -9999\n1 2 3\n4 5 -9999\n";
+        byte[] tiffBytes = BuildTiffBytes(HappyPathScenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(centerAnchoredAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographyUsgs1mAcquisition result = await source.AcquireDetailedAsync(SmallRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(OpenTopographyReferenceSource.GeoTiffGeoKeys, result.Evidence.ReferenceSource);
+    }
+
+    [Fact]
+    public async Task GeoTiffCitationMatchingTheApiKeyFailsAsASourceMetadataExceptionInsteadOfLeakingIt()
+    {
+        TiffScenario scenario = HappyPathScenario with { Citation = FakeKey };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("citation", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
         AssertExceptionChainDoesNotContainTheKey(error);
-        AssertSingleWellFormedRequest(handler);
+    }
+
+    [Fact]
+    public async Task GeoTiffGeographicCitationMatchingTheApiKeyFailsAsASourceMetadataExceptionInsteadOfLeakingIt()
+    {
+        // GeoTiffCitationMatchingTheApiKeyFailsAsASourceMetadataExceptionInsteadOfLeakingIt above only
+        // exercises the guard on Citation (GeoKey 1026); HandleBareAaiGridAsync runs the identical guard
+        // against GeographicCitation (GeoKey 2049) and ProjectedCitation (GeoKey 3073), which were otherwise
+        // unverified.
+        TiffScenario scenario = HappyPathScenario with { GeographicCitation = FakeKey };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("geographic citation", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+        AssertExceptionChainDoesNotContainTheKey(error);
+    }
+
+    [Fact]
+    public async Task GeoTiffProjectedCitationMatchingTheApiKeyFailsAsASourceMetadataExceptionInsteadOfLeakingIt()
+    {
+        // See GeoTiffGeographicCitationMatchingTheApiKeyFailsAsASourceMetadataExceptionInsteadOfLeakingIt
+        // immediately above: this covers the third and last of the three citation GeoKeys, ProjectedCitation
+        // (GeoKey 3073).
+        TiffScenario scenario = HappyPathScenario with { ProjectedCitation = FakeKey };
+        byte[] tiffBytes = BuildTiffBytes(scenario);
+        var handler = new FakeHttpMessageHandler(HybridResponder(HappyPathAaiGridText, tiffBytes));
+        using var httpClient = new HttpClient(handler);
+        OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
+
+        OpenTopographySourceMetadataException error = await Assert.ThrowsAsync<OpenTopographySourceMetadataException>(
+            () => source.AcquireAsync(SmallRequest(), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("projected citation", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(FakeKey, error.Message, StringComparison.Ordinal);
+        AssertExceptionChainDoesNotContainTheKey(error);
     }
 
     [Fact]
@@ -1141,6 +1665,234 @@ public sealed class OpenTopographyUsgs1mSourceTests
         }
 
         return Task.FromResult(response);
+    }
+
+    private static Task<HttpResponseMessage> BinaryResponseWithFileName(HttpStatusCode statusCode, byte[] body, string fileName, string mediaType)
+    {
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new ByteArrayContent(body),
+        };
+        response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(mediaType);
+        response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileName = fileName };
+        return Task.FromResult(response);
+    }
+
+    /// <summary>
+    /// The AAIGrid text body for a small, self-consistent 3x2 hybrid-flow scenario: cellsize 2, lower-left
+    /// corner (500000, 4000000). Paired with <see cref="HappyPathScenario"/>, whose default GeoTIFF tiepoint
+    /// (500000, 4000004, PixelIsArea) derives the identical lower-left corner, so the two responses agree.
+    /// </summary>
+    private const string HappyPathAaiGridText = "ncols 3\nnrows 2\nxllcorner 500000\nyllcorner 4000000\ncellsize 2\nNODATA_value -9999\n1 2 3\n4 5 -9999\n";
+
+    /// <summary>The default GeoTIFF metadata scenario matching <see cref="HappyPathAaiGridText"/> exactly.</summary>
+    private static readonly TiffScenario HappyPathScenario = new();
+
+    /// <summary>
+    /// Named <see cref="TiffScenario"/> variations for <see cref="GeoKeyGapScenarios"/>, keyed by a
+    /// serializable string instead of the record itself. xunit.v3 needs every discovered theory data value to
+    /// be serializable (implementing xunit's <c>IXunitSerializable</c> or via a registered serializer) to
+    /// give each row its own discovered test identity, and <see cref="TiffScenario"/> cannot satisfy that: its only
+    /// constructor is a 14-arity positional primary constructor, so it has no true parameterless constructor
+    /// at the IL level even though every parameter has a default value. This field must stay declared after
+    /// <see cref="HappyPathScenario"/> above, since its initializer depends on that field already being set.
+    /// </summary>
+    private static readonly Dictionary<string, TiffScenario> GeoKeyGapScenarioLookup = new()
+    {
+        ["MissingProjectedCode"] = HappyPathScenario with { ProjectedCode = null },
+        ["UnsupportedModelType"] = HappyPathScenario with { ModelType = 2 },
+        ["UnsupportedProjectedCode"] = HappyPathScenario with { ProjectedCode = 32615 },
+        ["UnsupportedLinearUnits"] = HappyPathScenario with { LinearUnitsCode = 9002 },
+        ["UnsupportedRasterType"] = HappyPathScenario with { RasterType = 3 },
+        ["MissingPixelScale"] = HappyPathScenario with { IncludePixelScale = false },
+        ["MissingTiepoint"] = HappyPathScenario with { IncludeTiepoint = false },
+        ["MissingNoData"] = HappyPathScenario with { NoDataText = null },
+        ["NonNumericNoData"] = HappyPathScenario with { NoDataText = "not-a-number" },
+    };
+
+    /// <summary>
+    /// Named <see cref="TiffScenario"/> variations for <see cref="GridDisagreementFailureScenarios"/>; see
+    /// <see cref="GeoKeyGapScenarioLookup"/> for why a lookup keyed by string, not the record itself, is
+    /// required.
+    /// </summary>
+    private static readonly Dictionary<string, TiffScenario> GridDisagreementScenarioLookup = new()
+    {
+        ["ImageWidth"] = HappyPathScenario with { ImageWidth = 4 },
+        ["ImageLength"] = HappyPathScenario with { ImageLength = 3 },
+        ["ScaleX"] = HappyPathScenario with { ScaleX = 3d },
+        ["ScaleY"] = HappyPathScenario with { ScaleY = 3d },
+        ["TiepointX"] = HappyPathScenario with { TiepointX = 500000.01d },
+        ["TiepointY"] = HappyPathScenario with { TiepointY = 4000004.01d },
+        ["NoDataMismatch"] = HappyPathScenario with { NoDataText = "-1234" },
+    };
+
+    /// <summary>
+    /// A minimal, mutable description of a GeoTIFF metadata response's tags and GeoKeys, used with
+    /// <see cref="BuildTiffBytes"/> to script hybrid-flow test scenarios (happy path, GeoKey gaps, and
+    /// same-grid disagreements) as small, targeted <c>with</c>-expression variations of
+    /// <see cref="HappyPathScenario"/> instead of one bespoke <see cref="TiffBuilder"/> call per test.
+    /// </summary>
+    public sealed record TiffScenario(
+        ushort ImageWidth = 3,
+        ushort ImageLength = 2,
+        ushort? ModelType = 1,
+        ushort? RasterType = 1,
+        ushort? ProjectedCode = 26915,
+        ushort? LinearUnitsCode = 9001,
+        double ScaleX = 2d,
+        double ScaleY = 2d,
+        double TiepointX = 500000d,
+        double TiepointY = 4000004d,
+        bool IncludePixelScale = true,
+        bool IncludeTiepoint = true,
+        string? NoDataText = "-9999",
+        string? Citation = null,
+        bool BigEndian = false,
+        string? GeographicCitation = null,
+        string? ProjectedCitation = null);
+
+    private static byte[] BuildTiffBytes(TiffScenario scenario)
+    {
+        TiffBuilder builder = new TiffBuilder(bigEndian: scenario.BigEndian)
+            .WithShort(256, scenario.ImageWidth)
+            .WithShort(257, scenario.ImageLength);
+
+        if (scenario.IncludePixelScale)
+        {
+            builder = builder.WithDoubles(33550, scenario.ScaleX, scenario.ScaleY, 0d);
+        }
+
+        if (scenario.IncludeTiepoint)
+        {
+            builder = builder.WithDoubles(33922, 0d, 0d, 0d, scenario.TiepointX, scenario.TiepointY, 0d);
+        }
+
+        if (scenario.NoDataText is not null)
+        {
+            builder = builder.WithAscii(42113, scenario.NoDataText);
+        }
+
+        List<(ushort KeyId, ushort Location, ushort Count, ushort ValueOffset)> keys = [];
+        if (scenario.ModelType is ushort modelType)
+        {
+            keys.Add((1024, 0, 1, modelType));
+        }
+
+        if (scenario.RasterType is ushort rasterType)
+        {
+            keys.Add((1025, 0, 1, rasterType));
+        }
+
+        if (scenario.ProjectedCode is ushort projectedCode)
+        {
+            keys.Add((3072, 0, 1, projectedCode));
+        }
+
+        if (scenario.LinearUnitsCode is ushort linearUnitsCode)
+        {
+            keys.Add((3076, 0, 1, linearUnitsCode));
+        }
+
+        // All three citation GeoKeys (1026, 2049, 3073) resolve through the same shared GeoAsciiParams
+        // (34737) tag, each by its own offset/count -- exactly per the GeoTIFF spec and
+        // GeoTiffMetadataReader.ResolveGeoAsciiSlice -- so every non-null citation here packs into one
+        // concatenated, '|'-terminated blob instead of one WithAscii(34737, ...) call per citation.
+        string geoAscii = "";
+        void AppendCitation(ushort keyId, string? text)
+        {
+            if (text is null)
+            {
+                return;
+            }
+
+            var offset = (ushort)geoAscii.Length;
+            geoAscii += text + "|";
+            keys.Add((keyId, 34737, (ushort)(text.Length + 1), offset));
+        }
+
+        AppendCitation(1026, scenario.Citation);
+        AppendCitation(2049, scenario.GeographicCitation);
+        AppendCitation(3073, scenario.ProjectedCitation);
+
+        if (geoAscii.Length > 0)
+        {
+            builder = builder.WithAscii(34737, geoAscii);
+        }
+
+        return builder.WithGeoKeyDirectory([.. keys]).Build();
+    }
+
+    /// <summary>
+    /// Builds a responder that discriminates on the request's <c>outputFormat</c> query value: an
+    /// <c>AAIGrid</c> request always gets <paramref name="aaiGridText"/>; a <c>GTiff</c> request always gets
+    /// a 200 GeoTIFF response built from <paramref name="tiff"/>.
+    /// </summary>
+    private static Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> HybridResponder(string aaiGridText, byte[] tiff) =>
+        HybridResponder(aaiGridText, (_, _) => BinaryResponse(HttpStatusCode.OK, tiff, "image/tiff"));
+
+    /// <summary>
+    /// Builds a responder that discriminates on the request's <c>outputFormat</c> query value: an
+    /// <c>AAIGrid</c> request always gets a 200 response with <paramref name="aaiGridText"/>; a <c>GTiff</c>
+    /// request is handled by <paramref name="metadataResponder"/>, letting a test script any second-response
+    /// shape (a non-200 status, a transport failure, a non-GeoTIFF body, and so on).
+    /// </summary>
+    private static Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> HybridResponder(
+        string aaiGridText,
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> metadataResponder) =>
+        (request, cancellationToken) => GetQueryValue(request, "outputFormat") == "GTiff"
+            ? metadataResponder(request, cancellationToken)
+            : TextResponse(HttpStatusCode.OK, aaiGridText);
+
+    /// <summary>
+    /// Builds a responder that discriminates on the request's <c>outputFormat</c> query value like the other
+    /// <c>HybridResponder</c> overloads, but also lets a test script the first (data) response's own headers
+    /// -- Content-Disposition, Content-Type -- instead of always sending a plain 200 <c>text/plain</c>
+    /// response.
+    /// </summary>
+    private static Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> HybridResponder(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> aaiGridResponder,
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> metadataResponder) =>
+        (request, cancellationToken) => GetQueryValue(request, "outputFormat") == "GTiff"
+            ? metadataResponder(request, cancellationToken)
+            : aaiGridResponder(request, cancellationToken);
+
+    private static string? GetQueryValue(HttpRequestMessage request, string name)
+    {
+        string query = request.RequestUri!.Query.TrimStart('?');
+        foreach (string pair in query.Split('&'))
+        {
+            int equalsIndex = pair.IndexOf('=');
+            string key = equalsIndex < 0 ? pair : pair[..equalsIndex];
+            if (key == name)
+            {
+                return equalsIndex < 0 ? null : pair[(equalsIndex + 1)..];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Asserts a hybrid flow's first (data) request has the documented query shape for <c>outputFormat=AAIGrid</c>.</summary>
+    private static void AssertAaiGridRequest(HttpRequestMessage request) => AssertRequestHasOutputFormatAndKey(request, "AAIGrid");
+
+    /// <summary>Asserts a hybrid flow's second (metadata) request has the documented query shape for <c>outputFormat=GTiff</c>.</summary>
+    private static void AssertMetadataRequest(HttpRequestMessage request) => AssertRequestHasOutputFormatAndKey(request, "GTiff");
+
+    private static void AssertRequestHasOutputFormatAndKey(HttpRequestMessage request, string expectedOutputFormat)
+    {
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal(expectedOutputFormat, GetQueryValue(request, "outputFormat"));
+        string query = request.RequestUri!.Query.TrimStart('?');
+        Assert.Contains($"API_Key={Uri.EscapeDataString(FakeKey)}", query, StringComparison.Ordinal);
+    }
+
+    /// <summary>Asserts two hybrid-flow requests share identical datasetName/south/north/west/east values.</summary>
+    private static void AssertIdenticalAreaParameters(HttpRequestMessage first, HttpRequestMessage second)
+    {
+        foreach (string name in new[] { "datasetName", "south", "north", "west", "east" })
+        {
+            Assert.Equal(GetQueryValue(first, name), GetQueryValue(second, name));
+        }
     }
 
     private static void AssertSingleWellFormedRequest(FakeHttpMessageHandler handler)

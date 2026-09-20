@@ -70,6 +70,16 @@ OpenTopography response's coordinate reference system **must** use the already-r
 `Evidence.WellKnownText`, never a pre-redaction value. `Create` itself has no API-key concept and performs no
 redaction of its own — it is not a safe place to route an unredacted string.
 
+**Update, Issue #21 (2026-09-19):** for a bare-AAIGrid acquisition (`docs/architecture/opentopography-usgs1m-source.md`'s
+"Two-request contract, verified 2026-09-19" section), `Evidence.WellKnownText` is no longer text OpenTopography
+itself returned; it is the WKT `SolidGround.Core.Sources.OpenTopography.NorthAmericanUtmWellKnownText.Create`
+synthesized from the GeoTIFF GeoKeys' EPSG code (that design note's "GeoKey to WKT synthesis" section). That
+synthesized text is still exactly the target WKT `Create` above receives — the same string is also written
+verbatim to the raster set's `.prj` file (`docs/architecture/cli-workflow.md`'s "Raster set persistence"
+section) — so a `fetch` followed by a `process` round trip through that `.prj` file reproduces byte-identical
+target WKT, and therefore the identical `ProjNetHorizontalCoordinateTransformFactory.Create` transform, as the
+`run` command that never writes or re-reads the intermediate file at all.
+
 ## The ProjNET adapter
 
 `ProjNetHorizontalCoordinateTransformFactory.Create(sourceWellKnownText, targetWellKnownText)`:

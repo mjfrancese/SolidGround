@@ -24,7 +24,10 @@ public static class TerrainExportPayloadAssembler
     /// <see cref="TerrainProvenance.SimplificationRequest"/>). Samples are carried through in
     /// <see cref="SimplificationResult.RetainedSamples"/>'s order, converted to
     /// <paramref name="localFrame"/>'s local coordinates; SolidGround never re-sorts, groups, or deduplicates
-    /// them here.
+    /// them here. <paramref name="referenceOrigins"/> is carried unchanged into
+    /// <see cref="TerrainProvenance.SourceHorizontalReferenceOrigin"/>/<see cref="TerrainProvenance.SourceVerticalReferenceOrigin"/>
+    /// -- this method never inspects or infers it. See docs/architecture/provenance-and-deterministic-exports.md's
+    /// "Export document manifest, schema version 2" section.
     /// </summary>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
     /// <exception cref="TerrainProvenanceException">
@@ -38,6 +41,7 @@ public static class TerrainExportPayloadAssembler
         ElevationSourceMetadata source,
         HorizontalTransformationDefinition horizontalTransformation,
         VerticalReference sourceVerticalReference,
+        ReferenceOrigins referenceOrigins,
         LocalCoordinateFrame localFrame,
         ElevationGrid candidateGrid,
         SimplificationResult simplification)
@@ -45,6 +49,7 @@ public static class TerrainExportPayloadAssembler
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(horizontalTransformation);
         ArgumentNullException.ThrowIfNull(sourceVerticalReference);
+        ArgumentNullException.ThrowIfNull(referenceOrigins);
         ArgumentNullException.ThrowIfNull(localFrame);
         ArgumentNullException.ThrowIfNull(candidateGrid);
         ArgumentNullException.ThrowIfNull(simplification);
@@ -89,6 +94,8 @@ public static class TerrainExportPayloadAssembler
             source,
             horizontalTransformation,
             sourceVerticalReference,
+            referenceOrigins.Horizontal,
+            referenceOrigins.Vertical,
             localFrame,
             simplification.Request,
             originalPointCount,

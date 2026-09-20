@@ -38,7 +38,7 @@ public sealed class CliProcessCommandTests
     private const string ValidSourceJson = """
         {
           "schema": "solidground.raster-source",
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "sourceName": "OpenTopography",
           "datasetIdentifier": "USGS1m",
           "collectionPeriod": {
@@ -51,6 +51,8 @@ public sealed class CliProcessCommandTests
             "unit": "UsSurveyFoot",
             "geoidModel": "Geoid12B"
           },
+          "horizontalReferenceOrigin": "SourceResponse",
+          "verticalReferenceOrigin": "SourceResponse",
           "acquisition": {
             "redactedRequestUri": "https://example.test/api?API_Key=REDACTED",
             "statusCode": 200,
@@ -58,7 +60,8 @@ public sealed class CliProcessCommandTests
             "contentDispositionFileName": "USGS1m.zip",
             "archiveEntryNames": ["USGS1m.asc", "USGS1m.prj"],
             "referenceSource": "PrjSidecar",
-            "responseByteCount": 12345
+            "responseByteCount": 12345,
+            "metadataRequest": null
           }
         }
         """;
@@ -600,9 +603,18 @@ public sealed class CliProcessCommandTests
     }
 
     [Fact]
-    public async Task SourceJsonWithSchemaVersionTwoExitsWithUsageErrorNamingTheSidecarPath()
+    public async Task SourceJsonWithSchemaVersionThreeExitsWithUsageErrorNamingTheSidecarPath()
     {
-        string json = ValidSourceJson.Replace("\"schemaVersion\": 1,", "\"schemaVersion\": 2,", StringComparison.Ordinal);
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 2,", "\"schemaVersion\": 3,", StringComparison.Ordinal);
+        await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SourceJsonWithSchemaVersionOneExitsWithUsageErrorNamingTheSidecarPath()
+    {
+        // A genuine version 1 sidecar (from before SolidGround Issue #21) is rejected the same way any other
+        // wrong schemaVersion is -- there is no migration path from version 1 to version 2.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 2,", "\"schemaVersion\": 1,", StringComparison.Ordinal);
         await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
     }
 

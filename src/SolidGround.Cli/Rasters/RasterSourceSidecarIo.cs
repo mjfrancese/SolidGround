@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using SolidGround.Core.Metadata;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Units;
@@ -16,7 +17,7 @@ namespace SolidGround.Cli.Rasters;
 internal static class RasterSourceSidecarIo
 {
     internal const string Schema = "solidground.raster-source";
-    internal const int CurrentSchemaVersion = 1;
+    internal const int CurrentSchemaVersion = 2;
 
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
@@ -73,6 +74,9 @@ internal static class RasterSourceSidecarIo
 
             writer.WritePropertyName("vertical");
             WriteVertical(writer, sidecar.Vertical);
+
+            writer.WriteString("horizontalReferenceOrigin", sidecar.HorizontalReferenceOrigin.ToString());
+            writer.WriteString("verticalReferenceOrigin", sidecar.VerticalReferenceOrigin.ToString());
 
             writer.WritePropertyName("acquisition");
             WriteAcquisition(writer, sidecar.Acquisition);
@@ -134,6 +138,59 @@ internal static class RasterSourceSidecarIo
 
         writer.WriteString("referenceSource", acquisition.ReferenceSource);
         writer.WriteNumber("responseByteCount", acquisition.ResponseByteCount);
+
+        writer.WritePropertyName("metadataRequest");
+        if (acquisition.MetadataRequest is { } metadataRequest)
+        {
+            WriteMetadataRequest(writer, metadataRequest);
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteMetadataRequest(Utf8JsonWriter writer, RasterSourceMetadataRequest metadataRequest)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("redactedRequestUri", metadataRequest.RedactedRequestUri);
+        writer.WriteNumber("statusCode", metadataRequest.StatusCode);
+
+        if (metadataRequest.ContentType is { } contentType)
+        {
+            writer.WriteString("contentType", contentType);
+        }
+        else
+        {
+            writer.WriteNull("contentType");
+        }
+
+        if (metadataRequest.ContentDispositionFileName is { } contentDispositionFileName)
+        {
+            writer.WriteString("contentDispositionFileName", contentDispositionFileName);
+        }
+        else
+        {
+            writer.WriteNull("contentDispositionFileName");
+        }
+
+        writer.WriteNumber("responseByteCount", metadataRequest.ResponseByteCount);
+        writer.WriteNumber("projectedCoordinateSystemCode", metadataRequest.ProjectedCoordinateSystemCode);
+
+        if (metadataRequest.Citation is { } citation)
+        {
+            writer.WriteString("citation", citation);
+        }
+        else
+        {
+            writer.WriteNull("citation");
+        }
+
+        writer.WriteString("rasterType", metadataRequest.RasterType);
+        writer.WriteNumber("imageWidth", metadataRequest.ImageWidth);
+        writer.WriteNumber("imageLength", metadataRequest.ImageLength);
         writer.WriteEndObject();
     }
 
@@ -164,7 +221,10 @@ internal static class RasterSourceSidecarIo
             RequireObject(root, sourcePath, "$");
 
             Dictionary<string, JsonElement> top = ReadObjectProperties(root, sourcePath, "$",
-                ["schema", "schemaVersion", "sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel", "vertical", "acquisition"]);
+                [
+                    "schema", "schemaVersion", "sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel",
+                    "vertical", "horizontalReferenceOrigin", "verticalReferenceOrigin", "acquisition",
+                ]);
 
             string schema = RequireString(top["schema"], sourcePath, "$.schema");
             if (!string.Equals(schema, Schema, StringComparison.Ordinal))
@@ -194,9 +254,13 @@ internal static class RasterSourceSidecarIo
 
             string? qualityLevel = RequireStringOrNull(top["qualityLevel"], sourcePath, "$.qualityLevel");
             RasterSourceVertical vertical = ParseVertical(top["vertical"], sourcePath, "$.vertical");
+            ReferenceOrigin horizontalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["horizontalReferenceOrigin"], sourcePath, "$.horizontalReferenceOrigin");
+            ReferenceOrigin verticalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["verticalReferenceOrigin"], sourcePath, "$.verticalReferenceOrigin");
             RasterSourceAcquisition acquisition = ParseAcquisition(top["acquisition"], sourcePath, "$.acquisition");
 
-            return new RasterSourceSidecar(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, vertical, acquisition);
+            return new RasterSourceSidecar(
+                sourceName, datasetIdentifier, collectionPeriod, qualityLevel, vertical,
+                horizontalReferenceOrigin, verticalReferenceOrigin, acquisition);
         }
     }
 
@@ -233,7 +297,10 @@ internal static class RasterSourceSidecarIo
     {
         RequireObject(obj, sourcePath, jsonPath);
         Dictionary<string, JsonElement> props = ReadObjectProperties(obj, sourcePath, jsonPath,
-            ["redactedRequestUri", "statusCode", "contentType", "contentDispositionFileName", "archiveEntryNames", "referenceSource", "responseByteCount"]);
+            [
+                "redactedRequestUri", "statusCode", "contentType", "contentDispositionFileName", "archiveEntryNames",
+                "referenceSource", "responseByteCount", "metadataRequest",
+            ]);
 
         string redactedRequestUri = RequireString(props["redactedRequestUri"], sourcePath, $"{jsonPath}.redactedRequestUri");
         int statusCode = RequireInt(props["statusCode"], sourcePath, $"{jsonPath}.statusCode");
@@ -243,8 +310,39 @@ internal static class RasterSourceSidecarIo
         string referenceSource = RequireEnumName<OpenTopographyReferenceSource>(props["referenceSource"], sourcePath, $"{jsonPath}.referenceSource");
         long responseByteCount = RequireLong(props["responseByteCount"], sourcePath, $"{jsonPath}.responseByteCount");
 
+        JsonElement metadataRequestElement = props["metadataRequest"];
+        RasterSourceMetadataRequest? metadataRequest = metadataRequestElement.ValueKind == JsonValueKind.Null
+            ? null
+            : ParseMetadataRequest(metadataRequestElement, sourcePath, $"{jsonPath}.metadataRequest");
+
         return new RasterSourceAcquisition(
-            redactedRequestUri, statusCode, contentType, contentDispositionFileName, archiveEntryNames, referenceSource, responseByteCount);
+            redactedRequestUri, statusCode, contentType, contentDispositionFileName, archiveEntryNames, referenceSource,
+            responseByteCount, metadataRequest);
+    }
+
+    private static RasterSourceMetadataRequest ParseMetadataRequest(JsonElement obj, string sourcePath, string jsonPath)
+    {
+        RequireObject(obj, sourcePath, jsonPath);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, sourcePath, jsonPath,
+            [
+                "redactedRequestUri", "statusCode", "contentType", "contentDispositionFileName", "responseByteCount",
+                "projectedCoordinateSystemCode", "citation", "rasterType", "imageWidth", "imageLength",
+            ]);
+
+        string redactedRequestUri = RequireString(props["redactedRequestUri"], sourcePath, $"{jsonPath}.redactedRequestUri");
+        int statusCode = RequireInt(props["statusCode"], sourcePath, $"{jsonPath}.statusCode");
+        string? contentType = RequireStringOrNull(props["contentType"], sourcePath, $"{jsonPath}.contentType");
+        string? contentDispositionFileName = RequireStringOrNull(props["contentDispositionFileName"], sourcePath, $"{jsonPath}.contentDispositionFileName");
+        long responseByteCount = RequireLong(props["responseByteCount"], sourcePath, $"{jsonPath}.responseByteCount");
+        int projectedCoordinateSystemCode = RequireInt(props["projectedCoordinateSystemCode"], sourcePath, $"{jsonPath}.projectedCoordinateSystemCode");
+        string? citation = RequireStringOrNull(props["citation"], sourcePath, $"{jsonPath}.citation");
+        string rasterType = RequireString(props["rasterType"], sourcePath, $"{jsonPath}.rasterType");
+        long imageWidth = RequireLong(props["imageWidth"], sourcePath, $"{jsonPath}.imageWidth");
+        long imageLength = RequireLong(props["imageLength"], sourcePath, $"{jsonPath}.imageLength");
+
+        return new RasterSourceMetadataRequest(
+            redactedRequestUri, statusCode, contentType, contentDispositionFileName, responseByteCount,
+            projectedCoordinateSystemCode, citation, rasterType, imageWidth, imageLength);
     }
 
     // ---- low-level JSON value helpers ------------------------------------------------------------------

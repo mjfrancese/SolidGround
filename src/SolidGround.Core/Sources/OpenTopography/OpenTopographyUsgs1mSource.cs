@@ -21,6 +21,94 @@ public enum OpenTopographyReferenceSource
 
     /// <summary>An .aux.xml entry's &lt;SRS&gt; element supplied the WKT text.</summary>
     AuxXmlSidecar,
+
+    /// <summary>
+    /// The horizontal reference was synthesized from the GeoKeys of a second, otherwise identical request
+    /// with <c>outputFormat=GTiff</c>, because the data response itself (a bare AAIGrid body) carried no
+    /// <c>.prj</c> or <c>.aux.xml</c> sidecar. See
+    /// docs/architecture/opentopography-usgs1m-source.md's "Two-request contract, verified 2026-09-19" and
+    /// "GeoKey to WKT synthesis" sections.
+    /// </summary>
+    GeoTiffGeoKeys,
+}
+
+/// <summary>
+/// Evidence about the GeoTIFF metadata response requested -- an otherwise identical request with
+/// <c>outputFormat=GTiff</c> -- to recover a bare AAIGrid response's coordinate reference metadata from its
+/// GeoKeys. Present only when the acquisition's <see cref="OpenTopographyResponseEvidence.ReferenceSource"/>
+/// is <see cref="OpenTopographyReferenceSource.GeoTiffGeoKeys"/>. Every string here is already redacted, the
+/// same way every string on <see cref="OpenTopographyResponseEvidence"/> itself is. See
+/// docs/architecture/opentopography-usgs1m-source.md's "Two-request contract, verified 2026-09-19" section.
+/// </summary>
+public sealed record OpenTopographyMetadataRequestEvidence
+{
+    public OpenTopographyMetadataRequestEvidence(
+        string redactedRequestUri,
+        HttpStatusCode statusCode,
+        string? contentType,
+        string? contentDispositionFileName,
+        long responseByteCount,
+        int projectedCoordinateSystemCode,
+        string? citation,
+        string rasterType,
+        long imageWidth,
+        long imageLength)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(redactedRequestUri);
+        if (responseByteCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(responseByteCount), responseByteCount, "Response byte count cannot be negative.");
+        }
+
+        if (rasterType is not ("PixelIsArea" or "PixelIsPoint"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(rasterType), rasterType, "Raster type must be \"PixelIsArea\" or \"PixelIsPoint\".");
+        }
+
+        if (imageWidth <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(imageWidth), imageWidth, "Image width must be positive.");
+        }
+
+        if (imageLength <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(imageLength), imageLength, "Image length must be positive.");
+        }
+
+        RedactedRequestUri = redactedRequestUri;
+        StatusCode = statusCode;
+        ContentType = contentType;
+        ContentDispositionFileName = contentDispositionFileName;
+        ResponseByteCount = responseByteCount;
+        ProjectedCoordinateSystemCode = projectedCoordinateSystemCode;
+        Citation = citation;
+        RasterType = rasterType;
+        ImageWidth = imageWidth;
+        ImageLength = imageLength;
+    }
+
+    /// <summary>The metadata request's URI with its "API_Key" query parameter redacted. Never blank.</summary>
+    public string RedactedRequestUri { get; }
+
+    public HttpStatusCode StatusCode { get; }
+    public string? ContentType { get; }
+    public string? ContentDispositionFileName { get; }
+    public long ResponseByteCount { get; }
+
+    /// <summary>GeoKey 3072 (ProjectedCSTypeGeoKey): the EPSG projected coordinate system code the GeoTIFF metadata declared.</summary>
+    public int ProjectedCoordinateSystemCode { get; }
+
+    /// <summary>GeoKey 1026 (GTCitationGeoKey), redacted, when the GeoTIFF metadata carried one.</summary>
+    public string? Citation { get; }
+
+    /// <summary>GeoKey 1025 (GTRasterTypeGeoKey), rendered as <c>"PixelIsArea"</c> or <c>"PixelIsPoint"</c>.</summary>
+    public string RasterType { get; }
+
+    /// <summary>Tag 256 (ImageWidth) from the GeoTIFF metadata.</summary>
+    public long ImageWidth { get; }
+
+    /// <summary>Tag 257 (ImageLength) from the GeoTIFF metadata.</summary>
+    public long ImageLength { get; }
 }
 
 /// <summary>
@@ -37,7 +125,10 @@ public sealed record OpenTopographyResponseEvidence
         IReadOnlyList<string> archiveEntryNames,
         OpenTopographyReferenceSource referenceSource,
         string wellKnownText,
-        long responseByteCount)
+        long responseByteCount,
+        ReferenceOrigin horizontalReferenceOrigin,
+        ReferenceOrigin verticalReferenceOrigin,
+        OpenTopographyMetadataRequestEvidence? metadataRequest)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(redactedRequestUri);
         ArgumentNullException.ThrowIfNull(archiveEntryNames);
@@ -52,6 +143,16 @@ public sealed record OpenTopographyResponseEvidence
             throw new ArgumentOutOfRangeException(nameof(responseByteCount), responseByteCount, "Response byte count cannot be negative.");
         }
 
+        if (!Enum.IsDefined(horizontalReferenceOrigin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(horizontalReferenceOrigin), horizontalReferenceOrigin, "Unsupported reference origin kind.");
+        }
+
+        if (!Enum.IsDefined(verticalReferenceOrigin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(verticalReferenceOrigin), verticalReferenceOrigin, "Unsupported reference origin kind.");
+        }
+
         RedactedRequestUri = redactedRequestUri;
         StatusCode = statusCode;
         ContentType = contentType;
@@ -60,6 +161,9 @@ public sealed record OpenTopographyResponseEvidence
         ReferenceSource = referenceSource;
         WellKnownText = wellKnownText;
         ResponseByteCount = responseByteCount;
+        HorizontalReferenceOrigin = horizontalReferenceOrigin;
+        VerticalReferenceOrigin = verticalReferenceOrigin;
+        MetadataRequest = metadataRequest;
     }
 
     public string RedactedRequestUri { get; }
@@ -70,6 +174,30 @@ public sealed record OpenTopographyResponseEvidence
     public OpenTopographyReferenceSource ReferenceSource { get; }
     public string WellKnownText { get; }
     public long ResponseByteCount { get; }
+
+    /// <summary>
+    /// Where the horizontal reference actually came from: the data response itself
+    /// (<see cref="ReferenceOrigin.SourceResponse"/>, for a zip archive's <c>.prj</c> or <c>.aux.xml</c>
+    /// sidecar) or a separate metadata response for an identical request
+    /// (<see cref="ReferenceOrigin.SourceMetadataResponse"/>, for GeoTIFF GeoKeys).
+    /// </summary>
+    public ReferenceOrigin HorizontalReferenceOrigin { get; }
+
+    /// <summary>
+    /// Where the vertical reference actually came from. This source only ever produces
+    /// <see cref="ReferenceOrigin.SourceResponse"/> (carried by a <c>.prj</c> or <c>.aux.xml</c> sidecar) or
+    /// <see cref="ReferenceOrigin.DatasetDocumentation"/> (declared from
+    /// <see cref="OpenTopographyUsgs1mSourceOptions.DeclaredVerticalReference"/> because neither USGS 1 m
+    /// response carries one): see docs/architecture/opentopography-usgs1m-source.md's "Declared vertical
+    /// reference" section.
+    /// </summary>
+    public ReferenceOrigin VerticalReferenceOrigin { get; }
+
+    /// <summary>
+    /// Evidence about the GeoTIFF metadata request, present only when <see cref="ReferenceSource"/> is
+    /// <see cref="OpenTopographyReferenceSource.GeoTiffGeoKeys"/>; null for every single-request path.
+    /// </summary>
+    public OpenTopographyMetadataRequestEvidence? MetadataRequest { get; }
 }
 
 /// <summary>Couples a successful OpenTopography acquisition with the evidence used to interpret its response.</summary>
@@ -89,23 +217,48 @@ public sealed record OpenTopographyUsgs1mAcquisition
 /// Acquires USGS 1 meter bare-earth elevation data from OpenTopography's <c>usgsdem</c> endpoint as an
 /// AAIGrid response. The endpoint accepts the API key only as the "API_Key" query parameter (there is no
 /// header transport), so the key must travel in the request URI; every URI surfaced by this type outside
-/// the single outgoing request is redacted through <see cref="OpenTopographyRedaction.RedactUri(Uri)"/>,
-/// which is the only form safe to log or display.
+/// the outgoing request(s) is redacted through <see cref="OpenTopographyRedaction.RedactUri(Uri)"/>, which
+/// is the only form safe to log or display.
 /// </summary>
 /// <remarks>
 /// This source preserves whatever horizontal and vertical reference metadata the response actually
-/// carries and fails with <see cref="OpenTopographySourceMetadataException"/> when it carries none, rather
-/// than assuming the UTM/NAD83/NAVD88 metadata documented for the underlying point-cloud collections. It
-/// never retries with a different dataset or output format, and it never sends more than one HTTP request
-/// per call, in any failure path.
+/// carries. When the response already carries its own metadata (a zip archive with a <c>.prj</c> or
+/// <c>.aux.xml</c> sidecar), this source sends exactly one HTTP request, with origins
+/// <see cref="ReferenceOrigin.SourceResponse"/>/<see cref="ReferenceOrigin.SourceResponse"/>. USGS 1 m's own
+/// response has been observed, 2026-09-19, to carry no such sidecar: it returns a bare AAIGrid text body
+/// instead. For that shape, this source sends a second, otherwise identical request with
+/// <c>outputFormat=GTiff</c> and reads only that response's TIFF directory and GeoKeys -- never a pixel,
+/// never a decompression -- to recover the horizontal reference and to verify the two responses describe
+/// the identical grid, then declares the vertical reference from the dataset's own published documentation
+/// (origins <see cref="ReferenceOrigin.SourceMetadataResponse"/>/<see cref="ReferenceOrigin.DatasetDocumentation"/>).
+/// See docs/architecture/opentopography-usgs1m-source.md's "Two-request contract, verified 2026-09-19" and
+/// "GeoKey to WKT synthesis" sections. Every acquisition therefore costs either one or two API calls against
+/// the configured key's daily quota. This source never retries with a different dataset or output format,
+/// and it never sends more than the two requests documented above, in any failure path.
 /// </remarks>
 public sealed class OpenTopographyUsgs1mSource : IElevationSource
 {
     /// <summary>The <c>datasetName</c> value this source always requests.</summary>
     public const string DatasetName = "USGS1m";
 
-    /// <summary>The <c>outputFormat</c> value this source always requests. OpenTopography's default is GTiff, so this must always be sent explicitly.</summary>
+    /// <summary>The <c>outputFormat</c> value the data request always sends. OpenTopography's default is GTiff, so this must always be sent explicitly.</summary>
     public const string OutputFormat = "AAIGrid";
+
+    /// <summary>
+    /// The <c>outputFormat</c> value the second, metadata-only request sends when the data response carried
+    /// no reference metadata of its own. See docs/architecture/opentopography-usgs1m-source.md's
+    /// "Two-request contract, verified 2026-09-19" section.
+    /// </summary>
+    public const string MetadataOutputFormat = "GTiff";
+
+    /// <summary>
+    /// The maximum allowed disagreement, in the raster's own horizontal units, between the AAIGrid data
+    /// response's lower-left corner and the one derived from the GeoTIFF metadata response's tiepoint and
+    /// pixel scale. See docs/architecture/opentopography-usgs1m-source.md's "Two-request contract, verified
+    /// 2026-09-19" section for why a small tolerance -- rather than exact equality -- is required here even
+    /// though every other same-grid check compares its values exactly.
+    /// </summary>
+    public const double GridAgreementTolerance = 1e-6;
 
     private const string DatasetNameParameter = "datasetName";
     private const string SouthParameter = "south";
@@ -118,6 +271,8 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
 
     private static readonly byte[] ZipSignature = [0x50, 0x4B, 0x03, 0x04];
     private static readonly byte[] GzipSignature = [0x1F, 0x8B];
+    private static readonly byte[] LittleEndianTiffSignature = [0x49, 0x49, 0x2A, 0x00];
+    private static readonly byte[] BigEndianTiffSignature = [0x4D, 0x4D, 0x00, 0x2A];
 
     private readonly HttpClient httpClient;
     private readonly IOpenTopographyApiKeyProvider apiKeyProvider;
@@ -145,7 +300,10 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
     }
 
     /// <summary>
-    /// Acquires elevation data along with the response evidence used to interpret it.
+    /// Acquires elevation data along with the response evidence used to interpret it. Sends one HTTP request
+    /// when the response already carries its own reference metadata, or two -- the second requesting
+    /// <see cref="MetadataOutputFormat"/> for the identical area -- when it does not; see this type's own
+    /// remarks.
     /// </summary>
     /// <exception cref="OpenTopographyRequestValidationException">
     /// The area of interest is not a WGS 84 bounding box, its bounds are invalid, its approximate area
@@ -155,9 +313,9 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
     /// <exception cref="OpenTopographyQuotaException">OpenTopography appears to have reported a rate limit or quota condition.</exception>
     /// <exception cref="OpenTopographyNoDataException">OpenTopography reported no data for the requested area.</exception>
     /// <exception cref="OpenTopographyServerException">OpenTopography reported a server-side error.</exception>
-    /// <exception cref="OpenTopographyNetworkException">A transport-level failure or timeout occurred.</exception>
-    /// <exception cref="OpenTopographyUnexpectedResponseException">The response could not be classified.</exception>
-    /// <exception cref="OpenTopographySourceMetadataException">The response carried no usable coordinate reference metadata.</exception>
+    /// <exception cref="OpenTopographyNetworkException">A transport-level failure or timeout occurred, on either request.</exception>
+    /// <exception cref="OpenTopographyUnexpectedResponseException">A response could not be classified.</exception>
+    /// <exception cref="OpenTopographySourceMetadataException">Neither response carried usable, mutually agreeing coordinate reference metadata.</exception>
     public async ValueTask<OpenTopographyUsgs1mAcquisition> AcquireDetailedAsync(
         ElevationSourceRequest request,
         CancellationToken cancellationToken = default)
@@ -179,7 +337,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
         {
             throw new OpenTopographyRequestValidationException(
                 "The requested bounding box is invalid: south and west bounds must be less than north and east bounds.",
-                OpenTopographyRedaction.RedactUri(BuildRequestUri(box, apiKey: null)));
+                OpenTopographyRedaction.RedactUri(BuildRequestUri(box, apiKey: null, OutputFormat)));
         }
 
         double approximateAreaSquareKilometers = ApproximateAreaSquareKilometers(box);
@@ -191,7 +349,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                 $"The requested area is approximately {observedArea} square kilometers, which exceeds the configured " +
                 $"limit of {maximumArea} square kilometers (USGS1m's documented per-request limit is 250 square " +
                 "kilometers). Request a smaller area.",
-                OpenTopographyRedaction.RedactUri(BuildRequestUri(box, apiKey: null)));
+                OpenTopographyRedaction.RedactUri(BuildRequestUri(box, apiKey: null, OutputFormat)));
         }
 
         OpenTopographyApiKey? apiKey = apiKeyProvider.GetApiKey();
@@ -200,20 +358,65 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
             throw new OpenTopographyAuthorizationException(
                 "No OpenTopography API key is configured. Set OPENTOPOGRAPHY_API_KEY in the process environment, " +
                 "or supply an IOpenTopographyApiKeyProvider that returns one, before requesting this source.",
-                OpenTopographyRedaction.RedactUri(BuildRequestUri(box, apiKey: null)),
+                OpenTopographyRedaction.RedactUri(BuildRequestUri(box, apiKey: null, OutputFormat)),
                 OpenTopographyAuthorizationFailure.ApiKeyMissing,
                 statusCode: null,
                 serverMessage: null);
         }
 
-        Uri requestUri = BuildRequestUri(box, apiKey);
+        Uri requestUri = BuildRequestUri(box, apiKey, OutputFormat);
         string redactedRequestUri = OpenTopographyRedaction.RedactUri(requestUri);
 
-        HttpResponseMessage? response = null;
+        HttpResponseMessage response = await SendGetAsync(requestUri, redactedRequestUri, apiKey, cancellationToken).ConfigureAwait(false);
         try
         {
-            response = await httpClient.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            return await HandleResponseAsync(response, redactedRequestUri, apiKey, cancellationToken).ConfigureAwait(false);
+            return await HandleResponseAsync(response, redactedRequestUri, apiKey, box, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            response.Dispose();
+        }
+    }
+
+    private Uri BuildRequestUri(Wgs84BoundingBoxAoi box, OpenTopographyApiKey? apiKey, string outputFormat)
+    {
+        var builder = new StringBuilder(options.EndpointUri.ToString());
+        builder.Append('?').Append(DatasetNameParameter).Append('=').Append(DatasetName);
+        builder.Append('&').Append(SouthParameter).Append('=').Append(FormatCoordinate(box.SouthLatitude));
+        builder.Append('&').Append(NorthParameter).Append('=').Append(FormatCoordinate(box.NorthLatitude));
+        builder.Append('&').Append(WestParameter).Append('=').Append(FormatCoordinate(box.WestLongitude));
+        builder.Append('&').Append(EastParameter).Append('=').Append(FormatCoordinate(box.EastLongitude));
+        builder.Append('&').Append(OutputFormatParameter).Append('=').Append(outputFormat);
+        if (apiKey is not null)
+        {
+            builder.Append('&').Append(ApiKeyParameter).Append('=').Append(Uri.EscapeDataString(apiKey.RawValue));
+        }
+
+        return new Uri(builder.ToString(), UriKind.Absolute);
+    }
+
+    private static string FormatCoordinate(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+
+    private static double ApproximateAreaSquareKilometers(Wgs84BoundingBoxAoi box)
+    {
+        double meanLatitudeRadians = double.DegreesToRadians((box.SouthLatitude + box.NorthLatitude) / 2d);
+        double widthKilometers = (box.EastLongitude - box.WestLongitude) * KilometersPerDegreeOfLatitude * Math.Cos(meanLatitudeRadians);
+        double heightKilometers = (box.NorthLatitude - box.SouthLatitude) * KilometersPerDegreeOfLatitude;
+        return Math.Abs(widthKilometers * heightKilometers);
+    }
+
+    /// <summary>
+    /// Sends one GET request and translates a transport-level failure (a connection error or a timeout) into
+    /// <see cref="OpenTopographyNetworkException"/>, exactly the same way regardless of which of this
+    /// source's (at most two) requests it is sending. Never disposes the returned response on the success
+    /// path; the caller owns its lifetime from there.
+    /// </summary>
+    private async ValueTask<HttpResponseMessage> SendGetAsync(
+        Uri requestUri, string redactedRequestUri, OpenTopographyApiKey apiKey, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await httpClient.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -263,40 +466,31 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                 redactedRequestUri,
                 new IOException(redactedDetail));
         }
-        finally
-        {
-            response?.Dispose();
-        }
-    }
-
-    private Uri BuildRequestUri(Wgs84BoundingBoxAoi box, OpenTopographyApiKey? apiKey)
-    {
-        var builder = new StringBuilder(options.EndpointUri.ToString());
-        builder.Append('?').Append(DatasetNameParameter).Append('=').Append(DatasetName);
-        builder.Append('&').Append(SouthParameter).Append('=').Append(FormatCoordinate(box.SouthLatitude));
-        builder.Append('&').Append(NorthParameter).Append('=').Append(FormatCoordinate(box.NorthLatitude));
-        builder.Append('&').Append(WestParameter).Append('=').Append(FormatCoordinate(box.WestLongitude));
-        builder.Append('&').Append(EastParameter).Append('=').Append(FormatCoordinate(box.EastLongitude));
-        builder.Append('&').Append(OutputFormatParameter).Append('=').Append(OutputFormat);
-        if (apiKey is not null)
-        {
-            builder.Append('&').Append(ApiKeyParameter).Append('=').Append(Uri.EscapeDataString(apiKey.RawValue));
-        }
-
-        return new Uri(builder.ToString(), UriKind.Absolute);
-    }
-
-    private static string FormatCoordinate(double value) => value.ToString("R", CultureInfo.InvariantCulture);
-
-    private static double ApproximateAreaSquareKilometers(Wgs84BoundingBoxAoi box)
-    {
-        double meanLatitudeRadians = double.DegreesToRadians((box.SouthLatitude + box.NorthLatitude) / 2d);
-        double widthKilometers = (box.EastLongitude - box.WestLongitude) * KilometersPerDegreeOfLatitude * Math.Cos(meanLatitudeRadians);
-        double heightKilometers = (box.NorthLatitude - box.SouthLatitude) * KilometersPerDegreeOfLatitude;
-        return Math.Abs(widthKilometers * heightKilometers);
     }
 
     private async ValueTask<OpenTopographyUsgs1mAcquisition> HandleResponseAsync(
+        HttpResponseMessage response,
+        string redactedRequestUri,
+        OpenTopographyApiKey apiKey,
+        Wgs84BoundingBoxAoi box,
+        CancellationToken cancellationToken)
+    {
+        if (response.StatusCode == HttpStatusCode.OK)
+        {
+            return await HandleSuccessAsync(response, redactedRequestUri, apiKey, box, cancellationToken).ConfigureAwait(false);
+        }
+
+        throw await ClassifyNonSuccessResponseAsync(response, redactedRequestUri, apiKey, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Classifies any non-200 response into the matching <see cref="OpenTopographyException"/>, without
+    /// throwing it, so both the data request and the metadata request can reuse the identical classification
+    /// logic while attaching their own respective redacted request URI. Shared by
+    /// <see cref="HandleResponseAsync"/> (the data request) and <see cref="HandleBareAaiGridAsync"/> (the
+    /// metadata request).
+    /// </summary>
+    private async ValueTask<OpenTopographyException> ClassifyNonSuccessResponseAsync(
         HttpResponseMessage response,
         string redactedRequestUri,
         OpenTopographyApiKey apiKey,
@@ -304,14 +498,9 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
     {
         HttpStatusCode statusCode = response.StatusCode;
 
-        if (statusCode == HttpStatusCode.OK)
-        {
-            return await HandleSuccessAsync(response, redactedRequestUri, apiKey, cancellationToken).ConfigureAwait(false);
-        }
-
         if (statusCode == HttpStatusCode.NoContent)
         {
-            throw new OpenTopographyNoDataException(
+            return new OpenTopographyNoDataException(
                 "OpenTopography reported no elevation data for the requested area (HTTP 204 No Data). " +
                 "Choose a different area, or confirm the dataset covers this location.",
                 redactedRequestUri,
@@ -330,7 +519,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
         if (isQuotaEligibleStatus && (statusCode == HttpStatusCode.TooManyRequests || MentionsQuota(rawBodyText)))
         {
             string statusText = ((int)statusCode).ToString(CultureInfo.InvariantCulture);
-            throw new OpenTopographyQuotaException(
+            return new OpenTopographyQuotaException(
                 $"OpenTopography reported what appears to be a rate limit or quota condition (HTTP {statusText}). " +
                 "OpenTopography does not document a rate-limit response shape, so this classification is best effort. " +
                 $"Wait and retry later, or reduce request frequency. Server message: {serverMessage}",
@@ -349,12 +538,12 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                   $"authorization or an enterprise API key. Server message: {serverMessage}"
                 : $"OpenTopography rejected the configured API key (HTTP 401). Verify OPENTOPOGRAPHY_API_KEY is current " +
                   $"and correctly registered. Server message: {serverMessage}";
-            throw new OpenTopographyAuthorizationException(message, redactedRequestUri, failure, statusCode, serverMessage);
+            return new OpenTopographyAuthorizationException(message, redactedRequestUri, failure, statusCode, serverMessage);
         }
 
         if (statusCode == HttpStatusCode.Forbidden)
         {
-            throw new OpenTopographyAuthorizationException(
+            return new OpenTopographyAuthorizationException(
                 $"OpenTopography denied access to the requested resource (HTTP 403). USGS 1 m access requires academic " +
                 $"authorization or an enterprise API key. Server message: {serverMessage}",
                 redactedRequestUri,
@@ -365,7 +554,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
 
         if (statusCode == HttpStatusCode.BadRequest)
         {
-            throw new OpenTopographyRequestValidationException(
+            return new OpenTopographyRequestValidationException(
                 $"OpenTopography rejected the request as malformed (HTTP 400). Review the requested area and " +
                 $"parameters. Server message: {serverMessage}",
                 redactedRequestUri,
@@ -377,7 +566,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
         if (statusCodeValue is >= 500 and <= 599)
         {
             string statusText = statusCodeValue.ToString(CultureInfo.InvariantCulture);
-            throw new OpenTopographyServerException(
+            return new OpenTopographyServerException(
                 $"OpenTopography reported a server-side error (HTTP {statusText}). This is not a problem with the " +
                 $"request; retry later. Server message: {serverMessage}",
                 redactedRequestUri,
@@ -386,7 +575,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
         }
 
         string undocumentedStatusText = statusCodeValue.ToString(CultureInfo.InvariantCulture);
-        throw new OpenTopographyUnexpectedResponseException(
+        return new OpenTopographyUnexpectedResponseException(
             $"OpenTopography returned an undocumented status code (HTTP {undocumentedStatusText}) not described by " +
             $"its OpenAPI definition. Server message: {serverMessage}",
             redactedRequestUri,
@@ -398,6 +587,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
         HttpResponseMessage response,
         string redactedRequestUri,
         OpenTopographyApiKey apiKey,
+        Wgs84BoundingBoxAoi box,
         CancellationToken cancellationToken)
     {
         string? contentType = response.Content.Headers.ContentType?.ToString();
@@ -433,14 +623,9 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
         string firstToken = FirstToken(text);
         if (firstToken.Equals("ncols", StringComparison.OrdinalIgnoreCase))
         {
-            string observedContentType = OpenTopographyRedaction.RedactText(contentType ?? "(none)", apiKey);
-            string observedFileName = OpenTopographyRedaction.RedactText(contentDispositionFileName ?? "(none)", apiKey);
-            throw new OpenTopographySourceMetadataException(
-                $"OpenTopography returned a bare AAIGrid body with no coordinate reference metadata " +
-                $"(content type '{observedContentType}', filename '{observedFileName}'). SolidGround requires the " +
-                "response to carry its own reference metadata and will not assume one; request a packaging that " +
-                "includes a .prj or .aux.xml sidecar.",
-                redactedRequestUri);
+            return await HandleBareAaiGridAsync(
+                text, box, apiKey, redactedRequestUri, response.StatusCode, contentType, contentDispositionFileName,
+                body.LongLength, cancellationToken).ConfigureAwait(false);
         }
 
         string snippet = CollapseWhitespace(StripTags(OpenTopographyRedaction.RedactText(text, apiKey)));
@@ -452,6 +637,331 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
             response.StatusCode,
             snippet);
     }
+
+    /// <summary>
+    /// Handles a bare AAIGrid data response that carried no reference metadata of its own (the observed USGS
+    /// 1 m behaviour): reads only the header to learn the grid's shape and anchor, requests
+    /// <see cref="MetadataOutputFormat"/> for the identical area, reads only that response's TIFF directory
+    /// and GeoKeys, verifies the two responses describe the identical grid, synthesizes WKT from the
+    /// GeoKeys' EPSG code and the declared vertical reference, and finally parses the original AAIGrid text
+    /// with that reference. See docs/architecture/opentopography-usgs1m-source.md's "Two-request contract,
+    /// verified 2026-09-19" and "GeoKey to WKT synthesis" sections.
+    /// </summary>
+    private async ValueTask<OpenTopographyUsgs1mAcquisition> HandleBareAaiGridAsync(
+        string text,
+        Wgs84BoundingBoxAoi box,
+        OpenTopographyApiKey apiKey,
+        string redactedRequestUri,
+        HttpStatusCode statusCode,
+        string? contentType,
+        string? contentDispositionFileName,
+        long responseByteCount,
+        CancellationToken cancellationToken)
+    {
+        AaiGridHeader header;
+        try
+        {
+            header = AaiGridParser.ReadHeader(new StringReader(text));
+        }
+        catch (FormatException ex)
+        {
+            string redactedDetail = OpenTopographyRedaction.RedactText(ex.Message, apiKey);
+            throw new OpenTopographySourceMetadataException(
+                $"OpenTopography's AAIGrid response header could not be parsed: {redactedDetail}",
+                redactedRequestUri,
+                new FormatException(redactedDetail));
+        }
+
+        Uri metadataRequestUri = BuildRequestUri(box, apiKey, MetadataOutputFormat);
+        string redactedMetadataRequestUri = OpenTopographyRedaction.RedactUri(metadataRequestUri);
+
+        HttpResponseMessage metadataResponse = await SendGetAsync(metadataRequestUri, redactedMetadataRequestUri, apiKey, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (metadataResponse.StatusCode != HttpStatusCode.OK)
+            {
+                throw await ClassifyNonSuccessResponseAsync(metadataResponse, redactedMetadataRequestUri, apiKey, cancellationToken).ConfigureAwait(false);
+            }
+
+            string? metadataContentType = metadataResponse.Content.Headers.ContentType?.ToString();
+            string? metadataContentDispositionFileName = metadataResponse.Content.Headers.ContentDisposition?.FileName;
+
+            (byte[] metadataBody, bool metadataBodyTruncated) = await ReadBodyAsync(metadataResponse, cancellationToken).ConfigureAwait(false);
+            if (metadataBodyTruncated)
+            {
+                throw new OpenTopographyUnexpectedResponseException(
+                    ByteLimitExceededMessage(),
+                    redactedMetadataRequestUri,
+                    metadataResponse.StatusCode,
+                    null);
+            }
+
+            if (!StartsWith(metadataBody, LittleEndianTiffSignature) && !StartsWith(metadataBody, BigEndianTiffSignature))
+            {
+                throw new OpenTopographyUnexpectedResponseException(
+                    "OpenTopography's metadata request (outputFormat=GTiff) did not return a response this source " +
+                    "recognizes as GeoTIFF; expected a GeoTIFF metadata response.",
+                    redactedMetadataRequestUri,
+                    metadataResponse.StatusCode,
+                    null);
+            }
+
+            GeoTiffMetadata metadata;
+            try
+            {
+                metadata = GeoTiffMetadataReader.Read(metadataBody);
+            }
+            catch (FormatException ex)
+            {
+                string redactedDetail = OpenTopographyRedaction.RedactText(ex.Message, apiKey);
+                throw new OpenTopographySourceMetadataException(
+                    $"OpenTopography's GeoTIFF metadata response could not be parsed: {redactedDetail}",
+                    redactedMetadataRequestUri,
+                    new FormatException(redactedDetail));
+            }
+
+            ValidateGeoTiffMetadata(metadata, redactedMetadataRequestUri, apiKey);
+            EnsureGridsAgree(header, metadata, redactedMetadataRequestUri);
+
+            EnsureOptionalIdentifierDoesNotEchoApiKey("GeoTIFF citation (GeoKey 1026)", metadata.Citation, apiKey, redactedMetadataRequestUri);
+            EnsureOptionalIdentifierDoesNotEchoApiKey("GeoTIFF geographic citation (GeoKey 2049)", metadata.GeographicCitation, apiKey, redactedMetadataRequestUri);
+            EnsureOptionalIdentifierDoesNotEchoApiKey("GeoTIFF projected citation (GeoKey 3073)", metadata.ProjectedCitation, apiKey, redactedMetadataRequestUri);
+
+            int epsgCode = metadata.ProjectedCoordinateSystemCode!.Value;
+            string wkt = NorthAmericanUtmWellKnownText.Create(epsgCode, options.DeclaredVerticalReference);
+
+            WellKnownTextReference parsedReference;
+            try
+            {
+                parsedReference = WellKnownTextReferenceParser.Parse(wkt);
+            }
+            catch (FormatException ex)
+            {
+                // NorthAmericanUtmWellKnownText.Create is only ever supposed to produce WKT that
+                // WellKnownTextReferenceParser.Parse accepts; reaching this catch is a SolidGround defect,
+                // not a malformed OpenTopography response, but it still must not surface as a raw,
+                // undocumented exception type.
+                throw new OpenTopographySourceMetadataException(
+                    $"SolidGround's synthesized coordinate reference WKT for EPSG:{epsgCode.ToString(CultureInfo.InvariantCulture)} " +
+                    $"could not be parsed: {ex.Message}",
+                    redactedMetadataRequestUri,
+                    ex);
+            }
+
+            ElevationGrid grid;
+            try
+            {
+                grid = AaiGridParser.Parse(new StringReader(text), parsedReference.Horizontal, parsedReference.Vertical!);
+            }
+            catch (FormatException ex)
+            {
+                string redactedDetail = OpenTopographyRedaction.RedactText(ex.Message, apiKey);
+                throw new OpenTopographySourceMetadataException(
+                    $"OpenTopography's AAIGrid response could not be parsed: {redactedDetail}",
+                    redactedRequestUri,
+                    new FormatException(redactedDetail));
+            }
+
+            var acquisition = new ElevationAcquisition(grid, new ElevationSourceMetadata("OpenTopography", DatasetName));
+
+            string? redactedCitation = metadata.Citation is null ? null : OpenTopographyRedaction.RedactText(metadata.Citation, apiKey);
+            var metadataRequestEvidence = new OpenTopographyMetadataRequestEvidence(
+                redactedMetadataRequestUri,
+                metadataResponse.StatusCode,
+                metadataContentType is null ? null : OpenTopographyRedaction.RedactText(metadataContentType, apiKey),
+                metadataContentDispositionFileName is null ? null : OpenTopographyRedaction.RedactText(metadataContentDispositionFileName, apiKey),
+                metadataBody.LongLength,
+                epsgCode,
+                redactedCitation,
+                metadata.RasterType == 2 ? "PixelIsPoint" : "PixelIsArea",
+                metadata.ImageWidth,
+                metadata.ImageLength);
+
+            var evidence = new OpenTopographyResponseEvidence(
+                redactedRequestUri,
+                statusCode,
+                contentType is null ? null : OpenTopographyRedaction.RedactText(contentType, apiKey),
+                contentDispositionFileName is null ? null : OpenTopographyRedaction.RedactText(contentDispositionFileName, apiKey),
+                [],
+                OpenTopographyReferenceSource.GeoTiffGeoKeys,
+                OpenTopographyRedaction.RedactText(wkt, apiKey, maximumLength: int.MaxValue),
+                responseByteCount,
+                ReferenceOrigin.SourceMetadataResponse,
+                ReferenceOrigin.DatasetDocumentation,
+                metadataRequestEvidence);
+
+            return new OpenTopographyUsgs1mAcquisition(acquisition, evidence);
+        }
+        finally
+        {
+            metadataResponse.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Validates that a GeoTIFF metadata response carries every GeoKey and tag SolidGround needs, and that
+    /// each one is a value this source supports. See docs/architecture/opentopography-usgs1m-source.md's
+    /// "GeoKey to WKT synthesis" section for why exactly this set is required.
+    /// </summary>
+    private static void ValidateGeoTiffMetadata(GeoTiffMetadata metadata, string redactedMetadataRequestUri, OpenTopographyApiKey apiKey)
+    {
+        if (metadata.ModelType is not 1)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"GeoTIFF GeoKey 1024 (GTModelTypeGeoKey) is {DescribeNullableUshort(metadata.ModelType)}; " +
+                "SolidGround requires a projected model (1).",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.ProjectedCoordinateSystemCode is not ushort projectedCode)
+        {
+            throw new OpenTopographySourceMetadataException(
+                "GeoTIFF GeoKey 3072 (ProjectedCSTypeGeoKey) is missing; SolidGround requires an EPSG projected " +
+                "coordinate system code.",
+                redactedMetadataRequestUri);
+        }
+
+        if (!NorthAmericanUtmWellKnownText.IsSupported(projectedCode))
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"GeoTIFF GeoKey 3072 (ProjectedCSTypeGeoKey) is EPSG:{projectedCode.ToString(CultureInfo.InvariantCulture)}, " +
+                "which SolidGround does not support (only NAD83 UTM zones, EPSG:26901-26923, are supported).",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.LinearUnitsCode is ushort linearUnitsCode && linearUnitsCode != 9001)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"GeoTIFF GeoKey 3076 (ProjLinearUnitsGeoKey) is {linearUnitsCode.ToString(CultureInfo.InvariantCulture)}; " +
+                "SolidGround requires metre (9001) or an absent key.",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.RasterType is not (1 or 2))
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"GeoTIFF GeoKey 1025 (GTRasterTypeGeoKey) is {DescribeNullableUshort(metadata.RasterType)}; " +
+                "SolidGround requires PixelIsArea (1) or PixelIsPoint (2).",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.ModelPixelScale is null)
+        {
+            throw new OpenTopographySourceMetadataException(
+                "GeoTIFF tag 33550 (ModelPixelScaleTag) is missing.",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.ModelTiepoint is null)
+        {
+            throw new OpenTopographySourceMetadataException(
+                "GeoTIFF tag 33922 (ModelTiepointTag) is missing.",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.NoDataText is null)
+        {
+            throw new OpenTopographySourceMetadataException(
+                "GeoTIFF tag 42113 (GDAL_NODATA) is missing.",
+                redactedMetadataRequestUri);
+        }
+
+        if (!double.TryParse(metadata.NoDataText, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+        {
+            string redactedNoDataText = OpenTopographyRedaction.RedactText(metadata.NoDataText, apiKey);
+            throw new OpenTopographySourceMetadataException(
+                $"GeoTIFF tag 42113 (GDAL_NODATA) value '{redactedNoDataText}' could not be parsed as an " +
+                "invariant-culture number.",
+                redactedMetadataRequestUri);
+        }
+    }
+
+    /// <summary>
+    /// Verifies the AAIGrid data response and the GeoTIFF metadata response describe the identical grid:
+    /// matching dimensions, matching cell size, matching NODATA sentinel, and a lower-left corner that
+    /// agrees within <see cref="GridAgreementTolerance"/>. Assumes <see cref="ValidateGeoTiffMetadata"/> has
+    /// already confirmed <paramref name="metadata"/> carries every value this method reads. See
+    /// docs/architecture/opentopography-usgs1m-source.md's "Two-request contract, verified 2026-09-19"
+    /// section for the corner-derivation formula.
+    /// </summary>
+    private static void EnsureGridsAgree(AaiGridHeader header, GeoTiffMetadata metadata, string redactedMetadataRequestUri)
+    {
+        if (metadata.ImageWidth != (uint)header.ColumnCount)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's ImageWidth ({metadata.ImageWidth.ToString(CultureInfo.InvariantCulture)}) " +
+                $"does not match the AAIGrid response's ncols ({header.ColumnCount.ToString(CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+
+        if (metadata.ImageLength != (uint)header.RowCount)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's ImageLength ({metadata.ImageLength.ToString(CultureInfo.InvariantCulture)}) " +
+                $"does not match the AAIGrid response's nrows ({header.RowCount.ToString(CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+
+        (double scaleX, double scaleY, _) = metadata.ModelPixelScale!.Value;
+        if (scaleX != header.CellSize)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's ModelPixelScale X ({scaleX.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"does not match the AAIGrid response's cellsize ({header.CellSize.ToString("R", CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+
+        if (scaleY != header.CellSize)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's ModelPixelScale Y ({scaleY.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"does not match the AAIGrid response's cellsize ({header.CellSize.ToString("R", CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+
+        (double tiepointI, double tiepointJ, _, double tiepointX, double tiepointY, _) = metadata.ModelTiepoint!.Value;
+        bool pixelIsPoint = metadata.RasterType == 2;
+        double halfCellShiftX = pixelIsPoint ? scaleX / 2d : 0d;
+        double halfCellShiftY = pixelIsPoint ? scaleY / 2d : 0d;
+        double upperLeftX = tiepointX - (tiepointI * scaleX) - halfCellShiftX;
+        double upperLeftY = tiepointY + (tiepointJ * scaleY) + halfCellShiftY;
+        double geoTiffLowerLeftX = upperLeftX;
+        double geoTiffLowerLeftY = upperLeftY - (metadata.ImageLength * scaleY);
+
+        double aaiHalfCellShift = header.AnchorConvention == GridAnchorConvention.CellCenter ? header.CellSize / 2d : 0d;
+        double aaiGridLowerLeftX = header.AnchorX - aaiHalfCellShift;
+        double aaiGridLowerLeftY = header.AnchorY - aaiHalfCellShift;
+
+        if (Math.Abs(geoTiffLowerLeftX - aaiGridLowerLeftX) > GridAgreementTolerance)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's derived lower-left X ({geoTiffLowerLeftX.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"does not agree with the AAIGrid response's lower-left X ({aaiGridLowerLeftX.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"within the configured tolerance ({GridAgreementTolerance.ToString("R", CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+
+        if (Math.Abs(geoTiffLowerLeftY - aaiGridLowerLeftY) > GridAgreementTolerance)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's derived lower-left Y ({geoTiffLowerLeftY.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"does not agree with the AAIGrid response's lower-left Y ({aaiGridLowerLeftY.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"within the configured tolerance ({GridAgreementTolerance.ToString("R", CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+
+        double metadataNoData = double.Parse(metadata.NoDataText!, NumberStyles.Float, CultureInfo.InvariantCulture);
+        if (metadataNoData != header.NoDataValue)
+        {
+            throw new OpenTopographySourceMetadataException(
+                $"The GeoTIFF metadata's GDAL_NODATA ({metadataNoData.ToString("R", CultureInfo.InvariantCulture)}) " +
+                $"does not match the AAIGrid response's NODATA_value ({header.NoDataValue.ToString("R", CultureInfo.InvariantCulture)}).",
+                redactedMetadataRequestUri);
+        }
+    }
+
+    private static string DescribeNullableUshort(ushort? value) =>
+        value is ushort actual ? actual.ToString(CultureInfo.InvariantCulture) : "absent";
 
     private static OpenTopographyUsgs1mAcquisition ParseZipResponse(
         byte[] body,
@@ -620,7 +1130,9 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
             // field it stores must already be redacted; parsing above intentionally used the unredacted
             // wellKnownText, and wellKnownText's redacted copy disables truncation (maximumLength:
             // int.MaxValue) because, unlike a bounded exception message, this evidence is meant to remain a
-            // complete, non-secret record of what the response actually carried.
+            // complete, non-secret record of what the response actually carried. This single-request path
+            // carries its own reference metadata end to end, so both origins are SourceResponse and there is
+            // no metadata request to report.
             var evidence = new OpenTopographyResponseEvidence(
                 redactedRequestUri,
                 statusCode,
@@ -629,7 +1141,10 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                 entryNames,
                 referenceSource,
                 OpenTopographyRedaction.RedactText(wellKnownText, apiKey, maximumLength: int.MaxValue),
-                body.LongLength);
+                body.LongLength,
+                ReferenceOrigin.SourceResponse,
+                ReferenceOrigin.SourceResponse,
+                null);
 
             return new OpenTopographyUsgs1mAcquisition(acquisition, evidence);
         }
@@ -777,6 +1292,15 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                 "key into the acquired elevation data's reference metadata. This cannot be a legitimate coordinate " +
                 "reference system or datum name; if this recurs, investigate why OpenTopography echoed the key back.",
                 redactedRequestUri);
+        }
+    }
+
+    /// <summary>Same as <see cref="EnsureIdentifierDoesNotEchoApiKey"/>, but a no-op when <paramref name="value"/> is null.</summary>
+    private static void EnsureOptionalIdentifierDoesNotEchoApiKey(string fieldLabel, string? value, OpenTopographyApiKey apiKey, string redactedRequestUri)
+    {
+        if (value is not null)
+        {
+            EnsureIdentifierDoesNotEchoApiKey(fieldLabel, value, apiKey, redactedRequestUri);
         }
     }
 

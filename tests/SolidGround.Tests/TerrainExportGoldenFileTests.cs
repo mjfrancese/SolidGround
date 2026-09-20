@@ -244,7 +244,8 @@ public sealed class TerrainExportGoldenFileTests
             cancellationToken);
 
         return TerrainExportPayloadAssembler.Assemble(
-            GoldenSourceMetadata(), fixture.Transform.Definition, fixture.VerticalReference, localFrame, clipResult.Grid, simplification);
+            GoldenSourceMetadata(), fixture.Transform.Definition, fixture.VerticalReference,
+            new ReferenceOrigins(ReferenceOrigin.Operator, ReferenceOrigin.Operator), localFrame, clipResult.Grid, simplification);
     }
 
     /// <summary>
@@ -296,7 +297,8 @@ public sealed class TerrainExportGoldenFileTests
             cancellationToken);
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            GoldenSourceMetadata(), fixture.Transform.Definition, fixture.VerticalReference, localFrame, clipResult.Grid, simplification);
+            GoldenSourceMetadata(), fixture.Transform.Definition, fixture.VerticalReference,
+            new ReferenceOrigins(ReferenceOrigin.Operator, ReferenceOrigin.Operator), localFrame, clipResult.Grid, simplification);
 
         return TerrainExportBundleRenderer.Render(payload, "ExampleSite-real-parcel");
     }

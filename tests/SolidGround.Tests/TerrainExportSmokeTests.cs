@@ -46,6 +46,8 @@ public sealed class TerrainExportSmokeTests
             new ElevationSourceMetadata("OpenTopography", "USGS1m", new CollectionPeriod(new DateOnly(2017, 2, 17), new DateOnly(2017, 2, 27)), "QL2"),
             Transformation(),
             vertical,
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             new LocalCoordinateFrame(new Coordinate3D(10d, 20d, 30d), ProjectedReference(), vertical, LengthUnit.UsSurveyFoot),
             new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
             5,

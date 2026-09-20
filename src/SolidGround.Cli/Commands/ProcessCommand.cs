@@ -92,8 +92,9 @@ internal static class ProcessCommand
             ? ParseLengthUnitValue("vertical-unit", invocation.GetValue("vertical-unit")!)
             : null;
         string? cliGeoid = invocation.GetValue("geoid");
-        VerticalReference verticalReference = VerticalReferenceResolution.Resolve(
+        VerticalReferenceResolution.ResolvedVerticalReference resolvedVertical = VerticalReferenceResolution.Resolve(
             cliVerticalDatum, cliVerticalUnit, cliGeoid, sidecar, parsedPrj.Vertical);
+        VerticalReference verticalReference = resolvedVertical.Reference;
 
         host.StandardOutput.WriteLine($"process: read '{ascPath}'.");
 
@@ -118,11 +119,14 @@ internal static class ProcessCommand
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        ReferenceOrigins referenceOrigins = new(ReferenceOrigin.Operator, resolvedVertical.Origin);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
-                grid, transform, verticalReference, sourceMetadata, aoi, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
+                grid, transform, verticalReference, referenceOrigins, sourceMetadata, aoi, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
             .ConfigureAwait(false);
 
         PrintClipStage(host, "process", verbose, aoi, grid, outcome.ClipResult);
+        FetchCommand.PrintReferenceLine(
+            host, "process", transform.Definition.TargetReference, ReferenceOrigin.Operator, verticalReference, resolvedVertical.Origin);
         host.StandardOutput.WriteLine(
             $"process: simplified to {outcome.Payload.Provenance.RetainedPointCount.ToString(CultureInfo.InvariantCulture)} of " +
             $"{outcome.Payload.Provenance.OriginalPointCount.ToString(CultureInfo.InvariantCulture)} points ({method}).");

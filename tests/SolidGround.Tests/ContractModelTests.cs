@@ -203,6 +203,8 @@ public sealed class ContractModelTests
             new ElevationSourceMetadata("OpenTopography", "USGS1m", new CollectionPeriod(new DateOnly(2017, 2, 17), new DateOnly(2017, 2, 27)), "QL2"),
             Transformation(transformationTarget),
             sourceVerticalReference ?? vertical,
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
             new LocalCoordinateFrame(new Coordinate3D(10d, 20d, 30d), ProjectedReference(), vertical, LengthUnit.UsSurveyFoot),
             simplificationRequest ?? new SimplificationRequest(),
             5,

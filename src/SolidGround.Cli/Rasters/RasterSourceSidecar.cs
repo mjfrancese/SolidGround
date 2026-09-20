@@ -1,3 +1,4 @@
+using SolidGround.Core.Metadata;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Units;
 
@@ -16,6 +17,8 @@ internal sealed record RasterSourceSidecar(
     CollectionPeriod? CollectionPeriod,
     string? QualityLevel,
     RasterSourceVertical Vertical,
+    ReferenceOrigin HorizontalReferenceOrigin,
+    ReferenceOrigin VerticalReferenceOrigin,
     RasterSourceAcquisition Acquisition);
 
 /// <summary>The vertical reference recorded for a fetched raster.</summary>
@@ -32,4 +35,22 @@ internal sealed record RasterSourceAcquisition(
     string? ContentDispositionFileName,
     IReadOnlyList<string> ArchiveEntryNames,
     string ReferenceSource,
-    long ResponseByteCount);
+    long ResponseByteCount,
+    RasterSourceMetadataRequest? MetadataRequest);
+
+/// <summary>
+/// Redacted evidence about the GeoTIFF metadata request, carried through unchanged from
+/// <c>OpenTopographyMetadataRequestEvidence</c>; present only when <see cref="RasterSourceAcquisition.ReferenceSource"/>
+/// is <c>"GeoTiffGeoKeys"</c>.
+/// </summary>
+internal sealed record RasterSourceMetadataRequest(
+    string RedactedRequestUri,
+    int StatusCode,
+    string? ContentType,
+    string? ContentDispositionFileName,
+    long ResponseByteCount,
+    int ProjectedCoordinateSystemCode,
+    string? Citation,
+    string RasterType,
+    long ImageWidth,
+    long ImageLength);

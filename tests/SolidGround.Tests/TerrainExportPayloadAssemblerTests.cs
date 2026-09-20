@@ -27,7 +27,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             grid, new SimplificationRequest(pointBudget: 1000), TestContext.Current.CancellationToken);
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification);
+            Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification);
 
         Assert.Equal(8, payload.Provenance.OriginalPointCount);
     }
@@ -48,7 +48,7 @@ public sealed class TerrainExportPayloadAssemblerTests
         LocalCoordinateFrame localFrame = LocalFrame();
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            Source(), Transformation(), VerticalReference(), localFrame, grid, simplification);
+            Source(), Transformation(), VerticalReference(), Origins(), localFrame, grid, simplification);
 
         Assert.Equal(5, payload.Provenance.OriginalPointCount);
         Assert.Equal(5, payload.Samples.Count);
@@ -76,7 +76,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             grid, new SimplificationRequest(pointBudget: 1000), TestContext.Current.CancellationToken);
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains("no valid elevation", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -96,7 +96,7 @@ public sealed class TerrainExportPayloadAssemblerTests
         LocalCoordinateFrame localFrame = LocalFrame(origin: new Coordinate3D(0.5d, 0.5d, 1d), outputUnit: LengthUnit.UsSurveyFoot);
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            Source(), Transformation(), VerticalReference(), localFrame, grid, simplification);
+            Source(), Transformation(), VerticalReference(), Origins(), localFrame, grid, simplification);
 
         Assert.Equal(simplification.RetainedSamples.Count, payload.Samples.Count);
         for (int index = 0; index < payload.Samples.Count; index++)
@@ -117,7 +117,7 @@ public sealed class TerrainExportPayloadAssemblerTests
         LocalCoordinateFrame localFrame = LocalFrame();
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            Source(), Transformation(), VerticalReference(), localFrame, grid, simplification);
+            Source(), Transformation(), VerticalReference(), Origins(), localFrame, grid, simplification);
 
         List<LocalCoordinate> expected = [.. simplification.RetainedSamples.Select(sample => localFrame.ToLocal(sample.Position))];
         List<LocalCoordinate> actual = [.. payload.Samples.Select(sample => sample.Position)];
@@ -142,7 +142,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             minElevation: 0d, maxElevation: 3d, elevationUnit: LengthUnit.Meter);
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains(nameof(SimplificationDiagnostics.CandidatePointCount), exception.Message, StringComparison.Ordinal);
     }
@@ -156,7 +156,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             minElevation: -50d, maxElevation: 3d, elevationUnit: LengthUnit.Meter);
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains(nameof(SimplificationDiagnostics.MinElevation), exception.Message, StringComparison.Ordinal);
     }
@@ -170,7 +170,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             minElevation: 0d, maxElevation: 999d, elevationUnit: LengthUnit.Meter);
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains(nameof(SimplificationDiagnostics.MaxElevation), exception.Message, StringComparison.Ordinal);
     }
@@ -184,7 +184,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             minElevation: 0d, maxElevation: 3d, elevationUnit: LengthUnit.InternationalFoot);
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains(nameof(SimplificationDiagnostics.ElevationUnit), exception.Message, StringComparison.Ordinal);
     }
@@ -200,7 +200,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             1, [new TerrainSample(new Coordinate3D(0.5d, 0.5d, 0d))], new SimplificationRequest(1));
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification);
+            Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification);
 
         Assert.Null(simplification.Diagnostics);
         Assert.Equal(4, payload.Provenance.OriginalPointCount);
@@ -218,7 +218,7 @@ public sealed class TerrainExportPayloadAssemblerTests
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
             TerrainExportPayloadAssembler.Assemble(
-                Source(), Transformation(), VerticalReference(LengthUnit.UsSurveyFoot), LocalFrame(), grid, simplification));
+                Source(), Transformation(), VerticalReference(LengthUnit.UsSurveyFoot), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains(nameof(LengthUnit.Meter), exception.Message, StringComparison.Ordinal);
         Assert.Contains(nameof(LengthUnit.UsSurveyFoot), exception.Message, StringComparison.Ordinal);
@@ -233,7 +233,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             grid, new SimplificationRequest(pointBudget: 1000), TestContext.Current.CancellationToken);
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains("horizontal reference", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -249,7 +249,7 @@ public sealed class TerrainExportPayloadAssemblerTests
         VerticalReference differentDatum = new("NGVD29", LengthUnit.Meter, "Geoid12B");
 
         TerrainProvenanceException exception = Assert.Throws<TerrainProvenanceException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), differentDatum, LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), differentDatum, Origins(), LocalFrame(), grid, simplification));
 
         Assert.Contains("vertical reference", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -263,7 +263,7 @@ public sealed class TerrainExportPayloadAssemblerTests
             grid, new SimplificationRequest(pointBudget: 1000), TestContext.Current.CancellationToken);
 
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            Source(), Transformation(), VerticalReference(), LocalFrame(), grid, simplification);
+            Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification);
 
         Assert.Equal(TerrainProvenance.CurrentSchemaVersion, payload.Provenance.SchemaVersion);
     }
@@ -275,17 +275,19 @@ public sealed class TerrainExportPayloadAssemblerTests
         SimplificationResult simplification = new(1, [new TerrainSample(new Coordinate3D(0.5d, 0.5d, 0d))], new SimplificationRequest(1));
 
         Assert.Throws<ArgumentNullException>(() =>
-            TerrainExportPayloadAssembler.Assemble(null!, Transformation(), VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(null!, Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification));
         Assert.Throws<ArgumentNullException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), null!, VerticalReference(), LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), null!, VerticalReference(), Origins(), LocalFrame(), grid, simplification));
         Assert.Throws<ArgumentNullException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), null!, LocalFrame(), grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), null!, Origins(), LocalFrame(), grid, simplification));
         Assert.Throws<ArgumentNullException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), null!, grid, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), null!, LocalFrame(), grid, simplification));
         Assert.Throws<ArgumentNullException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), null!, simplification));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), null!, grid, simplification));
         Assert.Throws<ArgumentNullException>(() =>
-            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), LocalFrame(), grid, null!));
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), null!, simplification));
+        Assert.Throws<ArgumentNullException>(() =>
+            TerrainExportPayloadAssembler.Assemble(Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, null!));
     }
 
     private static SimplificationResult HandBuiltResult(
@@ -330,6 +332,8 @@ public sealed class TerrainExportPayloadAssemblerTests
         new(origin ?? new Coordinate3D(0d, 0d, 0d), ProjectedReference(), vertical ?? VerticalReference(), outputUnit);
 
     private static ElevationSourceMetadata Source() => new("OpenTopography", "USGS1m");
+
+    private static ReferenceOrigins Origins() => new(ReferenceOrigin.Operator, ReferenceOrigin.Operator);
 
     private static HorizontalReference GeographicReference() => new(
         "EPSG:4326", "WGS84", HorizontalReferenceKind.Geographic, HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);

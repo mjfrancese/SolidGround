@@ -112,7 +112,7 @@ option twice is rejected (`--x was specified more than once.`).
 | `--output` | `<dir>` | required | — | non-blank |
 | `--name` | `<baseName>` | optional | `terrain` | same rule as `process`; names the raster set's three files (`<name>.asc`, `.prj`, `.source.json`) |
 | `--overwrite` | flag | optional | off | — |
-| `--timeout` | `<seconds>` | optional | `300` | integer, `> 0`; the HTTP timeout applied to the OpenTopography request |
+| `--timeout` | `<seconds>` | optional | `300` | integer, `> 0`; the `HttpClient.Timeout` applied to each OpenTopography request separately (see "Update, Issue #21" below) |
 | `--verbose` | flag | optional | off | — |
 
 `fetch` rejects every `process`-only processing and metadata option (`--origin`, `--unit`, `--method`,
@@ -138,7 +138,7 @@ silently no-op instead of failing loudly.
 | `--output` | `<dir>` | required | — | non-blank |
 | `--name` | `<baseName>` | optional | `terrain` | the export bundle's base name; with `--save-raster`, also the raster set's |
 | `--overwrite` | flag | optional | off | — |
-| `--timeout` | `<seconds>` | optional | `300` | integer, `> 0` |
+| `--timeout` | `<seconds>` | optional | `300` | integer, `> 0`; the `HttpClient.Timeout` applied to each OpenTopography request separately (see "Update, Issue #21" below) |
 | `--save-raster` | flag | optional | off | also writes the raster set beside the export bundle |
 | `--verbose` | flag | optional | off | — |
 
@@ -361,6 +361,10 @@ written by hand with `Utf8JsonWriter`, `Indented`, `IndentSize = 2`, and `NewLin
 one trailing `\n` appended after the writer is disposed. Its properties are always written in this fixed
 order:
 
+This is the version 1 shape, superseded below; it stays documented per the provenance design note's
+versioning convention (`docs/architecture/provenance-and-deterministic-exports.md`'s "Versioning and
+compatibility policy").
+
 ```text
 schema                          string   constant "solidground.raster-source"
 schemaVersion                    int     constant 1
@@ -390,6 +394,64 @@ a missing expected property, a duplicate property, or the wrong `schema`/`schema
 naming the file path, never a best-effort guess at an unrecognized shape. When present, the sidecar supplies
 every source and vertical-reference field `process` needs by default; any of the corresponding CLI options
 overrides the sidecar's own value for that one field.
+
+**Update, Issue #21 (2026-09-19):** `RasterSourceSidecarIo.CurrentSchemaVersion` is now `2`. A version 1
+sidecar — including one `fetch` itself wrote before this change — is rejected by `process`'s strict reader
+with the same usage error it always raised for a wrong `schemaVersion`, naming the sidecar's own path; there
+is no migration path from version 1 to version 2. This is a breaking change for any raster set `fetch` wrote
+before this update: the remedy is to re-run `fetch` against the same AOI to write a fresh version 2
+`.source.json` (and `.asc`/`.prj`) before running `process` against it again, not to hand-edit the old
+sidecar. The version 2 shape adds two top-level properties
+immediately after `vertical`, and one property inside `acquisition`, immediately last, mirroring
+`OpenTopographyResponseEvidence`'s own `HorizontalReferenceOrigin`, `VerticalReferenceOrigin`, and
+`MetadataRequest` (SolidGround Issue #21's GeoTIFF-GeoKeys hybrid acquisition flow, documented in
+`docs/architecture/opentopography-usgs1m-source.md`'s "Two-request contract, verified 2026-09-19" section):
+
+```text
+schema                          string   constant "solidground.raster-source"
+schemaVersion                    int     constant 2
+sourceName                        string
+datasetIdentifier                  string
+collectionPeriod                    object { start, end } as "yyyy-MM-dd" strings, or JSON null
+qualityLevel                         string | null
+vertical                               object  { datum, unit, geoidModel } -- unchanged from version 1
+horizontalReferenceOrigin               string  ReferenceOrigin member name
+verticalReferenceOrigin                  string  ReferenceOrigin member name
+acquisition                               object
+  redactedRequestUri                       string
+  statusCode                                int
+  contentType                                string | null
+  contentDispositionFileName                  string | null
+  archiveEntryNames                            array of string
+  referenceSource                               string  "PrjSidecar" | "AuxXmlSidecar" | "GeoTiffGeoKeys"
+  responseByteCount                              long
+  metadataRequest                                 object | null
+    redactedRequestUri                             string
+    statusCode                                      int
+    contentType                                      string | null
+    contentDispositionFileName                        string | null
+    responseByteCount                                  long
+    projectedCoordinateSystemCode                       int
+    citation                                             string | null
+    rasterType                                            string  "PixelIsArea" | "PixelIsPoint"
+    imageWidth                                             long
+    imageLength                                             long
+```
+
+`horizontalReferenceOrigin`/`verticalReferenceOrigin` and `acquisition.metadataRequest` are all redacted (or
+absent) exactly like every other acquisition field: `metadataRequest` is `null` for every single-request
+acquisition (a zip response with its own `.prj`/`.aux.xml`) and present only for the hybrid GeoTIFF-GeoKeys
+flow, where it also drives the `--verbose` metadata lines (see "Diagnostics and redaction").
+
+**Update, Issue #21 (2026-09-19):** `fetch`/`run` sets `HttpClient.Timeout` from `--timeout` once, but the
+hybrid GeoTIFF-GeoKeys flow sends that same `HttpClient` two sequential `GET` requests for one acquisition
+(`docs/architecture/opentopography-usgs1m-source.md`'s "Two-request contract, verified 2026-09-19" section);
+`--timeout` bounds each of those requests independently, not their sum, so a hybrid acquisition's data
+request and metadata request may each individually take up to `--timeout` seconds before the whole
+acquisition fails or succeeds. Because that flow only runs when the data response carries no reference
+metadata of its own — the observed USGS 1 m behaviour — such an acquisition also costs two calls against the
+configured API key's daily quota rather than one; a response that already carries its own `.prj`/`.aux.xml`
+sidecar still costs only one.
 
 ## Exit codes and error classes
 
@@ -467,6 +529,26 @@ non-verbose path. `--coverage-floor` is the one processing input never recorded 
 itself (see "Known limitations and follow-ups"), so the CLI always prints it, verbose or not, as the only
 record of which value produced a given run's result.
 
+**Update, Issue #21 (2026-09-19):** `fetch`, `run`, and `process` now print one additional non-verbose line —
+`{verb}: horizontal reference {crs} from {origin description}; vertical reference {datum} ({unit}) from
+{origin description}.` — immediately after the acquisition stage line and before any "wrote" line for
+`fetch`/`run`, or after the read/clip stage for `process`; the four origin descriptions are "the response
+sidecar", "the GeoTIFF GeoKeys of the metadata request", "dataset documentation", and "the operator",
+matching `SolidGround.Core.Metadata.ReferenceOrigin`'s four members one for one. In `--verbose` mode,
+`fetch`/`run` print six further lines, in this order, immediately after the acquisition evidence block, but
+only when the acquisition actually made a second, metadata-only request (see "Raster set persistence"'s
+version 2 sidecar update); a single-request acquisition (a zip response with its own `.prj`/`.aux.xml`)
+prints none of these six lines:
+
+```text
+{verb}: metadata request uri: '{redacted metadata request uri}'.
+{verb}: metadata status: {status code} ({status code name}).
+{verb}: metadata content type: '{content type or (none)}'.
+{verb}: metadata content-disposition file name: '{file name or (none)}'.
+{verb}: metadata response bytes: {byte count}.
+{verb}: metadata geokeys: EPSG:{projected coordinate system code} "{citation or (none)}" {PixelIsArea|PixelIsPoint} {image width}x{image length}.
+```
+
 Every error, at any verbosity, is exactly one line: `error (<class>): <message>`. The one exception is the
 `unexpected` class, where the full exception text follows the one-line message on later lines, and only when
 `--verbose` was given — a plain run never spills a stack trace to the console.
@@ -542,11 +624,26 @@ above is enforced by a test, not only by review.
 
 ## Known limitations and follow-ups
 
-- **No record of which provenance fields were operator-asserted versus source-reported.**
+- **No record of which provenance fields were operator-asserted versus source-reported, for `collectionPeriod`/`qualityLevel`.**
   `--collection-start`/`--collection-end`/`--quality-level` can fill in fields the OpenTopography endpoint
   never reports, but the export document's schema has no field recording that the value came from the
-  operator rather than the source. A later schema version, adding an explicit origin marker for these three
-  fields, is needed before a reader can tell the two apart.
+  operator rather than the source. **Update, Issue #21 (2026-09-19):** schema version 2 resolved this for the
+  *horizontal and vertical reference* fields specifically — `provenance.sourceHorizontalReferenceOrigin` and
+  `.sourceVerticalReferenceOrigin` now record exactly this distinction for those two fields (see "Raster set
+  persistence" and `docs/architecture/provenance-and-deterministic-exports.md`'s "Export document manifest,
+  schema version 2" section) — but `collectionPeriod` and `qualityLevel` still carry no such marker. A later
+  schema version, adding an explicit origin marker for those two fields, is still needed before a reader can
+  tell an operator-asserted collection period or quality level apart from a source-reported one.
+- **Only NAD83 UTM zones (EPSG 26901-26923) are supported for the GeoTIFF-GeoKeys hybrid flow.** A bare
+  AAIGrid response whose GeoTIFF metadata names any other EPSG family — including a NAD83(2011) UTM zone, a
+  state plane system, or a non-UTM projection — fails with `OpenTopographySourceMetadataException` naming the
+  observed code rather than being handled (`docs/architecture/opentopography-usgs1m-source.md`'s "GeoKey to
+  WKT synthesis" section). Supporting additional EPSG families is follow-up work, not part of this issue.
+- **No minimum-area padding.** OpenTopography rejects a request below an empirically observed, undocumented
+  per-request area minimum with HTTP 400 (exit code 2, usage) rather than a source-quality failure
+  (`docs/architecture/opentopography-usgs1m-source.md`'s "Fail rather than assume" section). Neither `fetch`
+  nor `run` pads a too-small AOI up to that minimum before sending the request; an operator whose AOI happens
+  to fall below the threshold must enlarge it themselves. Automatic padding is follow-up work.
 - **`coverageFloorFraction` is not recorded in the export document.** The document's `simplification` object
   carries only the point budget and the method name; the coverage floor that produced a given
   curvature-aware result exists only in that one run's own console output (always printed, per "Diagnostics
