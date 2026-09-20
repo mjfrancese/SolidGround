@@ -18,23 +18,24 @@ The intended workflow is:
 8. Export development artifacts from the CLI (implemented today by the `process`/`fetch`/`run` commands); in Phase 2, create the bounded toposolid through the Revit API.
 9. Attach source, datum, quality, statistics, simplification, units, and local-origin provenance to the created element.
 
-The primary fixture is [withheld] at [withheld] the reference parcel, the area, the area, centered at `[withheld], [withheld]`. The approximately [withheld]-square-foot lot has extensive mature tree canopy, so sparse ground returns and interpolation roughness are expected source-quality concerns.
+The primary fixture is [withheld] at [withheld] the reference parcel, the area, the area, centered at `[withheld], [withheld]`. The approximately [withheld]-square-foot lot has extensive mature tree canopy; a live capture over this lot showed the 1-meter surface responding to that canopy with smoothness rather than visible roughness — see "Terrain quality observed under canopy" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 
 ## Accuracy
 
 SolidGround is for overall lot form and site context. QL2 bare-earth lidar is roughly 10 cm vertical RMSE under favorable conditions, with poorer and less uniform results under canopy. The resulting surface is not suitable for foundation-perimeter grading or construction layout. Those tasks need field measurement, such as a rotary laser, or a professional survey.
 
-SolidGround will preserve source resolution and quality metadata, but it cannot recover terrain that was never observed or remove interpolation artifacts without also changing the measured surface.
+SolidGround preserves source resolution and quality metadata, but it cannot recover terrain that was never observed or remove interpolation artifacts without also changing the measured surface. At the reference parcel fixture, the observed 1-meter surface is smooth and fully populated, with no NODATA holes and millimeter-scale neighbor residuals almost everywhere; that smoothness is a same-surface proxy for internal consistency, not a measure of accuracy against the true ground beneath the canopy — see "Terrain quality observed under canopy" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 
 ## Verified technical baseline
 
-The following points were checked during setup on 2026-09-15:
+The following points were checked during setup on 2026-09-15, unless otherwise dated below:
 
 - Revit 2027 uses .NET 10. The local Revit API assemblies are version `27.0.10.13`.
-- OpenTopography's current OpenAPI definition exposes `GET /API/usgsdem`, accepts `datasetName=USGS1m`, and still lists `AAIGrid`. `GTiff` remains the default, so SolidGround will request `AAIGrid` explicitly.
+- OpenTopography's current OpenAPI definition exposes `GET /API/usgsdem`, accepts `datasetName=USGS1m`, and still lists `AAIGrid`. `GTiff` remains the default, so SolidGround requests `AAIGrid` explicitly.
 - The parser follows Esri's ASCII raster contract: positive dimensions and cell size, matched lower-left corner or center origins, optional `NODATA_VALUE` defaulting to `-9999`, and north-to-south row-major samples. It converts NODATA to missing cells before returning an elevation grid.
-- The same OpenAPI definition states that USGS 1 m access currently requires academic authorization or an enterprise API key. SolidGround will report access errors and will not substitute lower-resolution data silently.
+- The same OpenAPI definition states that USGS 1 m access currently requires academic authorization or an enterprise API key. SolidGround reports access errors and does not substitute lower-resolution data silently. Verified live on 2026-09-19: a no-key run observed exit code 3 with the exact authorization message.
 - The OpenTopography catalog still contains `[withheld]`, collected 2017-02-17 through 2017-02-27, with NAVD88 Geoid12B vertical metadata. Catalog metadata is provenance context; the raster response's own coordinate reference information remains authoritative for processing.
+- Verified live on 2026-09-19: the `usgsdem` `AAIGrid` response is packaged as a bare `.asc` body with no `.prj`/`.aux.xml` sidecar and no reference metadata of any kind; a same-box `GTiff` response for the identical request carries `EPSG:26915` (NAD83 / UTM zone 15N) as its projected coordinate system but no vertical GeoKeys. See "Response packaging and metadata observed" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 - Revit 2027's installed `SiteDB.dll` contains `NativeToposolidMaxPointThreshold` and `LinkToposolidMaxPointThreshold`. Autodesk's public 2027 documentation found during setup did not restate their numeric limits, so the project uses a conservative application default near 15,000 and will re-check limits before the Revit phase.
 - Revit 2027 added explicit isolated-context manifest settings and dependency declarations. The planned add-in will use a private context and will not share managed geospatial assemblies by default.
 - Revit 2027 Extended Properties represent externally supplied, linked property data. SolidGround provenance is owned with the created element, so Extensible Storage is the current recommendation.
@@ -92,6 +93,15 @@ The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the 
 
 Each command prints one line per stage by default; add `--verbose` for full diagnostics. Every command's
 own `--help` lists its complete option set, and `--version` prints the CLI's version.
+
+`--verbose` prints the redacted acquisition request evidence for `fetch`/`run`, and, whenever an AOI is
+given, the clip's NODATA and region-excluded cell counts. `run --save-raster` keeps the raster set
+(`.asc`, `.prj`, `.source.json`) alongside the export bundle instead of discarding it after processing.
+Until the source-packaging decision recorded in the [Phase 1 validation note](docs/architecture/phase-1-validation.md)
+lands, a live `fetch` or `run` against a real-coverage area large enough to clear OpenTopography's
+undocumented area minimum ends with exit code 4; a smaller request — for example, the parcel-plus-5-meter-buffer
+case recorded in that note — instead ends with exit code 2 before any raster is returned, and `process` against
+a local `.asc` file with its own `.prj` runs end to end.
 
 Process a local AAIGrid file offline:
 

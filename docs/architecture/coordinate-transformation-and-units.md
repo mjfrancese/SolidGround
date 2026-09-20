@@ -244,13 +244,16 @@ goldens rule this defect motivated.
 
 ## `LengthConverter.DefaultOutputUnit`
 
-`LengthConverter.DefaultOutputUnit` is `LengthUnit.UsSurveyFoot`, the one named constant decision #3 requires.
-It is used as the default wherever Core chooses an output unit without an explicit caller override — today
-that is exactly one place: `LocalCoordinateFrame`'s constructor (`outputUnit = LengthConverter.DefaultOutputUnit`)
-and nowhere else, since `LocalOriginSnapping.SnapToWholeSourceUnit` (see below) deliberately does **not** take
-an output unit at all. A future CLI `--output-unit` flag (Issue #9) should read this constant as its own
-default, never restate `UsSurveyFoot` as a second literal. `LengthUnit`'s enum declaration order (`Meter,
-UsSurveyFoot, InternationalFoot`) is unchanged.
+`LengthConverter.DefaultOutputUnit` is `LengthUnit.UsSurveyFoot`, the one named constant decision #3 requires. It is
+used as the default wherever Core chooses an output unit without an explicit caller override — today that is exactly
+one place: `LocalCoordinateFrame`'s constructor (`outputUnit = LengthConverter.DefaultOutputUnit`) and nowhere else,
+since `LocalOriginSnapping.SnapToWholeSourceUnit` (see below) deliberately does **not** take an output unit at all.
+The shipped CLI `--unit` flag (Issue #9) does not read this constant: `ProcessCommand.cs` and `RunCommand.cs` each
+fall back to the separately hardcoded string `us-survey-foot` when `--unit` is not supplied, and `OptionTable.cs`'s
+`--unit` help text hardcodes the identical string a third time as "(the default)" — none of the three references
+`LengthConverter.DefaultOutputUnit`, so `UsSurveyFoot` is restated as a second literal in exactly the way this
+constant is meant to prevent. `LengthUnit`'s enum declaration order (`Meter, UsSurveyFoot, InternationalFoot`) is
+unchanged.
 
 ## `LocalOriginSnapping`
 
