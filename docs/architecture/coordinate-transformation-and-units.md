@@ -265,6 +265,16 @@ fall back to the separately hardcoded string `us-survey-foot` when `--unit` is n
 constant is meant to prevent. `LengthUnit`'s enum declaration order (`Meter, UsSurveyFoot, InternationalFoot`) is
 unchanged.
 
+**Update, Issue #25 (2026-09-20):** the CLI no longer restates `UsSurveyFoot` as a second literal. A new
+`SolidGround.Cli.Options.LengthUnitTokens` derives its `DefaultToken` from this constant
+(`DefaultToken => TokenOf(LengthConverter.DefaultOutputUnit)`), and `ProcessCommand`/`RunCommand` use that
+token, not a hardcoded string, wherever `--unit` is defaulted; `LengthUnitTokens.Parse` (moved from
+`ProcessCommand`'s former `ParseLengthUnitValue`) and `LengthUnitTokens.Syntax` are likewise the CLI's only
+token-to-`LengthUnit` mapping and its only `|`-joined token list, so `OptionTable`'s `--unit` help text is
+built from `LengthUnitTokens` rather than a third independent copy. `LengthConverter.DefaultOutputUnit`
+remains the single source of truth; see docs/architecture/cli-workflow.md's "Units" section for the CLI side
+of this.
+
 ## `LocalOriginSnapping`
 
 `LocalOriginSnapping.SnapToWholeSourceUnit(Coordinate3D candidate, HorizontalReference

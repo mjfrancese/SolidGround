@@ -1,5 +1,6 @@
 using System.Reflection;
 using SolidGround.Cli;
+using SolidGround.Cli.Options;
 
 namespace SolidGround.Tests;
 
@@ -32,6 +33,7 @@ public sealed class CliHelpTextTests
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Contains("1200/3937", stdout, StringComparison.Ordinal);
         Assert.Contains("0.3048", stdout, StringComparison.Ordinal);
+        Assert.Contains(LengthUnitTokens.DefaultToken + " (the default)", stdout, StringComparison.Ordinal);
     }
 
     [Theory]

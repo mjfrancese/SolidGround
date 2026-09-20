@@ -1,3 +1,5 @@
+using SolidGround.Core.Units;
+
 namespace SolidGround.Cli.Options;
 
 /// <summary>Whether an option takes a value or is a bare boolean switch.</summary>
@@ -114,9 +116,10 @@ internal static class OptionTable
         "source units.");
 
     private static readonly OptionSpec Unit = new(
-        "unit", OptionKind.Value, false, "us-survey-foot|international-foot|meter",
-        "us-survey-foot: exactly 1200/3937 metres per foot (the default); international-foot: exactly 0.3048 " +
-        "metres per foot; meter: 1 metre");
+        "unit", OptionKind.Value, false, LengthUnitTokens.Syntax,
+        $"{LengthUnitTokens.TokenOf(LengthUnit.UsSurveyFoot)}: exactly 1200/3937 metres per foot; " +
+        $"{LengthUnitTokens.TokenOf(LengthUnit.InternationalFoot)}: exactly 0.3048 metres per foot; " +
+        $"{LengthUnitTokens.TokenOf(LengthUnit.Meter)}: 1 metre; {LengthUnitTokens.DefaultToken} (the default)");
 
     private static readonly OptionSpec Method = new(
         "method", OptionKind.Value, false, "curvature-aware|uniform",
@@ -164,7 +167,7 @@ internal static class OptionTable
         new("source-name", OptionKind.Value, false, "<text>", "Overrides the recorded source name."),
         new("dataset", OptionKind.Value, false, "<text>", "Overrides the recorded dataset identifier."),
         new("vertical-datum", OptionKind.Value, false, "<text>", "Overrides the vertical datum name used for provenance."),
-        new("vertical-unit", OptionKind.Value, false, "meter|us-survey-foot|international-foot",
+        new("vertical-unit", OptionKind.Value, false, LengthUnitTokens.Syntax,
             "Overrides the vertical reference's own unit (not the export output unit; see --unit)."),
         new("geoid", OptionKind.Value, false, "<text>", "Overrides the recorded geoid model name."),
         CollectionStart,

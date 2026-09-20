@@ -44,7 +44,7 @@ internal static class ProcessCommand
 
         AoiSelection? aoi = AoiSelection.Bind(invocation, OptionTable.Process, required: false);
         LocalOriginSelection origin = ParseOrigin(invocation);
-        LengthUnit outputUnit = ParseLengthUnitValue("unit", invocation.GetValue("unit") ?? "us-survey-foot");
+        LengthUnit outputUnit = LengthUnitTokens.Parse("unit", invocation.GetValue("unit") ?? LengthUnitTokens.DefaultToken);
         SimplificationMethod method = ParseMethod(invocation);
         int budget = ParseBudget(invocation);
         double coverageFloor = ParseCoverageFloor(invocation);
@@ -89,7 +89,7 @@ internal static class ProcessCommand
 
         string? cliVerticalDatum = invocation.GetValue("vertical-datum");
         LengthUnit? cliVerticalUnit = invocation.HasOption("vertical-unit")
-            ? ParseLengthUnitValue("vertical-unit", invocation.GetValue("vertical-unit")!)
+            ? LengthUnitTokens.Parse("vertical-unit", invocation.GetValue("vertical-unit")!)
             : null;
         string? cliGeoid = invocation.GetValue("geoid");
         VerticalReferenceResolution.ResolvedVerticalReference resolvedVertical = VerticalReferenceResolution.Resolve(
@@ -164,14 +164,6 @@ internal static class ProcessCommand
 
     internal static LocalOriginSelection ParseOrigin(ParsedInvocation invocation) =>
         LocalOriginSelection.Parse(invocation.GetValue("origin") ?? "southwest");
-
-    internal static LengthUnit ParseLengthUnitValue(string optionName, string text) => text switch
-    {
-        "us-survey-foot" => LengthUnit.UsSurveyFoot,
-        "international-foot" => LengthUnit.InternationalFoot,
-        "meter" => LengthUnit.Meter,
-        _ => throw new CliUsageException($"--{optionName} must be one of: us-survey-foot, international-foot, meter."),
-    };
 
     internal static SimplificationMethod ParseMethod(ParsedInvocation invocation)
     {

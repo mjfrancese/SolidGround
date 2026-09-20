@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using SolidGround.Cli;
 using SolidGround.Core.Exports;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Tests;
 
@@ -572,6 +573,27 @@ public sealed class CliProcessCommandTests
         {
             Directory.Delete(usSurveyFootDirectory.FullName, recursive: true);
             Directory.Delete(meterDirectory.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NoUnitOptionWritesLengthConverterDefaultOutputUnitToTheLocalFrame()
+    {
+        DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            (int exitCode, _, _) = await RunAsync(
+                ["process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"), "--output", tempDirectory.FullName],
+                TestContext.Current.CancellationToken);
+            Assert.Equal(CliExitCodes.Success, exitCode);
+
+            using JsonDocument document = ReadDocument(tempDirectory.FullName, "terrain");
+            string outputUnit = document.RootElement.GetProperty("provenance").GetProperty("localFrame").GetProperty("outputUnit").GetString()!;
+            Assert.Equal(LengthConverter.DefaultOutputUnit.ToString(), outputUnit);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory.FullName, recursive: true);
         }
     }
 

@@ -203,6 +203,31 @@ public sealed class CliFetchAndRunCommandTests
     }
 
     [Fact]
+    public async Task RunWithNoUnitOptionWritesLengthConverterDefaultOutputUnitToTheLocalFrame()
+    {
+        DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            byte[] zipBytes = OpenTopographyUsgs1mSourceTests.CreateZipArchive(
+                ("example-site-synthetic.asc", ReadFixture("example-site-synthetic.asc")), ("example-site-synthetic.prj", ReadFixture("example-site-synthetic.prj")));
+            FakeHttpMessageHandler handler = new((_, _) => ZipResponse(zipBytes, "usgs1m.zip"));
+            CliHost host = CreateHost(handler, name => name == "OPENTOPOGRAPHY_API_KEY" ? FakeKey : null);
+
+            (int exitCode, _, _) = await RunAsync(host, ["run", "--bbox", Bbox, "--output", tempDirectory.FullName], TestContext.Current.CancellationToken);
+
+            Assert.Equal(CliExitCodes.Success, exitCode);
+            string documentPath = Path.Combine(tempDirectory.FullName, "terrain" + TerrainExportBundleRenderer.DocumentFileSuffix);
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(documentPath));
+            string outputUnit = document.RootElement.GetProperty("provenance").GetProperty("localFrame").GetProperty("outputUnit").GetString()!;
+            Assert.Equal(LengthConverter.DefaultOutputUnit.ToString(), outputUnit);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RunWritesTheRasterSetTooWithSaveRaster()
     {
         DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();

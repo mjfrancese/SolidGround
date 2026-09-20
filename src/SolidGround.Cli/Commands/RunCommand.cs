@@ -35,7 +35,7 @@ internal static class RunCommand
 
         AoiSelection aoi = AoiSelection.Bind(invocation, OptionTable.Run, required: true)!;
         LocalOriginSelection origin = ProcessCommand.ParseOrigin(invocation);
-        LengthUnit outputUnit = ProcessCommand.ParseLengthUnitValue("unit", invocation.GetValue("unit") ?? "us-survey-foot");
+        LengthUnit outputUnit = LengthUnitTokens.Parse("unit", invocation.GetValue("unit") ?? LengthUnitTokens.DefaultToken);
         SimplificationMethod method = ProcessCommand.ParseMethod(invocation);
         int budget = ProcessCommand.ParseBudget(invocation);
         double coverageFloor = ProcessCommand.ParseCoverageFloor(invocation);

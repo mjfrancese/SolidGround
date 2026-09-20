@@ -82,7 +82,7 @@ option twice is rejected (`--x was specified more than once.`).
 | `--source-name` | `<text>` | optional | sidecar value, else `local-file` | non-blank |
 | `--dataset` | `<text>` | optional | sidecar value, else the `.asc` file's own name without extension | non-blank |
 | `--vertical-datum` | `<text>` | optional | sidecar value, else the `.prj`'s own compound vertical datum | non-blank |
-| `--vertical-unit` | `meter` or `us-survey-foot` or `international-foot` | optional | sidecar value, else the `.prj`'s own compound vertical unit | one of the three values |
+| `--vertical-unit` | `us-survey-foot` or `international-foot` or `meter` | optional | sidecar value, else the `.prj`'s own compound vertical unit | one of the three values |
 | `--geoid` | `<text>` | optional | sidecar value, else null | non-blank if given |
 | `--collection-start` | `<yyyy-MM-dd>` | optional | sidecar value, else null | exact `yyyy-MM-dd`, `DateOnly.ParseExact` plus invariant culture; requires `--collection-end` |
 | `--collection-end` | `<yyyy-MM-dd>` | optional | sidecar value, else null | same exact-format parsing; `>= --collection-start`; requires `--collection-start` |
@@ -94,7 +94,7 @@ option twice is rejected (`--x was specified more than once.`).
 | `--parcel-format` | `geojson` or `wkt` | optional | inferred from `--parcel`'s extension | one of the two values; required when the extension is not `.geojson`/`.json`/`.wkt` |
 | `--buffer` | `<meters>` | optional | `0` | finite, `>= 0`; only with `--parcel` |
 | `--origin` | `southwest` or `centroid` or `<x>,<y>` or `<x>,<y>,<z>` | optional | `southwest` | one of the two keywords, or 2-3 finite doubles |
-| `--unit` | `us-survey-foot` or `international-foot` or `meter` | optional | `us-survey-foot` | one of the three values |
+| `--unit` | `us-survey-foot` or `international-foot` or `meter` | optional | `LengthConverter.DefaultOutputUnit` (`us-survey-foot` today) | one of the three values |
 | `--method` | `curvature-aware` or `uniform` | optional | `curvature-aware` | one of the two values |
 | `--budget` | `<int>` | optional | `15000` | integer, `> 0` |
 | `--coverage-floor` | `<0..1>` | optional | `0.2` | finite, in `[0,1]` |
@@ -128,7 +128,7 @@ silently no-op instead of failing loudly.
 | `--bbox` / `--center`+`--radius` / `--parcel`(+`--parcel-format`) | (as `process`) | exactly one AOI form is required | — | (as `process`) |
 | `--buffer` | `<meters>` | optional | `0` | finite, `>= 0`; only with `--parcel` |
 | `--origin` | (as `process`) | optional | `southwest` | (as `process`) |
-| `--unit` | (as `process`) | optional | `us-survey-foot` | (as `process`) |
+| `--unit` | (as `process`) | optional | `LengthConverter.DefaultOutputUnit` (`us-survey-foot` today) | (as `process`) |
 | `--method` | (as `process`) | optional | `curvature-aware` | (as `process`) |
 | `--budget` | `<int>` | optional | `15000` | integer, `> 0` |
 | `--coverage-floor` | `<0..1>` | optional | `0.2` | finite, in `[0,1]` |
@@ -275,9 +275,20 @@ both commands, restates `LengthConverter.MetersPerUnit`'s three exact values (`U
 than a second, independently maintained copy of them:
 
 ```text
-us-survey-foot: exactly 1200/3937 metres per foot (the default); international-foot: exactly 0.3048 metres
-per foot; meter: 1 metre
+us-survey-foot: exactly 1200/3937 metres per foot; international-foot: exactly 0.3048 metres per foot;
+meter: 1 metre; us-survey-foot (the default)
 ```
+
+**Update, Issue #25 (2026-09-20):** `--unit`'s syntax and help text are no longer two more hardcoded copies
+of `us-survey-foot`. `Options/LengthUnitTokens.cs` is now the CLI's single source of truth for the three
+tokens: `LengthUnitTokens.Syntax` (the `|`-joined token list) and `LengthUnitTokens.DefaultToken`
+(`TokenOf(LengthConverter.DefaultOutputUnit)`) build the `Unit` `OptionSpec` in `OptionTable.cs`.
+`ProcessCommand` parses `--unit` and `--vertical-unit`, and `RunCommand` parses `--unit`, both through
+`LengthUnitTokens.Parse` (moved, unchanged in behavior, from the former `ProcessCommand.ParseLengthUnitValue`).
+Both commands default `--unit` to `LengthUnitTokens.DefaultToken` rather than a hardcoded string. The default
+is `LengthConverter.DefaultOutputUnit` (`us-survey-foot` today); see
+docs/architecture/coordinate-transformation-and-units.md's "`LengthConverter.DefaultOutputUnit`" section for
+the Core side of this.
 
 `--vertical-unit` (on `process` only) is a different option for a different purpose: it names the unit the
 *source* vertical reference is already in — used only while resolving provenance metadata for an offline
@@ -590,9 +601,16 @@ CLI tests live in the existing `SolidGround.Tests` project, reached through a ne
 `SolidGround.Cli`, rather than a second test project: the existing `dotnet test` step in continuous
 integration already runs that one project, so no workflow change is needed for these tests to run, and the
 existing architecture tests can inspect the CLI assembly from the same place they already inspect Core's.
+`src/SolidGround.Cli/InternalsVisibleTo.cs`'s `[assembly: InternalsVisibleTo("SolidGround.Tests")]` —
+the CLI's first use of this attribute — additionally grants `SolidGround.Tests` access to internal CLI
+members (for example `Options.LengthUnitTokens`), letting `LengthUnitTokensTests` exercise such CLI-only
+helpers directly instead of only indirectly through `CliApplication.RunAsync`'s stdout/stderr.
 
 Every CLI test calls the public in-process entry point, `CliApplication.RunAsync(string[] args, CliHost
-host, CancellationToken cancellationToken)`, directly — no test shells out to a built executable. `Program.cs`
+host, CancellationToken cancellationToken)`, directly — no test shells out to a built executable. The one
+exception is `LengthUnitTokensTests`, which exercises the internal `SolidGround.Cli.Options.LengthUnitTokens`
+helper's `TokenOf`/`Parse`/`DefaultToken` directly, enabled by the `InternalsVisibleTo("SolidGround.Tests")`
+grant in `src/SolidGround.Cli/InternalsVisibleTo.cs`, rather than through `RunAsync`. `Program.cs`
 is the only caller that builds a real `CliHost` from the actual process environment, the actual network, and
 `Console.Out`/`Console.Error`; every test builds its own `CliHost` from an in-memory environment lookup (a
 plain `Dictionary<string, string?>`, never `Environment.SetEnvironmentVariable`), `FakeHttpMessageHandler`
