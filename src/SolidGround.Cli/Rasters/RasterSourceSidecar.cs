@@ -26,7 +26,9 @@ internal sealed record RasterSourceVertical(string Datum, LengthUnit Unit, strin
 
 /// <summary>
 /// Redacted evidence about how a fetched raster's response was interpreted, carried through unchanged from
-/// <c>OpenTopographyResponseEvidence</c>.
+/// <c>OpenTopographyResponseEvidence</c>, plus (schema version 3, SolidGround Issue #23) the fetch envelope
+/// actually requested and whether/how it was widened past OpenTopography's own undocumented minimum request
+/// area.
 /// </summary>
 internal sealed record RasterSourceAcquisition(
     string RedactedRequestUri,
@@ -36,7 +38,8 @@ internal sealed record RasterSourceAcquisition(
     IReadOnlyList<string> ArchiveEntryNames,
     string ReferenceSource,
     long ResponseByteCount,
-    RasterSourceMetadataRequest? MetadataRequest);
+    RasterSourceMetadataRequest? MetadataRequest,
+    RasterSourceFetchEnvelope FetchEnvelope);
 
 /// <summary>
 /// Redacted evidence about the GeoTIFF metadata request, carried through unchanged from
@@ -54,3 +57,23 @@ internal sealed record RasterSourceMetadataRequest(
     string RasterType,
     long ImageWidth,
     long ImageLength);
+
+/// <summary>
+/// The WGS 84 fetch envelope actually requested (after any SolidGround Issue #23 minimum-side expansion) and
+/// whether/how <c>AoiNormalizationOptions.MinimumFetchEnvelopeSide</c> widened it, carried through unchanged
+/// from <c>FetchEnvelopeExpansion</c>. Every distance is metres. See
+/// docs/architecture/aoi-normalization-and-clipping.md's "Minimum fetch envelope, verified 2026-09-20"
+/// section: this is the only structured record of the padded envelope — the design deliberately does not add
+/// a general AOI-provenance field, since the redacted request URI already carries the identical box verbatim.
+/// </summary>
+internal sealed record RasterSourceFetchEnvelope(
+    double West,
+    double South,
+    double East,
+    double North,
+    double MinimumSideMeters,
+    bool Expanded,
+    double WidthBeforeMeters,
+    double HeightBeforeMeters,
+    double WidthAfterMeters,
+    double HeightAfterMeters);

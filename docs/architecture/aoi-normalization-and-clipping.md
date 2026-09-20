@@ -132,6 +132,53 @@ parcel's declared datum is never altered by this padding; a non-WGS84 geographic
 from WGS 84 by roughly 1-2 m at CONUS latitudes, a residual `EnvelopeMargin` can absorb without SolidGround
 needing a datum transform just to size a fetch request.
 
+## Minimum fetch envelope, verified 2026-09-20
+
+OpenTopography enforces an undocumented minimum request area, separate from and in addition to the padding
+rule above: `AoiNormalizationOptions.MinimumFetchEnvelopeSide` (`LinearDistance`, default `LinearDistance.Meters(110d)`)
+widens `NormalizedAoi.FetchEnvelope` on whichever axis falls short of that minimum, applied **after** the
+existing margin/buffer padding for every `FetchEnvelopeBasis` — bounding box, radius, and both parcel forms.
+The widening is symmetric about the padded envelope's own center, using the identical conservative factors
+the padding rule above already established: the longitude (east-west) axis is measured, and if necessary
+expanded, at whichever of the envelope's own south/north latitudes has the larger absolute value; the
+latitude (north-south) axis always uses the equator's factor. `LinearDistance.Zero` disables the expansion
+entirely; `LinearDistance` itself rejects a negative value, so `MinimumFetchEnvelopeSide` can never be
+negative. `NormalizedAoi.MinimumSideExpansion` (a new `FetchEnvelopeExpansion` record: `Applied`,
+`MinimumSide`, `WidthBefore`, `HeightBefore`, `WidthAfter`, `HeightAfter`) reports whether the expansion fired
+and the measured width/height on both sides of it, so a caller can report what happened without re-deriving
+it from the envelope's own bounds. The antimeridian/pole guard the padding rule above already enforces is
+reused unchanged for this expansion — an envelope that cannot be widened to the minimum without leaving
+`[-180, 180]`/`[-90, 90]` throws the identical `AoiNormalizationException`, regardless of whether padding or
+minimum-side expansion pushed it there.
+
+**Live probe evidence.** A minimum-area probe at [withheld],[withheld] (the reference parcel) with `fetch --bbox`
+squares of increasing size found: a 100 m square (0.01 km²) rejected with HTTP 400, `Error: The selected area
+is too small: 0.01 km2`; a 100.5 m square (0.01010025 km²) accepted; 101 m, 105 m, and 120 m squares all
+accepted. OpenTopography's own API documentation states only a 250 km² maximum for `USGS1m`, never a minimum,
+so the true rejection rule ("area must exceed 0.01 km²") and its exact formula (square degrees versus a
+geodesic area, and at which latitude) remain the server's own undocumented behavior, not something this probe
+fully characterizes.
+
+**Why 110 m.** A 110 m square is 0.0121 km², a 21 percent margin over the observed 0.01 km² floor — comfortably
+past the accepted 100.5 m square with headroom for the server's own area formula being something other than a
+simple square-degree calculation, without padding requests so far past the minimum that a legitimately tiny
+AOI (a bounding box, a small radius, or a small buffered parcel) requests dramatically more data than it
+needs.
+
+**Single-location limitation.** This probe was bracketed at exactly one location (the reference parcel). Whether
+OpenTopography's minimum-area rule varies by latitude, by dataset, or at all is unconfirmed; the 21 percent
+margin is this design's hedge against that uncertainty, not a proof that 110 m is universally sufficient.
+
+**What is and is not recorded.** The CLI prints one line, only when the expansion actually fired (`docs/architecture/cli-workflow.md`'s
+"Raster set persistence" section), and the `.source.json` sidecar's `acquisition.fetchEnvelope` object
+(schema version 3, same section) records the requested envelope's bounds and the expansion's own before/after
+numbers structurally. Beyond that, no new provenance field was added: the redacted request URI already
+carried the identical (possibly expanded) box verbatim before this issue, in both the acquisition evidence
+and the sidecar, so the padded envelope was always reconstructable from existing evidence even without a
+dedicated field. The export document (`.solidground.json`) still carries no AOI provenance at all — that seam
+(`NormalizedAoi.Basis`/`EnvelopeMargin`/`MinimumSideExpansion` reaching the export document) is unchanged by
+this issue; see "Seams for later issues" below.
+
 ## Buffer semantics: fetch padding vs. a geometric buffer
 
 Two different "buffer" concepts exist in this issue, deliberately kept apart:
@@ -139,6 +186,18 @@ Two different "buffer" concepts exist in this issue, deliberately kept apart:
 - `AoiNormalizationOptions.EnvelopeMargin` and `ParcelGeometryAoi.Buffer`, when normalized, only ever pad
   `NormalizedAoi.FetchEnvelope` — a WGS 84 bounding box used to size a *request*. Neither ever touches a clip
   geometry.
+
+  **Update, Issue #23 (2026-09-20):** `AoiNormalizationOptions.MinimumFetchEnvelopeSide` (see "Minimum fetch
+  envelope, verified 2026-09-20" above) is a third value in the same category: it only ever widens
+  `NormalizedAoi.FetchEnvelope`, never `ClipRegion`. `ClipRegionFactory.Build` (the clip region `process`,
+  `fetch`, and `run` all share) never reads `NormalizedAoi.FetchEnvelope` or `MinimumSideExpansion` at all, so
+  a fetch envelope this expansion widened past the requested AOI never widens the clip a raster is
+  subsequently cropped to — the extra area OpenTopography returns to satisfy its own minimum is clipped away
+  exactly as it always was for any raster returned larger than the requested AOI. `Build`'s own `Parcel`
+  branch still calls `AoiNormalizer.Normalize` (to obtain `NormalizedAoi.Parcel`/`Buffer` for a projected
+  clip), so it is not insulated merely by never reading the fetch envelope: it explicitly passes
+  `MinimumFetchEnvelopeSide = LinearDistance.Zero`, so the antimeridian/pole guard that expansion can trigger
+  is never evaluated for a call whose fetch envelope it discards.
 - `ClipRegion.Buffer` is a real geometric buffer, applied by `GridClipper` to `ClipRegion.Region`'s geometry,
   and only once that geometry is in a projected reference with a linear unit (`GridClipper` rejects a
   positive buffer on a geographic reference with `GridClipException`, since a buffer in degrees is not a
@@ -235,8 +294,10 @@ unchanged — normalizing a parcel AOI parses its geometry first, so a malformed
   apart from "this is outside the parcel" without re-deriving it from a `null` elevation alone.
 - **Issue #8** (provenance): `GridClipResult` carries every count a `TerrainProvenance` clip-stage extension
   will need — `SourceCellCount`, `IncludedCellCount`, `RetainedElevationCount`, `NoDataCellsInsideRegion`,
-  `ExcludedCellCount` — plus `EffectiveRegion` and `Inclusion`, and `NormalizedAoi` carries `Basis` and
-  `EnvelopeMargin`.
+  `ExcludedCellCount` — plus `EffectiveRegion` and `Inclusion`, and `NormalizedAoi` carries `Basis`,
+  `EnvelopeMargin`, and (SolidGround Issue #23) `MinimumSideExpansion`; none of the three reaches the export
+  document today (see "Minimum fetch envelope, verified 2026-09-20" above) — a later provenance extension is
+  still the seam that would carry them there.
 - **Issue #9** (CLI wiring): every AOI form, buffer, and margin is an explicit, validated value
   (`LinearDistance`, never a bare `double`); `src/SolidGround.Cli/Program.cs` is untouched by this issue.
 

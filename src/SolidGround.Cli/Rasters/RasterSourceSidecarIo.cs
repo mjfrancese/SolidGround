@@ -17,7 +17,7 @@ namespace SolidGround.Cli.Rasters;
 internal static class RasterSourceSidecarIo
 {
     internal const string Schema = "solidground.raster-source";
-    internal const int CurrentSchemaVersion = 2;
+    internal const int CurrentSchemaVersion = 3;
 
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
@@ -149,6 +149,25 @@ internal static class RasterSourceSidecarIo
             writer.WriteNullValue();
         }
 
+        writer.WritePropertyName("fetchEnvelope");
+        WriteFetchEnvelope(writer, acquisition.FetchEnvelope);
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteFetchEnvelope(Utf8JsonWriter writer, RasterSourceFetchEnvelope fetchEnvelope)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("west", fetchEnvelope.West);
+        writer.WriteNumber("south", fetchEnvelope.South);
+        writer.WriteNumber("east", fetchEnvelope.East);
+        writer.WriteNumber("north", fetchEnvelope.North);
+        writer.WriteNumber("minimumSideMeters", fetchEnvelope.MinimumSideMeters);
+        writer.WriteBoolean("expanded", fetchEnvelope.Expanded);
+        writer.WriteNumber("widthBeforeMeters", fetchEnvelope.WidthBeforeMeters);
+        writer.WriteNumber("heightBeforeMeters", fetchEnvelope.HeightBeforeMeters);
+        writer.WriteNumber("widthAfterMeters", fetchEnvelope.WidthAfterMeters);
+        writer.WriteNumber("heightAfterMeters", fetchEnvelope.HeightAfterMeters);
         writer.WriteEndObject();
     }
 
@@ -299,7 +318,7 @@ internal static class RasterSourceSidecarIo
         Dictionary<string, JsonElement> props = ReadObjectProperties(obj, sourcePath, jsonPath,
             [
                 "redactedRequestUri", "statusCode", "contentType", "contentDispositionFileName", "archiveEntryNames",
-                "referenceSource", "responseByteCount", "metadataRequest",
+                "referenceSource", "responseByteCount", "metadataRequest", "fetchEnvelope",
             ]);
 
         string redactedRequestUri = RequireString(props["redactedRequestUri"], sourcePath, $"{jsonPath}.redactedRequestUri");
@@ -315,9 +334,35 @@ internal static class RasterSourceSidecarIo
             ? null
             : ParseMetadataRequest(metadataRequestElement, sourcePath, $"{jsonPath}.metadataRequest");
 
+        RasterSourceFetchEnvelope fetchEnvelope = ParseFetchEnvelope(props["fetchEnvelope"], sourcePath, $"{jsonPath}.fetchEnvelope");
+
         return new RasterSourceAcquisition(
             redactedRequestUri, statusCode, contentType, contentDispositionFileName, archiveEntryNames, referenceSource,
-            responseByteCount, metadataRequest);
+            responseByteCount, metadataRequest, fetchEnvelope);
+    }
+
+    private static RasterSourceFetchEnvelope ParseFetchEnvelope(JsonElement obj, string sourcePath, string jsonPath)
+    {
+        RequireObject(obj, sourcePath, jsonPath);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, sourcePath, jsonPath,
+            [
+                "west", "south", "east", "north", "minimumSideMeters", "expanded",
+                "widthBeforeMeters", "heightBeforeMeters", "widthAfterMeters", "heightAfterMeters",
+            ]);
+
+        double west = RequireFiniteDouble(props["west"], sourcePath, $"{jsonPath}.west");
+        double south = RequireFiniteDouble(props["south"], sourcePath, $"{jsonPath}.south");
+        double east = RequireFiniteDouble(props["east"], sourcePath, $"{jsonPath}.east");
+        double north = RequireFiniteDouble(props["north"], sourcePath, $"{jsonPath}.north");
+        double minimumSideMeters = RequireFiniteDouble(props["minimumSideMeters"], sourcePath, $"{jsonPath}.minimumSideMeters");
+        bool expanded = RequireBool(props["expanded"], sourcePath, $"{jsonPath}.expanded");
+        double widthBeforeMeters = RequireFiniteDouble(props["widthBeforeMeters"], sourcePath, $"{jsonPath}.widthBeforeMeters");
+        double heightBeforeMeters = RequireFiniteDouble(props["heightBeforeMeters"], sourcePath, $"{jsonPath}.heightBeforeMeters");
+        double widthAfterMeters = RequireFiniteDouble(props["widthAfterMeters"], sourcePath, $"{jsonPath}.widthAfterMeters");
+        double heightAfterMeters = RequireFiniteDouble(props["heightAfterMeters"], sourcePath, $"{jsonPath}.heightAfterMeters");
+
+        return new RasterSourceFetchEnvelope(
+            west, south, east, north, minimumSideMeters, expanded, widthBeforeMeters, heightBeforeMeters, widthAfterMeters, heightAfterMeters);
     }
 
     private static RasterSourceMetadataRequest ParseMetadataRequest(JsonElement obj, string sourcePath, string jsonPath)
@@ -425,6 +470,26 @@ internal static class RasterSourceSidecarIo
         }
 
         return result;
+    }
+
+    private static double RequireFiniteDouble(JsonElement value, string sourcePath, string jsonPath)
+    {
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out double result) || !double.IsFinite(result))
+        {
+            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a finite number.");
+        }
+
+        return result;
+    }
+
+    private static bool RequireBool(JsonElement value, string sourcePath, string jsonPath)
+    {
+        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a boolean.");
+        }
+
+        return value.GetBoolean();
     }
 
     private static DateOnly RequireDate(JsonElement value, string sourcePath, string jsonPath)

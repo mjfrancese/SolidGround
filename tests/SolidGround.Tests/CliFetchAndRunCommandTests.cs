@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using SolidGround.Cli;
+using SolidGround.Core.Aois;
 using SolidGround.Core.Exports;
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Sources.OpenTopography;
@@ -122,7 +124,7 @@ public sealed class CliFetchAndRunCommandTests
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
             Assert.Equal("solidground.raster-source", sidecar.RootElement.GetProperty("schema").GetString());
-            Assert.Equal(2, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("OpenTopography", sidecar.RootElement.GetProperty("sourceName").GetString());
 
             // The zip response carries its own .prj sidecar, so both references came straight from the
@@ -261,7 +263,7 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(NorthAmericanUtmWellKnownText.Create(26915, new VerticalReference("NAVD88", LengthUnit.Meter)), File.ReadAllText(prjPath));
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
-            Assert.Equal(2, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("SourceResponse", sidecar.RootElement.GetProperty("horizontalReferenceOrigin").GetString());
             Assert.Equal("SourceResponse", sidecar.RootElement.GetProperty("verticalReferenceOrigin").GetString());
             Assert.Equal(JsonValueKind.Null, sidecar.RootElement.GetProperty("acquisition").GetProperty("metadataRequest").ValueKind);
@@ -305,7 +307,7 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(expectedWkt, File.ReadAllText(prjPath));
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
-            Assert.Equal(2, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("SourceMetadataResponse", sidecar.RootElement.GetProperty("horizontalReferenceOrigin").GetString());
             Assert.Equal("DatasetDocumentation", sidecar.RootElement.GetProperty("verticalReferenceOrigin").GetString());
 
@@ -426,6 +428,171 @@ public sealed class CliFetchAndRunCommandTests
         }
     }
 
+    // ---- minimum fetch envelope (SolidGround Issue #23): AoiNormalizationOptions.MinimumFetchEnvelopeSide
+    // widens a too-small request box without ever touching the clip region. See
+    // docs/architecture/aoi-normalization-and-clipping.md's "Minimum fetch envelope, verified 2026-09-20"
+    // section. --------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FetchWithTheFixedTestBboxSendsTheExactUnexpandedQueryValuesAndPrintsNoExpansionLine()
+    {
+        // The fixed Bbox constant above is already about 121.8 m x 154.8 m -- at or above the 110 m default
+        // minimum on both axes -- so this proves the bounding-box arm's new AoiNormalizer.Normalize pass-through
+        // (SolidGround Issue #23's D5) leaves an already-large-enough request completely unchanged, bit for bit.
+        DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            byte[] zipBytes = OpenTopographyUsgs1mSourceTests.CreateZipArchive(
+                ("example-site-synthetic.asc", ReadFixture("example-site-synthetic.asc")), ("example-site-synthetic.prj", ReadFixture("example-site-synthetic.prj")));
+            FakeHttpMessageHandler handler = new((_, _) => ZipResponse(zipBytes, "usgs1m.zip"));
+            CliHost host = CreateHost(handler, name => name == "OPENTOPOGRAPHY_API_KEY" ? FakeKey : null);
+
+            (int exitCode, string stdout, _) = await RunAsync(
+                host, ["fetch", "--bbox", Bbox, "--output", tempDirectory.FullName], TestContext.Current.CancellationToken);
+
+            Assert.Equal(CliExitCodes.Success, exitCode);
+            Assert.Single(handler.Requests);
+            HttpRequestMessage request = handler.Requests[0];
+            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "west"));
+            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "south"));
+            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "east"));
+            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "north"));
+            Assert.DoesNotContain("fetch envelope expanded", stdout, StringComparison.Ordinal);
+
+            string sourceJsonPath = Path.Combine(tempDirectory.FullName, "terrain.source.json");
+            using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
+            JsonElement fetchEnvelope = sidecar.RootElement.GetProperty("acquisition").GetProperty("fetchEnvelope");
+            Assert.False(fetchEnvelope.GetProperty("expanded").GetBoolean());
+            Assert.Equal(110d, fetchEnvelope.GetProperty("minimumSideMeters").GetDouble());
+            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("west").GetDouble());
+            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("south").GetDouble());
+            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("east").GetDouble());
+            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("north").GetDouble());
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FetchWithAFortyMeterBboxExpandsTheRequestToAtLeastTheMinimumSideAndRecordsItInTheSidecar()
+    {
+        DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            const double centerLongitude = [withheld]d;
+            const double centerLatitude = [withheld]d;
+            double halfWidthDegrees = 20d / Wgs84Ellipsoid.MetersPerDegreeLongitude(centerLatitude);
+            double halfHeightDegrees = 20d / Wgs84Ellipsoid.MetersPerDegreeLatitude(centerLatitude);
+            string tinyBbox = string.Join(
+                ',',
+                FormatCoordinate(centerLongitude - halfWidthDegrees),
+                FormatCoordinate(centerLatitude - halfHeightDegrees),
+                FormatCoordinate(centerLongitude + halfWidthDegrees),
+                FormatCoordinate(centerLatitude + halfHeightDegrees));
+
+            byte[] zipBytes = OpenTopographyUsgs1mSourceTests.CreateZipArchive(
+                ("example-site-synthetic.asc", ReadFixture("example-site-synthetic.asc")), ("example-site-synthetic.prj", ReadFixture("example-site-synthetic.prj")));
+            FakeHttpMessageHandler handler = new((_, _) => ZipResponse(zipBytes, "usgs1m.zip"));
+            CliHost host = CreateHost(handler, name => name == "OPENTOPOGRAPHY_API_KEY" ? FakeKey : null);
+
+            (int exitCode, string stdout, _) = await RunAsync(
+                host, ["fetch", "--bbox", tinyBbox, "--output", tempDirectory.FullName], TestContext.Current.CancellationToken);
+
+            Assert.Equal(CliExitCodes.Success, exitCode);
+            Assert.Single(handler.Requests);
+            HttpRequestMessage request = handler.Requests[0];
+            double requestWest = double.Parse(GetQueryValue(request, "west")!, CultureInfo.InvariantCulture);
+            double requestEast = double.Parse(GetQueryValue(request, "east")!, CultureInfo.InvariantCulture);
+            double requestSouth = double.Parse(GetQueryValue(request, "south")!, CultureInfo.InvariantCulture);
+            double requestNorth = double.Parse(GetQueryValue(request, "north")!, CultureInfo.InvariantCulture);
+
+            Assert.Contains("fetch: fetch envelope expanded to at least 110.0 m per side", stdout, StringComparison.Ordinal);
+            Assert.Contains(
+                "to exceed OpenTopography's minimum request area; the clip region is unchanged.", stdout, StringComparison.Ordinal);
+
+            // The width/height numbers below use AoiNormalizer's own recorded factors (via the sidecar), not
+            // a factor re-derived from the request's own (already-expanded) south/north -- re-deriving it
+            // from the expanded bounds would evaluate Wgs84Ellipsoid.MetersPerDegreeLongitude at a subtly
+            // different latitude than AoiNormalizer itself used to size the expansion, understating the true
+            // width by a fraction of a meter.
+            string sourceJsonPath = Path.Combine(tempDirectory.FullName, "terrain.source.json");
+            using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
+            JsonElement fetchEnvelope = sidecar.RootElement.GetProperty("acquisition").GetProperty("fetchEnvelope");
+            Assert.True(fetchEnvelope.GetProperty("expanded").GetBoolean());
+            Assert.Equal(110d, fetchEnvelope.GetProperty("minimumSideMeters").GetDouble());
+            Assert.Equal(requestWest, fetchEnvelope.GetProperty("west").GetDouble());
+            Assert.Equal(requestSouth, fetchEnvelope.GetProperty("south").GetDouble());
+            Assert.Equal(requestEast, fetchEnvelope.GetProperty("east").GetDouble());
+            Assert.Equal(requestNorth, fetchEnvelope.GetProperty("north").GetDouble());
+            Assert.True(fetchEnvelope.GetProperty("widthBeforeMeters").GetDouble() < 110d);
+            Assert.True(fetchEnvelope.GetProperty("heightBeforeMeters").GetDouble() < 110d);
+            Assert.True(fetchEnvelope.GetProperty("widthAfterMeters").GetDouble() >= 110d - 1e-6);
+            Assert.True(fetchEnvelope.GetProperty("heightAfterMeters").GetDouble() >= 110d - 1e-6);
+
+            // Independent of any meters-per-degree factor: proves the real HTTP query genuinely grew beyond
+            // the original 40 m box, so a systematic conversion-factor bug in ExpandToMinimumSide could not
+            // make both the actual request and its self-reported widthAfterMeters/heightAfterMeters above
+            // pass while the true geodesic span stayed unchanged.
+            Assert.True(requestEast - requestWest > 2d * halfWidthDegrees);
+            Assert.True(requestNorth - requestSouth > 2d * halfHeightDegrees);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunWithATinyParcelBufferExpandsTheRequestButClipsIdenticallyToProcess()
+    {
+        // process never derives a fetch envelope at all (it has no network step), so its own retained count
+        // for the identical parcel and buffer is the ground truth "as before" this issue's expansion: proves
+        // ClipRegionFactory.Build (the clip region) is genuinely unaffected by how large a box run actually
+        // requested the raster over.
+        DirectoryInfo runOutput = Directory.CreateTempSubdirectory();
+        DirectoryInfo processOutput = Directory.CreateTempSubdirectory();
+        try
+        {
+            byte[] zipBytes = OpenTopographyUsgs1mSourceTests.CreateZipArchive(
+                ("example-site-synthetic.asc", ReadFixture("example-site-synthetic.asc")), ("example-site-synthetic.prj", ReadFixture("example-site-synthetic.prj")));
+            FakeHttpMessageHandler handler = new((_, _) => ZipResponse(zipBytes, "usgs1m.zip"));
+            CliHost host = CreateHost(handler, name => name == "OPENTOPOGRAPHY_API_KEY" ? FakeKey : null);
+
+            (int runExitCode, string runStdout, _) = await RunAsync(
+                host,
+                [
+                    "run", "--parcel", FixturePath("example-site-synthetic-parcel.geojson"), "--parcel-format", "geojson",
+                    "--buffer", "5", "--output", runOutput.FullName,
+                ],
+                TestContext.Current.CancellationToken);
+            Assert.Equal(CliExitCodes.Success, runExitCode);
+
+            Assert.Single(handler.Requests);
+            Assert.Contains("run: fetch envelope expanded to at least 110.0 m per side", runStdout, StringComparison.Ordinal);
+            Assert.Contains(
+                "to exceed OpenTopography's minimum request area; the clip region is unchanged.", runStdout, StringComparison.Ordinal);
+
+            (int processExitCode, _, _) = await RunAsync(
+                host,
+                [
+                    "process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"),
+                    "--parcel", FixturePath("example-site-synthetic-parcel.geojson"), "--parcel-format", "geojson", "--buffer", "5",
+                    "--output", processOutput.FullName,
+                ],
+                TestContext.Current.CancellationToken);
+            Assert.Equal(CliExitCodes.Success, processExitCode);
+
+            Assert.Equal(ReadOriginalPointCount(processOutput.FullName, "terrain"), ReadOriginalPointCount(runOutput.FullName, "terrain"));
+        }
+        finally
+        {
+            Directory.Delete(runOutput.FullName, recursive: true);
+            Directory.Delete(processOutput.FullName, recursive: true);
+        }
+    }
+
     // ---- hybrid GeoTIFF-GeoKeys flow (SolidGround Issue #21): a bare AAIGrid body triggers a second,
     // metadata-only GTiff request, built here with TiffBuilder (widened to internal for exactly this reuse
     // by GeoTiffMetadataReaderTests) so it matches example-site-synthetic.asc's header exactly. ------------------
@@ -458,7 +625,7 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(expectedWkt, File.ReadAllText(prjPath));
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
-            Assert.Equal(2, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("SourceMetadataResponse", sidecar.RootElement.GetProperty("horizontalReferenceOrigin").GetString());
             Assert.Equal("DatasetDocumentation", sidecar.RootElement.GetProperty("verticalReferenceOrigin").GetString());
 
@@ -483,9 +650,10 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Contains("fetch: metadata response bytes:", stdout, StringComparison.Ordinal);
             Assert.Contains("fetch: metadata geokeys: EPSG:26915", stdout, StringComparison.Ordinal);
 
-            // Round-trips the version 2 sidecar's non-null metadataRequest through RasterSourceSidecarIo.Read
-            // (internal to SolidGround.Cli, so exercised only indirectly here): process must successfully
-            // read it back as the default sibling --source-json when none is given explicitly.
+            // Round-trips the version 3 sidecar's non-null metadataRequest (and its new fetchEnvelope object)
+            // through RasterSourceSidecarIo.Read (internal to SolidGround.Cli, so exercised only indirectly
+            // here): process must successfully read it back as the default sibling --source-json when none is
+            // given explicitly.
             DirectoryInfo processOutput = Directory.CreateTempSubdirectory();
             try
             {
@@ -823,6 +991,16 @@ public sealed class CliFetchAndRunCommandTests
     private static string FixturePath(string fileName) => Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName);
 
     private static string ReadFixture(string fileName) => File.ReadAllText(FixturePath(fileName));
+
+    /// <summary>The identical "R"/invariant formatting <c>OpenTopographyUsgs1mSource.FormatCoordinate</c> uses to render a query value.</summary>
+    private static string FormatCoordinate(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+
+    private static int ReadOriginalPointCount(string outputDirectory, string baseName)
+    {
+        string documentPath = Path.Combine(outputDirectory, baseName + TerrainExportBundleRenderer.DocumentFileSuffix);
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(documentPath));
+        return document.RootElement.GetProperty("provenance").GetProperty("originalPointCount").GetInt32();
+    }
 
     private static CliHost CreateHost(FakeHttpMessageHandler handler, Func<string, string?> getEnvironmentVariable) => new(
         getEnvironmentVariable,

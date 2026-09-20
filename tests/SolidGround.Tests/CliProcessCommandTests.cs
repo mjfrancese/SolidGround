@@ -39,7 +39,7 @@ public sealed class CliProcessCommandTests
     private const string ValidSourceJson = """
         {
           "schema": "solidground.raster-source",
-          "schemaVersion": 2,
+          "schemaVersion": 3,
           "sourceName": "OpenTopography",
           "datasetIdentifier": "USGS1m",
           "collectionPeriod": {
@@ -62,7 +62,19 @@ public sealed class CliProcessCommandTests
             "archiveEntryNames": ["USGS1m.asc", "USGS1m.prj"],
             "referenceSource": "PrjSidecar",
             "responseByteCount": 12345,
-            "metadataRequest": null
+            "metadataRequest": null,
+            "fetchEnvelope": {
+              "west": [withheld],
+              "south": [withheld],
+              "east": [withheld],
+              "north": [withheld],
+              "minimumSideMeters": 110.0,
+              "expanded": false,
+              "widthBeforeMeters": 121.8,
+              "heightBeforeMeters": 154.8,
+              "widthAfterMeters": 121.8,
+              "heightAfterMeters": 154.8
+            }
           }
         }
         """;
@@ -625,9 +637,21 @@ public sealed class CliProcessCommandTests
     }
 
     [Fact]
-    public async Task SourceJsonWithSchemaVersionThreeExitsWithUsageErrorNamingTheSidecarPath()
+    public async Task SourceJsonWithSchemaVersionFourExitsWithUsageErrorNamingTheSidecarPath()
     {
-        string json = ValidSourceJson.Replace("\"schemaVersion\": 2,", "\"schemaVersion\": 3,", StringComparison.Ordinal);
+        // An unsupported future schemaVersion (newer than RasterSourceSidecarIo.CurrentSchemaVersion) is
+        // rejected the same way any other wrong schemaVersion is.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 4,", StringComparison.Ordinal);
+        await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SourceJsonWithSchemaVersionTwoExitsWithUsageErrorNamingTheSidecarPath()
+    {
+        // A genuine version 2 sidecar (from before SolidGround Issue #23's fetchEnvelope addition) is now
+        // rejected as an old version, exactly like version 1 below -- there is no migration path from version
+        // 2 to version 3.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 2,", StringComparison.Ordinal);
         await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
     }
 
@@ -635,8 +659,8 @@ public sealed class CliProcessCommandTests
     public async Task SourceJsonWithSchemaVersionOneExitsWithUsageErrorNamingTheSidecarPath()
     {
         // A genuine version 1 sidecar (from before SolidGround Issue #21) is rejected the same way any other
-        // wrong schemaVersion is -- there is no migration path from version 1 to version 2.
-        string json = ValidSourceJson.Replace("\"schemaVersion\": 2,", "\"schemaVersion\": 1,", StringComparison.Ordinal);
+        // wrong schemaVersion is -- there is no migration path from version 1 to version 3.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 1,", StringComparison.Ordinal);
         await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
     }
 

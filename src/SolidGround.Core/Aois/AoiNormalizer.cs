@@ -49,7 +49,34 @@ public sealed record AoiNormalizationOptions
     /// projected reference.
     /// </summary>
     public LinearDistance EnvelopeMargin { get; init; } = LinearDistance.Zero;
+
+    /// <summary>
+    /// The smallest width and height <see cref="NormalizedAoi.FetchEnvelope"/> may have, applied after
+    /// <see cref="EnvelopeMargin"/> and any parcel buffer. Every basis is affected: a fetch envelope narrower
+    /// than this on either axis is expanded symmetrically about its own centre until that axis reaches
+    /// exactly this distance, never touching clip geometry. The default, 110 m, guards against
+    /// OpenTopography's own undocumented minimum request area (see
+    /// docs/architecture/aoi-normalization-and-clipping.md's "Minimum fetch envelope, verified 2026-09-20"
+    /// section for the probe evidence and the margin this default carries over the observed threshold).
+    /// <see cref="LinearDistance.Zero"/> disables this expansion entirely; <see cref="LinearDistance"/>
+    /// itself rejects a negative value.
+    /// </summary>
+    public LinearDistance MinimumFetchEnvelopeSide { get; init; } = LinearDistance.Meters(110d);
 }
+
+/// <summary>
+/// Records whether <see cref="AoiNormalizer.Normalize"/> widened <see cref="NormalizedAoi.FetchEnvelope"/> to
+/// meet <see cref="AoiNormalizationOptions.MinimumFetchEnvelopeSide"/>, and the width/height before and after.
+/// When <see cref="Applied"/> is <see langword="false"/>, <see cref="WidthAfter"/> equals <see cref="WidthBefore"/>
+/// and <see cref="HeightAfter"/> equals <see cref="HeightBefore"/>.
+/// </summary>
+public sealed record FetchEnvelopeExpansion(
+    bool Applied,
+    LinearDistance MinimumSide,
+    LinearDistance WidthBefore,
+    LinearDistance HeightBefore,
+    LinearDistance WidthAfter,
+    LinearDistance HeightAfter);
 
 /// <summary>
 /// The result of normalizing one <see cref="AreaOfInterest"/> into a WGS 84 fetch envelope suitable for
@@ -63,10 +90,12 @@ public sealed record NormalizedAoi
         PolygonalRegion? parcel,
         LinearDistance buffer,
         FetchEnvelopeBasis basis,
-        LinearDistance envelopeMargin)
+        LinearDistance envelopeMargin,
+        FetchEnvelopeExpansion minimumSideExpansion)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(fetchEnvelope);
+        ArgumentNullException.ThrowIfNull(minimumSideExpansion);
         if (!Enum.IsDefined(basis))
         {
             throw new ArgumentOutOfRangeException(nameof(basis), basis, "Unsupported fetch envelope basis.");
@@ -87,6 +116,7 @@ public sealed record NormalizedAoi
         Buffer = buffer;
         Basis = basis;
         EnvelopeMargin = envelopeMargin;
+        MinimumSideExpansion = minimumSideExpansion;
     }
 
     /// <summary>The area of interest this result was normalized from.</summary>
@@ -112,6 +142,13 @@ public sealed record NormalizedAoi
 
     /// <summary>The extra fetch-envelope margin that was applied, from <see cref="AoiNormalizationOptions.EnvelopeMargin"/>.</summary>
     public LinearDistance EnvelopeMargin { get; }
+
+    /// <summary>
+    /// Whether, and by how much, <see cref="FetchEnvelope"/> was widened to meet
+    /// <see cref="AoiNormalizationOptions.MinimumFetchEnvelopeSide"/>, applied after <see cref="EnvelopeMargin"/>
+    /// and any parcel buffer.
+    /// </summary>
+    public FetchEnvelopeExpansion MinimumSideExpansion { get; }
 }
 
 /// <summary>
@@ -187,25 +224,28 @@ public static class AoiNormalizer
         IHorizontalCoordinateTransform? parcelToWgs84 = null)
     {
         ArgumentNullException.ThrowIfNull(aoi);
-        LinearDistance margin = (options ?? new AoiNormalizationOptions()).EnvelopeMargin;
+        AoiNormalizationOptions effectiveOptions = options ?? new AoiNormalizationOptions();
+        LinearDistance margin = effectiveOptions.EnvelopeMargin;
+        LinearDistance minimumSide = effectiveOptions.MinimumFetchEnvelopeSide;
 
         return aoi switch
         {
-            Wgs84BoundingBoxAoi bbox => NormalizeBoundingBox(bbox, margin),
-            Wgs84RadiusAoi radius => NormalizeRadius(radius, margin),
-            ParcelGeometryAoi parcel => NormalizeParcel(parcel, margin, parcelToWgs84),
+            Wgs84BoundingBoxAoi bbox => NormalizeBoundingBox(bbox, margin, minimumSide),
+            Wgs84RadiusAoi radius => NormalizeRadius(radius, margin, minimumSide),
+            ParcelGeometryAoi parcel => NormalizeParcel(parcel, margin, minimumSide, parcelToWgs84),
             _ => throw new ArgumentException($"Unsupported area-of-interest type '{aoi.GetType().Name}'.", nameof(aoi)),
         };
     }
 
-    private static NormalizedAoi NormalizeBoundingBox(Wgs84BoundingBoxAoi bbox, LinearDistance margin)
+    private static NormalizedAoi NormalizeBoundingBox(Wgs84BoundingBoxAoi bbox, LinearDistance margin, LinearDistance minimumSide)
     {
         (double west, double south, double east, double north) = PadEnvelope(
             bbox.WestLongitude, bbox.SouthLatitude, bbox.EastLongitude, bbox.NorthLatitude,
             margin.ToMeters());
+        (west, south, east, north, FetchEnvelopeExpansion expansion) = ExpandToMinimumSide(west, south, east, north, minimumSide);
 
         Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
-        return new NormalizedAoi(bbox, fetchEnvelope, parcel: null, LinearDistance.Zero, FetchEnvelopeBasis.BoundingBox, margin);
+        return new NormalizedAoi(bbox, fetchEnvelope, parcel: null, LinearDistance.Zero, FetchEnvelopeBasis.BoundingBox, margin, expansion);
     }
 
     /// <summary>
@@ -214,26 +254,28 @@ public static class AoiNormalizer
     /// by a residual below one centimeter for radii up to 5 km at mid latitudes; <see cref="AoiNormalizationOptions.EnvelopeMargin"/>
     /// absorbs larger cases.
     /// </summary>
-    private static NormalizedAoi NormalizeRadius(Wgs84RadiusAoi radiusAoi, LinearDistance margin)
+    private static NormalizedAoi NormalizeRadius(Wgs84RadiusAoi radiusAoi, LinearDistance margin, LinearDistance minimumSide)
     {
         double padMeters = radiusAoi.Radius.ToMeters() + margin.ToMeters();
         (double west, double south, double east, double north) = PadAroundLatitudes(
             radiusAoi.Longitude, radiusAoi.Latitude, radiusAoi.Longitude, radiusAoi.Latitude,
             padMeters, radiusAoi.Latitude, radiusAoi.Latitude);
+        (west, south, east, north, FetchEnvelopeExpansion expansion) = ExpandToMinimumSide(west, south, east, north, minimumSide);
 
         Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
-        return new NormalizedAoi(radiusAoi, fetchEnvelope, parcel: null, LinearDistance.Zero, FetchEnvelopeBasis.RadiusOnWgs84Ellipsoid, margin);
+        return new NormalizedAoi(radiusAoi, fetchEnvelope, parcel: null, LinearDistance.Zero, FetchEnvelopeBasis.RadiusOnWgs84Ellipsoid, margin, expansion);
     }
 
-    private static NormalizedAoi NormalizeParcel(ParcelGeometryAoi parcelAoi, LinearDistance margin, IHorizontalCoordinateTransform? parcelToWgs84)
+    private static NormalizedAoi NormalizeParcel(
+        ParcelGeometryAoi parcelAoi, LinearDistance margin, LinearDistance minimumSide, IHorizontalCoordinateTransform? parcelToWgs84)
     {
         PolygonalRegion parcel = ParcelGeometryParser.Parse(parcelAoi);
         double padMeters = parcelAoi.Buffer.ToMeters() + margin.ToMeters();
 
         return parcelAoi.HorizontalReference.Kind switch
         {
-            HorizontalReferenceKind.Geographic => NormalizeGeographicParcel(parcelAoi, parcel, padMeters, margin),
-            HorizontalReferenceKind.Projected => NormalizeProjectedParcel(parcelAoi, parcel, padMeters, margin, parcelToWgs84),
+            HorizontalReferenceKind.Geographic => NormalizeGeographicParcel(parcelAoi, parcel, padMeters, margin, minimumSide),
+            HorizontalReferenceKind.Projected => NormalizeProjectedParcel(parcelAoi, parcel, padMeters, margin, minimumSide, parcelToWgs84),
             _ => throw new ArgumentOutOfRangeException(nameof(parcelAoi), parcelAoi.HorizontalReference.Kind, "Unsupported horizontal reference kind."),
         };
     }
@@ -246,13 +288,15 @@ public static class AoiNormalizer
     /// covered by <see cref="AoiNormalizationOptions.EnvelopeMargin"/>, and the parcel itself keeps its
     /// declared datum unchanged.
     /// </summary>
-    private static NormalizedAoi NormalizeGeographicParcel(ParcelGeometryAoi parcelAoi, PolygonalRegion parcel, double padMeters, LinearDistance margin)
+    private static NormalizedAoi NormalizeGeographicParcel(
+        ParcelGeometryAoi parcelAoi, PolygonalRegion parcel, double padMeters, LinearDistance margin, LinearDistance minimumSide)
     {
         PlanarEnvelope envelope = parcel.Envelope;
         (double west, double south, double east, double north) = PadEnvelope(envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY, padMeters);
+        (west, south, east, north, FetchEnvelopeExpansion expansion) = ExpandToMinimumSide(west, south, east, north, minimumSide);
 
         Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
-        return new NormalizedAoi(parcelAoi, fetchEnvelope, parcel, parcelAoi.Buffer, FetchEnvelopeBasis.GeographicParcelEnvelope, margin);
+        return new NormalizedAoi(parcelAoi, fetchEnvelope, parcel, parcelAoi.Buffer, FetchEnvelopeBasis.GeographicParcelEnvelope, margin, expansion);
     }
 
     /// <summary>
@@ -263,7 +307,8 @@ public static class AoiNormalizer
     /// fetch envelope.
     /// </summary>
     private static NormalizedAoi NormalizeProjectedParcel(
-        ParcelGeometryAoi parcelAoi, PolygonalRegion parcel, double padMeters, LinearDistance margin, IHorizontalCoordinateTransform? parcelToWgs84)
+        ParcelGeometryAoi parcelAoi, PolygonalRegion parcel, double padMeters, LinearDistance margin, LinearDistance minimumSide,
+        IHorizontalCoordinateTransform? parcelToWgs84)
     {
         if (parcelToWgs84 is null)
         {
@@ -288,9 +333,10 @@ public static class AoiNormalizer
         double maxLatitude = transformedVertices.Max(vertex => vertex.Y);
 
         (double west, double south, double east, double north) = PadEnvelope(minLongitude, minLatitude, maxLongitude, maxLatitude, padMeters);
+        (west, south, east, north, FetchEnvelopeExpansion expansion) = ExpandToMinimumSide(west, south, east, north, minimumSide);
 
         Wgs84BoundingBoxAoi fetchEnvelope = new(west, south, east, north);
-        return new NormalizedAoi(parcelAoi, fetchEnvelope, parcel, parcelAoi.Buffer, FetchEnvelopeBasis.TransformedParcelEnvelope, margin);
+        return new NormalizedAoi(parcelAoi, fetchEnvelope, parcel, parcelAoi.Buffer, FetchEnvelopeBasis.TransformedParcelEnvelope, margin, expansion);
     }
 
     /// <summary>
@@ -341,16 +387,98 @@ public static class AoiNormalizer
             paddedNorth += latitudeDelta;
         }
 
-        if (paddedWest < -180d || paddedEast > 180d || paddedSouth < -90d || paddedNorth > 90d)
+        ThrowIfOutOfRange(
+            paddedWest, paddedSouth, paddedEast, paddedNorth,
+            $"Padding the fetch envelope by {padMeters.ToString("R", CultureInfo.InvariantCulture)} m");
+
+        return (paddedWest, paddedSouth, paddedEast, paddedNorth);
+    }
+
+    /// <summary>
+    /// Widens a WGS 84 envelope, symmetrically about its own centre, on whichever of its two axes falls short
+    /// of <paramref name="minimumSide"/>: the longitude (east-west) axis is measured, and if necessary
+    /// expanded, using the same conservative longitude factor <see cref="PadEnvelope"/> uses (evaluated at
+    /// whichever of <paramref name="south"/>/<paramref name="north"/> has the larger absolute value); the
+    /// latitude (north-south) axis always uses the equator's factor, exactly like <see cref="PadEnvelope"/>,
+    /// for the same unconditional-conservatism reason documented there. Applied after any existing padding
+    /// (a margin or a parcel buffer), so it only ever grows an envelope, never shrinks one a caller already
+    /// sized larger than the minimum. <see cref="AoiNormalizationOptions.MinimumFetchEnvelopeSide"/> zero
+    /// disables this entirely (both measured sides are reported, but the returned bounds are unchanged).
+    /// Reuses <see cref="ThrowIfOutOfRange"/> — the identical antimeridian/pole guard <see cref="PadAroundLatitudes"/>
+    /// applies — so an envelope that cannot be widened to the minimum without crossing the antimeridian or a
+    /// pole fails exactly as an over-large margin or buffer already would.
+    /// </summary>
+    private static (double West, double South, double East, double North, FetchEnvelopeExpansion Expansion) ExpandToMinimumSide(
+        double west, double south, double east, double north, LinearDistance minimumSide)
+    {
+        double minimumSideMeters = minimumSide.ToMeters();
+
+        double latitudeForLongitudeFactor = Math.Abs(south) >= Math.Abs(north) ? south : north;
+        double metersPerDegreeLongitude = Wgs84Ellipsoid.MetersPerDegreeLongitude(latitudeForLongitudeFactor);
+        double metersPerDegreeLatitude = Wgs84Ellipsoid.MetersPerDegreeLatitude(0d);
+
+        double widthBeforeMeters = (east - west) * metersPerDegreeLongitude;
+        double heightBeforeMeters = (north - south) * metersPerDegreeLatitude;
+        LinearDistance widthBefore = LinearDistance.Meters(widthBeforeMeters);
+        LinearDistance heightBefore = LinearDistance.Meters(heightBeforeMeters);
+
+        double expandedWest = west;
+        double expandedEast = east;
+        double expandedSouth = south;
+        double expandedNorth = north;
+        bool applied = false;
+
+        if (minimumSideMeters > 0d && widthBeforeMeters < minimumSideMeters)
+        {
+            double halfWidthDegrees = minimumSideMeters / metersPerDegreeLongitude / 2d;
+            double centerLongitude = (west + east) / 2d;
+            expandedWest = centerLongitude - halfWidthDegrees;
+            expandedEast = centerLongitude + halfWidthDegrees;
+            applied = true;
+        }
+
+        if (minimumSideMeters > 0d && heightBeforeMeters < minimumSideMeters)
+        {
+            double halfHeightDegrees = minimumSideMeters / metersPerDegreeLatitude / 2d;
+            double centerLatitude = (south + north) / 2d;
+            expandedSouth = centerLatitude - halfHeightDegrees;
+            expandedNorth = centerLatitude + halfHeightDegrees;
+            applied = true;
+        }
+
+        if (!applied)
+        {
+            return (west, south, east, north, new FetchEnvelopeExpansion(false, minimumSide, widthBefore, heightBefore, widthBefore, heightBefore));
+        }
+
+        ThrowIfOutOfRange(
+            expandedWest, expandedSouth, expandedEast, expandedNorth,
+            $"Expanding the fetch envelope to a minimum side of {minimumSideMeters.ToString("R", CultureInfo.InvariantCulture)} m");
+
+        double widthAfterMeters = (expandedEast - expandedWest) * metersPerDegreeLongitude;
+        double heightAfterMeters = (expandedNorth - expandedSouth) * metersPerDegreeLatitude;
+        FetchEnvelopeExpansion expansion = new(
+            true, minimumSide, widthBefore, heightBefore, LinearDistance.Meters(widthAfterMeters), LinearDistance.Meters(heightAfterMeters));
+
+        return (expandedWest, expandedSouth, expandedEast, expandedNorth, expansion);
+    }
+
+    /// <summary>
+    /// The antimeridian/pole guard <see cref="PadAroundLatitudes"/> and <see cref="ExpandToMinimumSide"/> both
+    /// apply to a candidate envelope before returning it: SolidGround does not support an area of interest
+    /// whose fetch envelope would cross the antimeridian or a pole, regardless of which operation pushed it
+    /// there.
+    /// </summary>
+    private static void ThrowIfOutOfRange(double west, double south, double east, double north, string action)
+    {
+        if (west < -180d || east > 180d || south < -90d || north > 90d)
         {
             throw new AoiNormalizationException(
-                $"Padding the fetch envelope by {padMeters.ToString("R", CultureInfo.InvariantCulture)} m would move its bounds to " +
-                $"longitude [{GeometryInterop.FormatOrdinate(paddedWest)}, {GeometryInterop.FormatOrdinate(paddedEast)}] and latitude " +
-                $"[{GeometryInterop.FormatOrdinate(paddedSouth)}, {GeometryInterop.FormatOrdinate(paddedNorth)}], " +
+                $"{action} would move its bounds to " +
+                $"longitude [{GeometryInterop.FormatOrdinate(west)}, {GeometryInterop.FormatOrdinate(east)}] and latitude " +
+                $"[{GeometryInterop.FormatOrdinate(south)}, {GeometryInterop.FormatOrdinate(north)}], " +
                 "outside the supported range of longitude [-180, 180] and latitude [-90, 90]. SolidGround does not support an " +
                 "area of interest this close to the antimeridian or a pole.");
         }
-
-        return (paddedWest, paddedSouth, paddedEast, paddedNorth);
     }
 }

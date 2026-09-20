@@ -74,9 +74,10 @@ internal static class RunCommand
         OpenTopographyUsgs1mSource source = new(httpClient, new StaticOpenTopographyApiKeyProvider(key));
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
-        Wgs84BoundingBoxAoi fetchEnvelope = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
 
         host.StandardOutput.WriteLine("run: requesting OpenTopography...");
+        FetchCommand.PrintFetchEnvelopeExpansion(host, "run", fetchEnvelopeExpansion);
         OpenTopographyUsgs1mAcquisition acquisition = await source.AcquireDetailedAsync(
             new ElevationSourceRequest(fetchEnvelope), cancellationToken).ConfigureAwait(false);
 
@@ -146,7 +147,7 @@ internal static class RunCommand
 
         if (saveRaster)
         {
-            RasterSourceSidecar sidecar = FetchCommand.BuildSidecar(acquisition);
+            RasterSourceSidecar sidecar = FetchCommand.BuildSidecar(acquisition, fetchEnvelope, fetchEnvelopeExpansion);
             await RasterSetIo.WriteAsync(rasterPaths, grid, acquisition.Evidence.WellKnownText, sidecar, cancellationToken).ConfigureAwait(false);
             host.StandardOutput.WriteLine($"run: wrote '{rasterPaths.GridPath}', '{rasterPaths.ReferencePath}', '{rasterPaths.SourcePath}'.");
         }

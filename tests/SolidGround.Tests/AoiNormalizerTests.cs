@@ -191,7 +191,13 @@ public sealed class AoiNormalizerTests
             source => new Coordinate2D((source.X / 100000d) - 90d, (source.Y / 100000d) + 38d),
             TestTransformationDefinition());
 
-        NormalizedAoi result = AoiNormalizer.Normalize(parcelAoi, parcelToWgs84: transform);
+        // This parcel's transformed envelope is a few meters across (10 map units become 0.0001 degrees),
+        // far below the default AoiNormalizationOptions.MinimumFetchEnvelopeSide (110 m): disabled here so
+        // this test's exact-envelope assertions below reflect only the transform, not a minimum-side
+        // expansion (which AoiNormalizerMinimumFetchEnvelopeSideTests covers directly).
+        AoiNormalizationOptions options = new() { MinimumFetchEnvelopeSide = LinearDistance.Zero };
+
+        NormalizedAoi result = AoiNormalizer.Normalize(parcelAoi, options, parcelToWgs84: transform);
 
         // 5 shell vertices (closed ring) + 5 hole vertices (closed ring) = 10 Forward calls.
         Assert.Equal(10, transform.ForwardCalls.Count);
@@ -221,8 +227,9 @@ public sealed class AoiNormalizerTests
         Wgs84BoundingBoxAoi bbox = new([withheld]d, [withheld]d, [withheld]d, [withheld]d);
         PolygonalRegion parcel = PolygonalRegion.FromGeometry(ReadWkt("POLYGON ((0 0, 1 0, 1 1, 0 0))"), ProjectedReference());
 
-        Assert.Throws<ArgumentException>(() => new NormalizedAoi(bbox, bbox, parcel, LinearDistance.Zero, FetchEnvelopeBasis.BoundingBox, LinearDistance.Zero));
-        Assert.Throws<ArgumentException>(() => new NormalizedAoi(bbox, bbox, null, LinearDistance.Zero, FetchEnvelopeBasis.GeographicParcelEnvelope, LinearDistance.Zero));
+        FetchEnvelopeExpansion noExpansion = new(false, LinearDistance.Zero, LinearDistance.Zero, LinearDistance.Zero, LinearDistance.Zero, LinearDistance.Zero);
+        Assert.Throws<ArgumentException>(() => new NormalizedAoi(bbox, bbox, parcel, LinearDistance.Zero, FetchEnvelopeBasis.BoundingBox, LinearDistance.Zero, noExpansion));
+        Assert.Throws<ArgumentException>(() => new NormalizedAoi(bbox, bbox, null, LinearDistance.Zero, FetchEnvelopeBasis.GeographicParcelEnvelope, LinearDistance.Zero, noExpansion));
     }
 
     private static Geometry ReadWkt(string wkt)

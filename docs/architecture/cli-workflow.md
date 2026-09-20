@@ -206,7 +206,14 @@ is the WGS 84 reference every Core AOI type already expects.
   already-built WGS 84-to-grid transform, assembled into a closed polygon in well-known text, parsed back
   into a polygon region, and clipped with a zero buffer. `fetch`/`run` instead pass the raw WGS 84 box
   straight through as the fetch request's own bounding box; the reprojected-polygon path only runs for the
-  clip itself.
+  clip itself. **Update, Issue #23 (2026-09-20):** the fetch request no longer receives the raw box
+  unconditionally. `ClipRegionFactory.BuildFetchEnvelope`'s `BoundingBox` arm now also calls
+  `AoiNormalizer.Normalize` — exactly like the `Radius` and `Parcel` arms already did — so a box narrower
+  than `AoiNormalizationOptions.MinimumFetchEnvelopeSide` (110 m default) on either axis is widened
+  symmetrically about its own center before the request is sent. The clip region above is unaffected, since
+  `ClipRegionFactory.Build` never reads the fetch envelope. See
+  `docs/architecture/aoi-normalization-and-clipping.md`'s "Minimum fetch envelope, verified 2026-09-20"
+  section for the widening rule and its evidence.
 - **Radius.** The WGS 84 center point is reprojected into the grid's own reference and clipped as a circle
   around that point, at the requested radius. The fetch request derives its own WGS 84 bounding envelope
   from the normalized radius AOI, independently of the clip circle.
@@ -454,6 +461,55 @@ absent) exactly like every other acquisition field: `metadataRequest` is `null` 
 acquisition (a zip response with its own `.prj`/`.aux.xml`) and present only for the hybrid GeoTIFF-GeoKeys
 flow, where it also drives the `--verbose` metadata lines (see "Diagnostics and redaction").
 
+**Update, Issue #23 (2026-09-20):** `RasterSourceSidecarIo.CurrentSchemaVersion` is now `3`. A version 2
+sidecar (or version 1) is rejected by `process`'s strict reader exactly like any other wrong `schemaVersion`,
+naming the sidecar's own path; there is no migration path from version 2 to version 3, the same as version 1
+to version 2 before it. The version 2 table above stays documented per the versioning convention; the remedy
+for a version 2 (or version 1) `.source.json` is the same one already documented for version 1: re-run
+`fetch` against the same AOI to write a fresh version 3 raster set before running `process` against it again,
+not to hand-edit the old sidecar. The version 3 shape adds exactly one property inside `acquisition`,
+immediately last, after `metadataRequest`:
+
+```text
+schema                          string   constant "solidground.raster-source"
+schemaVersion                    int     constant 3
+sourceName                        string
+datasetIdentifier                  string
+collectionPeriod                    object { start, end } as "yyyy-MM-dd" strings, or JSON null
+qualityLevel                         string | null
+vertical                               object  { datum, unit, geoidModel } -- unchanged from version 2
+horizontalReferenceOrigin               string  ReferenceOrigin member name
+verticalReferenceOrigin                  string  ReferenceOrigin member name
+acquisition                               object
+  redactedRequestUri                       string
+  statusCode                                int
+  contentType                                string | null
+  contentDispositionFileName                  string | null
+  archiveEntryNames                            array of string
+  referenceSource                               string  "PrjSidecar" | "AuxXmlSidecar" | "GeoTiffGeoKeys"
+  responseByteCount                              long
+  metadataRequest                                 object | null  -- unchanged from version 2
+  fetchEnvelope                                    object
+    west                                            double  invariant "R"
+    south                                            double  invariant "R"
+    east                                             double  invariant "R"
+    north                                             double  invariant "R"
+    minimumSideMeters                                double  invariant "R"
+    expanded                                          bool
+    widthBeforeMeters                                 double  invariant "R"
+    heightBeforeMeters                                double  invariant "R"
+    widthAfterMeters                                  double  invariant "R"
+    heightAfterMeters                                 double  invariant "R"
+```
+
+`fetchEnvelope` records the WGS 84 box `fetch`/`run` actually requested OpenTopography cover — after any
+SolidGround Issue #23 minimum-side expansion — and `FetchEnvelopeExpansion`'s own before/after numbers,
+carried through unchanged from `AoiNormalizer.Normalize`'s result. This is not new provenance in the sense of
+a previously unavailable fact: the identical (possibly expanded) box was already recorded verbatim in
+`acquisition.redactedRequestUri` before this issue; `fetchEnvelope` only makes it structurally queryable
+without parsing a URI's query string. See `docs/architecture/aoi-normalization-and-clipping.md`'s "Minimum
+fetch envelope, verified 2026-09-20" section for the rule this reflects.
+
 **Update, Issue #21 (2026-09-19):** `fetch`/`run` sets `HttpClient.Timeout` from `--timeout` once, but the
 hybrid GeoTIFF-GeoKeys flow sends that same `HttpClient` two sequential `GET` requests for one acquisition
 (`docs/architecture/opentopography-usgs1m-source.md`'s "Two-request contract, verified 2026-09-19" section);
@@ -568,6 +624,20 @@ prints none of these six lines:
 {verb}: metadata geokeys: EPSG:{projected coordinate system code} "{citation or (none)}" {PixelIsArea|PixelIsPoint} {image width}x{image length}.
 ```
 
+**Update, Issue #23 (2026-09-20):** `fetch` and `run` print one further non-verbose line, but only when
+`AoiNormalizationOptions.MinimumFetchEnvelopeSide` actually widened the request — nothing prints when it did
+not — placed immediately after the existing `{verb}: requesting OpenTopography...` stage line and before the
+request is sent:
+
+```text
+{verb}: fetch envelope expanded to at least {minimum} m per side (was {width before} m x {height before} m, now {width after} m x {height after} m) to exceed OpenTopography's minimum request area; the clip region is unchanged.
+```
+
+Every number is rendered `CultureInfo.InvariantCulture`, one decimal place of meters (`"F1"`). See
+`docs/architecture/aoi-normalization-and-clipping.md`'s "Minimum fetch envelope, verified 2026-09-20" section
+for the rule this reports and why the clip region is never affected, and "Raster set persistence" below for
+the sidecar's own structured record of the same numbers.
+
 Every error, at any verbosity, is exactly one line: `error (<class>): <message>`. The one exception is the
 `unexpected` class, where the full exception text follows the one-line message on later lines, and only when
 `--verbose` was given — a plain run never spills a stack trace to the console.
@@ -676,11 +746,19 @@ above is enforced by a test, not only by review.
   system, or a non-UTM projection — still fails with `OpenTopographySourceMetadataException` naming the
   observed code rather than being handled. Supporting additional EPSG families or non-CONUS zones remains
   follow-up work, not part of this issue.
-- **No minimum-area padding.** OpenTopography rejects a request below an empirically observed, undocumented
-  per-request area minimum with HTTP 400 (exit code 2, usage) rather than a source-quality failure
-  (`docs/architecture/opentopography-usgs1m-source.md`'s "Fail rather than assume" section). Neither `fetch`
-  nor `run` pads a too-small AOI up to that minimum before sending the request; an operator whose AOI happens
-  to fall below the threshold must enlarge it themselves. Automatic padding is follow-up work.
+- **Minimum-area padding, resolved for the common case.** **Update, Issue #23 (2026-09-20):** OpenTopography
+  rejects a request below an empirically observed, undocumented per-request area minimum with HTTP 400 (exit code 2,
+  usage) rather than a source-quality failure (`docs/architecture/opentopography-usgs1m-source.md`'s "Fail
+  rather than assume" section). `fetch` and `run` now pad a too-small AOI's fetch envelope up to
+  `AoiNormalizationOptions.MinimumFetchEnvelopeSide` (default 110 m per side) before sending the request, so
+  the common too-small case (a small bounding box, a small radius, or a small buffered parcel) succeeds
+  automatically instead of failing at HTTP 400 — see "Diagnostics and redaction" for the console line and
+  "Raster set persistence" for the sidecar's structured record. This remains a single-location, 21-percent
+  margin over one observed floor, not a proven-sufficient bound for every location or dataset
+  (`docs/architecture/aoi-normalization-and-clipping.md`'s "Minimum fetch envelope, verified 2026-09-20"
+  section); an AOI whose padded envelope still falls below OpenTopography's actual (unverified elsewhere)
+  minimum still fails at HTTP 400 exactly as before. There is no CLI option to change the minimum — it is a
+  `SolidGround.Core.Aois.AoiNormalizationOptions` value only, not exposed as a flag.
 - **`coverageFloorFraction` is not recorded in the export document.** The document's `simplification` object
   carries only the point budget and the method name; the coverage floor that produced a given
   curvature-aware result exists only in that one run's own console output (always printed, per "Diagnostics

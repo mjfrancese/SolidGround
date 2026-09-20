@@ -65,9 +65,10 @@ internal static class FetchCommand
         OpenTopographyUsgs1mSource source = new(httpClient, new StaticOpenTopographyApiKeyProvider(key));
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
-        Wgs84BoundingBoxAoi fetchEnvelope = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
 
         host.StandardOutput.WriteLine("fetch: requesting OpenTopography...");
+        PrintFetchEnvelopeExpansion(host, "fetch", fetchEnvelopeExpansion);
         OpenTopographyUsgs1mAcquisition acquisition = await source.AcquireDetailedAsync(
             new ElevationSourceRequest(fetchEnvelope), cancellationToken).ConfigureAwait(false);
 
@@ -81,7 +82,7 @@ internal static class FetchCommand
             acquisition.Acquisition.Data.HorizontalReference, acquisition.Evidence.HorizontalReferenceOrigin,
             acquisition.Acquisition.Data.VerticalReference, acquisition.Evidence.VerticalReferenceOrigin);
 
-        RasterSourceSidecar sidecar = BuildSidecar(acquisition);
+        RasterSourceSidecar sidecar = BuildSidecar(acquisition, fetchEnvelope, fetchEnvelopeExpansion);
         await RasterSetIo.WriteAsync(paths, (ElevationGrid)acquisition.Acquisition.Data, acquisition.Evidence.WellKnownText, sidecar, cancellationToken)
             .ConfigureAwait(false);
 
@@ -100,8 +101,14 @@ internal static class FetchCommand
         return seconds;
     }
 
-    /// <summary>Builds the `.source.json` sidecar directly from the acquisition; no CLI option is involved. See docs/architecture/cli-workflow.md's "Raster set persistence" section for the fixed property set this mirrors.</summary>
-    internal static RasterSourceSidecar BuildSidecar(OpenTopographyUsgs1mAcquisition acquisition) => new(
+    /// <summary>
+    /// Builds the `.source.json` sidecar directly from the acquisition, the fetch envelope actually requested
+    /// (after any SolidGround Issue #23 minimum-side expansion), and that expansion's own record; no CLI
+    /// option is involved. See docs/architecture/cli-workflow.md's "Raster set persistence" section for the
+    /// fixed property set this mirrors.
+    /// </summary>
+    internal static RasterSourceSidecar BuildSidecar(
+        OpenTopographyUsgs1mAcquisition acquisition, Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) => new(
         acquisition.Acquisition.Source.SourceName,
         acquisition.Acquisition.Source.DatasetIdentifier,
         acquisition.Acquisition.Source.CollectionPeriod,
@@ -132,7 +139,40 @@ internal static class FetchCommand
                     metadataRequest.RasterType,
                     metadataRequest.ImageWidth,
                     metadataRequest.ImageLength)
-                : null));
+                : null,
+            new RasterSourceFetchEnvelope(
+                fetchEnvelope.WestLongitude,
+                fetchEnvelope.SouthLatitude,
+                fetchEnvelope.EastLongitude,
+                fetchEnvelope.NorthLatitude,
+                fetchEnvelopeExpansion.MinimumSide.ToMeters(),
+                fetchEnvelopeExpansion.Applied,
+                fetchEnvelopeExpansion.WidthBefore.ToMeters(),
+                fetchEnvelopeExpansion.HeightBefore.ToMeters(),
+                fetchEnvelopeExpansion.WidthAfter.ToMeters(),
+                fetchEnvelopeExpansion.HeightAfter.ToMeters())));
+
+    /// <summary>
+    /// Prints the one-line summary SolidGround Issue #23 adds, immediately after the "requesting
+    /// OpenTopography..." stage line and before the request is actually sent, but only when
+    /// <paramref name="expansion"/> was actually applied — see docs/architecture/aoi-normalization-and-clipping.md's
+    /// "Minimum fetch envelope, verified 2026-09-20" section. Every number is invariant-culture, one decimal
+    /// place of meters; the clip region itself is never affected (<c>ClipRegionFactory.Build</c> never reads
+    /// the fetch envelope).
+    /// </summary>
+    internal static void PrintFetchEnvelopeExpansion(CliHost host, string verb, FetchEnvelopeExpansion expansion)
+    {
+        if (!expansion.Applied)
+        {
+            return;
+        }
+
+        host.StandardOutput.WriteLine(
+            $"{verb}: fetch envelope expanded to at least {expansion.MinimumSide.ToMeters().ToString("F1", CultureInfo.InvariantCulture)} m per side " +
+            $"(was {expansion.WidthBefore.ToMeters().ToString("F1", CultureInfo.InvariantCulture)} m x {expansion.HeightBefore.ToMeters().ToString("F1", CultureInfo.InvariantCulture)} m, " +
+            $"now {expansion.WidthAfter.ToMeters().ToString("F1", CultureInfo.InvariantCulture)} m x {expansion.HeightAfter.ToMeters().ToString("F1", CultureInfo.InvariantCulture)} m) " +
+            "to exceed OpenTopography's minimum request area; the clip region is unchanged.");
+    }
 
     /// <summary>
     /// Prints every field of the acquisition's own redacted evidence: the seven fields every acquisition
