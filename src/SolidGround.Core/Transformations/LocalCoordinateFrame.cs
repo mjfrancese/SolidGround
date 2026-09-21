@@ -41,6 +41,17 @@ public sealed record LocalCoordinateFrame
         LengthConverter.Convert(source.Y - Origin.Y, HorizontalUnit, OutputUnit),
         LengthConverter.Convert(source.Elevation - Origin.Elevation, VerticalReference.Unit, OutputUnit));
 
+    /// <summary>
+    /// The horizontal-only projection of <see cref="ToLocal"/>: the same origin subtraction and unit
+    /// conversion, with no elevation/vertical-reference involvement. Added for SolidGround Issue #15's
+    /// <c>SolidGround.Core.Exports.LocalBoundary</c>, which is deliberately Z-less -- the created
+    /// <c>Toposolid</c>'s boundary-ring elevation is instead one Revit-side scalar applied uniformly (design
+    /// record §7.2).
+    /// </summary>
+    public LocalCoordinate2D ToLocalHorizontal(Coordinate2D source) => new(
+        LengthConverter.Convert(source.X - Origin.X, HorizontalUnit, OutputUnit),
+        LengthConverter.Convert(source.Y - Origin.Y, HorizontalUnit, OutputUnit));
+
     public Coordinate3D ToSource(LocalCoordinate local) => new(
         Origin.X + LengthConverter.Convert(local.X, OutputUnit, HorizontalUnit),
         Origin.Y + LengthConverter.Convert(local.Y, OutputUnit, HorizontalUnit),

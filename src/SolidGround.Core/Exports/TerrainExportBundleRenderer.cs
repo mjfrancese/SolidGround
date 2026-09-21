@@ -386,11 +386,13 @@ public static class TerrainExportBundleRenderer
 /// <summary>
 /// Validates a bundle or export base file name -- the one rule shared by
 /// <see cref="TerrainExportBundleRenderer.Render"/> and <see cref="FileSystemTerrainExporter"/>, so the two
-/// can never accept a name the other would reject.
+/// can never accept a name the other would reject. <c>internal</c> -&gt; <c>public</c> for SolidGround
+/// Issue #15: <c>SolidGround.Core.Processing.TerrainRequestSettings.Validate</c> reuses this exact rule for
+/// <c>output.baseName</c> rather than re-deriving it (see the design record's file-level plan, row 18).
 /// </summary>
-internal static class TerrainExportBaseName
+public static class TerrainExportBaseName
 {
-    internal static void Validate(string baseName, string paramName)
+    public static void Validate(string baseName, string paramName)
     {
         if (string.IsNullOrEmpty(baseName) || baseName.Any(char.IsWhiteSpace))
         {

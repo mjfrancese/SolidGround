@@ -77,6 +77,129 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void CoreExposesAPublicTerrainProcessingPipeline()
+    {
+        // SolidGround Issue #15 lifted this type from SolidGround.Cli (internal) into SolidGround.Core
+        // (public) so SolidGround.Revit can reuse it without a back-reference to SolidGround.Cli.
+        Type? pipeline = typeof(Core.AssemblyMarker)
+            .Assembly
+            .GetType("SolidGround.Core.Processing.TerrainProcessingPipeline");
+
+        Assert.NotNull(pipeline);
+        Assert.True(pipeline.IsPublic);
+        Assert.NotNull(pipeline.GetMethod("RunAsync", BindingFlags.Public | BindingFlags.Static));
+    }
+
+    [Fact]
+    public void CoreExposesAPublicLocalBoundaryValidator()
+    {
+        // SolidGround Issue #15: Geometry Preflight validates a LocalBoundary and its retained samples
+        // entirely in Core, before any Revit API call.
+        Type? validator = typeof(Core.AssemblyMarker)
+            .Assembly
+            .GetType("SolidGround.Core.Exports.LocalBoundaryValidator");
+
+        Assert.NotNull(validator);
+        Assert.True(validator.IsPublic);
+        Assert.NotNull(validator.GetMethod("Validate", BindingFlags.Public | BindingFlags.Static));
+    }
+
+    [Fact]
+    public void CoreExposesAPublicRasterSourceSidecarIo()
+    {
+        // SolidGround Issue #15 lifted this type from SolidGround.Cli (internal) into SolidGround.Core
+        // (public), §0.2's "fourth structural gap": SolidGround.Revit's own process mode reads the identical
+        // sidecar the CLI does.
+        Type? io = typeof(Core.AssemblyMarker)
+            .Assembly
+            .GetType("SolidGround.Core.Sources.RasterSourceSidecarIo");
+
+        Assert.NotNull(io);
+        Assert.True(io.IsPublic);
+        Assert.NotNull(io.GetMethod("Read", BindingFlags.Public | BindingFlags.Static));
+        Assert.NotNull(io.GetMethod("Write", BindingFlags.Public | BindingFlags.Static));
+    }
+
+    [Fact]
+    public void NetTopologySuiteTypesNeverAppearInAnyNewPublicCoreSignature()
+    {
+        // Extends ProjNetTypesNeverAppearInAnyPublicCoreSignature's own pattern (§0.3 item 6 of SolidGround
+        // Issue #15's design record): the new Exports/Processing/Sources/Units public surface this issue adds
+        // must never expose a NetTopologySuite type, except the already-reviewed PolygonalRegion.Geometry
+        // property (Issue #6, predates this guard).
+        Assembly assembly = typeof(Core.AssemblyMarker).Assembly;
+        string[] scopedNamespaces =
+        [
+            "SolidGround.Core.Exports",
+            "SolidGround.Core.Processing",
+            "SolidGround.Core.Sources",
+            "SolidGround.Core.Units",
+        ];
+
+        foreach (Type type in assembly.GetExportedTypes())
+        {
+            if (type.Namespace is null || !scopedNamespaces.Contains(type.Namespace, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (ConstructorInfo constructor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+            {
+                foreach (ParameterInfo parameter in constructor.GetParameters())
+                {
+                    AssertNotNetTopologySuiteType(parameter.ParameterType, $"{type.FullName}..ctor(...) parameter '{parameter.Name}'");
+                }
+            }
+
+            const BindingFlags MemberFlags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (MethodInfo method in type.GetMethods(MemberFlags))
+            {
+                AssertNotNetTopologySuiteType(method.ReturnType, $"{type.FullName}.{method.Name}(...) return type");
+                foreach (ParameterInfo parameter in method.GetParameters())
+                {
+                    AssertNotNetTopologySuiteType(parameter.ParameterType, $"{type.FullName}.{method.Name}(...) parameter '{parameter.Name}'");
+                }
+            }
+
+            foreach (PropertyInfo property in type.GetProperties(MemberFlags))
+            {
+                // PolygonalRegion.Geometry is in SolidGround.Core.Aois, outside every scoped namespace above,
+                // so it is already excluded by the namespace filter -- no separate per-property exception is
+                // needed here.
+                AssertNotNetTopologySuiteType(property.PropertyType, $"{type.FullName}.{property.Name}");
+            }
+
+            foreach (FieldInfo field in type.GetFields(MemberFlags))
+            {
+                AssertNotNetTopologySuiteType(field.FieldType, $"{type.FullName}.{field.Name}");
+            }
+        }
+    }
+
+    private static void AssertNotNetTopologySuiteType(Type type, string location)
+    {
+        Type effectiveType = type.IsByRef || type.IsPointer ? type.GetElementType()! : type;
+
+        if (effectiveType.IsArray)
+        {
+            AssertNotNetTopologySuiteType(effectiveType.GetElementType()!, location);
+            return;
+        }
+
+        string? ns = effectiveType.Namespace;
+        bool isNetTopologySuiteType = ns is not null && (ns == "NetTopologySuite" || ns.StartsWith("NetTopologySuite.", StringComparison.Ordinal));
+        Assert.False(isNetTopologySuiteType, $"{location} exposes NetTopologySuite type '{effectiveType.FullName}'.");
+
+        if (effectiveType.IsGenericType)
+        {
+            foreach (Type typeArgument in effectiveType.GetGenericArguments())
+            {
+                AssertNotNetTopologySuiteType(typeArgument, location);
+            }
+        }
+    }
+
+    [Fact]
     public void CoreDoesNotReferenceTheRevitApi()
     {
         AssemblyName[] references = typeof(Core.AssemblyMarker)
