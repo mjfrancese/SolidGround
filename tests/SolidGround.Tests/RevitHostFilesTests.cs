@@ -424,6 +424,37 @@ public sealed class RevitHostFilesTests
     }
 
     // ------------------------------------------------------------------------------------------------
+    // (j) SolidGround Issue #15's 2026-09-21 redacted-request-URI logging addendum
+    // ------------------------------------------------------------------------------------------------
+    //
+    // Same kind of falsifiable, plain-text regression backstop as (i) above. The live ExampleSite HTTP 401
+    // diagnosis (docs/architecture/revit-toposolid-creation.md's Manual evidence plan, Step 8b) found the
+    // add-in's fetch-mode log never recorded which request an acquisition failure belonged to -- and neither
+    // did the CLI's own --verbose FetchCommand output, whose "request '<uri>'." line only prints after a
+    // successful acquisition (FetchCommand.PrintAcquisitionEvidence; CliApplication's top-level catch clauses
+    // print only ex.Message on failure). That gap on both sides made the HTTP 401 harder to diagnose from
+    // either tool's own log alone. This guards that both the success and failure fetch-mode log lines are
+    // still present, and that each reads its URI from an already-redacted source
+    // (OpenTopographyResponseEvidence/OpenTopographyException, never a raw request object), never an
+    // unredacted query string.
+
+    [Fact]
+    public void FetchModeLogsTheRedactedAcquisitionRequestUriOnSuccessAndFailure()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Commands", "CreateToposolidCommand.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        Assert.Contains("catch (OpenTopographyException ex)", content, StringComparison.Ordinal);
+        Assert.Contains(
+            """AddInLog.Info($"Fetch mode acquisition request (failed): '{ex.RedactedRequestUri}'.");""",
+            content, StringComparison.Ordinal);
+        Assert.Contains(
+            """AddInLog.Info($"Fetch mode acquisition request (succeeded): '{acquisition.Evidence.RedactedRequestUri}'.");""",
+            content, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------------
 

@@ -426,8 +426,33 @@ public sealed class CreateToposolidCommand : IExternalCommand
         using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
         OpenTopographyUsgs1mSource source = new(httpClient, new EnvironmentOpenTopographyApiKeyProvider());
 
-        OpenTopographyUsgs1mAcquisition acquisition = await source.AcquireDetailedAsync(
-            new ElevationSourceRequest(fetchEnvelope), cancellationToken).ConfigureAwait(false);
+        OpenTopographyUsgs1mAcquisition acquisition;
+        try
+        {
+            acquisition = await source.AcquireDetailedAsync(
+                new ElevationSourceRequest(fetchEnvelope), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OpenTopographyException ex)
+        {
+            // This failure-path log line is modeled on
+            // SolidGround.Cli.Commands.FetchCommand.PrintAcquisitionEvidence's "request '<uri>'." line -- but
+            // the CLI only prints that line on a successful acquisition, in --verbose mode (it runs only after
+            // AcquireDetailedAsync returns; CliApplication.RunAsync's own top-level catch clauses for
+            // OpenTopographyAuthorizationException/OpenTopographyException print only ex.Message, never a
+            // request URI, on failure). So before this line existed, neither the add-in's log nor the CLI's
+            // --verbose output recorded which request an acquisition failure belonged to (SolidGround Issue
+            // #15's 2026-09-21 end-to-end evidence, Scenario E, needed the add-in's log plus a separate CLI
+            // cross-check to diagnose that session's HTTP 401). Every OpenTopographyException already carries
+            // its own RedactedRequestUri, redacted through OpenTopographyRedaction before the exception was
+            // constructed (see OpenTopographyException's own doc comment), so logging it here is always safe
+            // -- never the unredacted query string.
+            AddInLog.Info($"Fetch mode acquisition request (failed): '{ex.RedactedRequestUri}'.");
+            throw;
+        }
+
+        // Same idea, on the success path: SolidGround.Cli.Commands.FetchCommand.PrintAcquisitionEvidence reads
+        // this identical acquisition.Evidence.RedactedRequestUri value, in --verbose mode.
+        AddInLog.Info($"Fetch mode acquisition request (succeeded): '{acquisition.Evidence.RedactedRequestUri}'.");
 
         ElevationGrid grid = (ElevationGrid)acquisition.Acquisition.Data;
         IHorizontalCoordinateTransform transform = ProjNetHorizontalCoordinateTransformFactory.Create(
