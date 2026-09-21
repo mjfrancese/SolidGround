@@ -6,9 +6,10 @@ namespace SolidGround.Tests;
 
 /// <summary>
 /// Tests for <see cref="LocalBoundaryValidator.Validate"/>'s retained-sample checks: duplicate (X, Y)
-/// positions, containment tolerance (aggregated into one summarized problem line), and the point budget.
-/// Every test here uses an already-well-formed boundary, so only the retained-sample checks can produce a
-/// problem -- <see cref="LocalBoundaryTests"/> covers the boundary's own ring-shape checks.
+/// positions, containment tolerance (aggregated into one summarized problem line), the point budget, and the
+/// <see cref="LocalBoundaryValidator.MinimumRetainedSampleCount"/> floor. Every test here uses an
+/// already-well-formed boundary, so only the retained-sample checks can produce a problem --
+/// <see cref="LocalBoundaryTests"/> covers the boundary's own ring-shape checks.
 /// </summary>
 public sealed class LocalBoundaryValidatorTests
 {
@@ -16,7 +17,7 @@ public sealed class LocalBoundaryValidatorTests
     public void ValidateReportsNoProblemsForAWellFormedTriangleAndInteriorPoints()
     {
         LocalBoundary boundary = TriangleBoundary();
-        LocalTerrainSample[] samples = [Sample(2, 2, 10), Sample(3, 1, 12)];
+        LocalTerrainSample[] samples = [Sample(2, 2, 10), Sample(3, 1, 12), Sample(1, 1, 11)];
 
         LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100);
 
@@ -83,7 +84,9 @@ public sealed class LocalBoundaryValidatorTests
         // (0.01 m) default tolerance, but outside the *raw* 0.01 literal a caller would wrongly compare
         // against if it forgot to convert -- 5 mm in feet is larger than 0.01.
         double offsetInFeet = LengthConverter.Convert(0.005d, LengthUnit.Meter, LengthUnit.UsSurveyFoot);
-        LocalTerrainSample[] samples = [Sample(-offsetInFeet, 5, 0)];
+        // Two more interior samples so the retained count meets MinimumRetainedSampleCount; both are safely
+        // inside the square, so neither adds its own tolerance problem.
+        LocalTerrainSample[] samples = [Sample(-offsetInFeet, 5, 0), Sample(2, 2, 0), Sample(5, 5, 0)];
 
         LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100, toleranceInCallersUnit);
 
@@ -127,6 +130,55 @@ public sealed class LocalBoundaryValidatorTests
         LocalTerrainSample[] samples = [Sample(1, 1, 0), Sample(2, 1, 0), Sample(1, 2, 0)];
 
         LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 3);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Problems);
+    }
+
+    // Regression coverage for SolidGround Issue #15's review fix: without this minimum, a clip region yielding
+    // zero, one, or two retained samples fell through Geometry Preflight unrejected, reaching
+    // CreateToposolidCommand's Stage 4 `points.Min(point => point.Z)` (zero samples) or a bare Revit API
+    // rejection deep inside Stage 5 (one or two samples) instead of this actionable Preflight message.
+
+    [Fact]
+    public void ValidateRejectsZeroRetainedSamplesWithAnActionableMessage()
+    {
+        LocalBoundary boundary = TriangleBoundary();
+        LocalTerrainSample[] samples = [];
+
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(
+            result.Problems,
+            p => p.Contains("Only 0 terrain sample(s) were retained", StringComparison.Ordinal)
+                && p.Contains("NODATA hole", StringComparison.Ordinal)
+                && p.Contains("buffer", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateRejectsTwoRetainedSamples()
+    {
+        LocalBoundary boundary = TriangleBoundary();
+        LocalTerrainSample[] samples = [Sample(1, 1, 0), Sample(2, 1, 0)];
+
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(
+            result.Problems,
+            p => p.Contains("Only 2 terrain sample(s) were retained", StringComparison.Ordinal)
+                && p.Contains("NODATA hole", StringComparison.Ordinal)
+                && p.Contains("buffer", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateAcceptsExactlyThreeRetainedSamples()
+    {
+        LocalBoundary boundary = TriangleBoundary();
+        LocalTerrainSample[] samples = [Sample(1, 1, 0), Sample(2, 1, 0), Sample(1, 2, 0)];
+
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100);
 
         Assert.True(result.IsValid);
         Assert.Empty(result.Problems);

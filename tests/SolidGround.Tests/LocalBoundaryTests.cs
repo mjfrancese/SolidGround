@@ -6,11 +6,16 @@ namespace SolidGround.Tests;
 /// <summary>
 /// Tests for <see cref="LocalBoundaryValidator.Validate"/>'s ring/polygon-shape checks: vertex distinctness,
 /// zero-length (including redundant-closing-vertex) edges, self-intersection, non-positive area, and holes.
-/// Every test here uses an empty retained-sample list and a generous budget, so only the boundary's own shape
-/// can produce a problem -- <see cref="LocalBoundaryValidatorTests"/> covers the retained-sample/budget checks
-/// against an already-valid boundary. See SolidGround Issue #15's design record, orchestrator decision (a):
-/// a <see cref="LocalBoundaryRing"/> never stores a repeated closing vertex, so "closed" here means the
-/// implicit wrap-around edge from the last vertex back to the first is well-formed, not that one was stored.
+/// Every rejection test here uses an empty retained-sample list and a generous budget, so only the boundary's
+/// own shape can produce the specific problem each test asserts on (an empty list also trips
+/// <see cref="LocalBoundaryValidator.MinimumRetainedSampleCount"/>, but that extra problem does not interfere
+/// with a check for one specific substring). Acceptance tests use at least
+/// <see cref="LocalBoundaryValidator.MinimumRetainedSampleCount"/> valid interior samples so <c>IsValid</c> can
+/// genuinely be <see langword="true"/>. <see cref="LocalBoundaryValidatorTests"/> covers the retained-sample/
+/// budget/minimum-count checks against an already-valid boundary. See SolidGround Issue #15's design record,
+/// orchestrator decision (a): a <see cref="LocalBoundaryRing"/> never stores a repeated closing vertex, so
+/// "closed" here means the implicit wrap-around edge from the last vertex back to the first is well-formed,
+/// not that one was stored.
 /// </summary>
 public sealed class LocalBoundaryTests
 {
@@ -82,8 +87,11 @@ public sealed class LocalBoundaryTests
         LocalBoundaryRing shell = Ring((0, 0), (10, 0), (10, 10), (0, 10));
         LocalBoundaryRing hole = Ring((2, 2), (2, 3), (3, 3), (3, 2));
         LocalBoundary boundary = new([new LocalBoundaryPolygon(shell, [hole])]);
+        // Three valid interior samples, clear of the hole, to satisfy MinimumRetainedSampleCount without
+        // introducing a containment or duplicate-position problem of their own.
+        LocalTerrainSample[] samples = [Sample(5, 5), Sample(5, 6), Sample(6, 5)];
 
-        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, [], pointBudget: 1000);
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 1000);
 
         Assert.True(result.IsValid);
         Assert.Empty(result.Problems);
@@ -99,12 +107,16 @@ public sealed class LocalBoundaryTests
             new LocalBoundaryPolygon(first, []),
             new LocalBoundaryPolygon(second, []),
         ]);
+        // Three valid interior samples spread across both polygons to satisfy MinimumRetainedSampleCount.
+        LocalTerrainSample[] samples = [Sample(5, 5), Sample(105, 105), Sample(6, 6)];
 
-        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, [], pointBudget: 1000);
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 1000);
 
         Assert.True(result.IsValid);
         Assert.Empty(result.Problems);
     }
+
+    private static LocalTerrainSample Sample(double x, double y) => new(new LocalCoordinate(x, y, 0));
 
     private static LocalBoundaryValidationResult ValidateShellOnly(LocalBoundaryRing shell)
     {

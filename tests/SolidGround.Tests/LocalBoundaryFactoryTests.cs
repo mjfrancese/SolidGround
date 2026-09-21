@@ -73,7 +73,14 @@ public sealed class LocalBoundaryFactoryTests
         Assert.Equal(
             [new LocalCoordinate2D(0, 0), new LocalCoordinate2D(10, 0), new LocalCoordinate2D(10, 6), new LocalCoordinate2D(0, 6)],
             polygon.Shell.Vertices);
-        Assert.True(LocalBoundaryValidator.Validate(boundary, [], pointBudget: 1).IsValid);
+        // Three valid interior samples so the retained count also satisfies MinimumRetainedSampleCount.
+        LocalTerrainSample[] samples =
+        [
+            new(new LocalCoordinate(2, 2, 0)),
+            new(new LocalCoordinate(5, 3, 0)),
+            new(new LocalCoordinate(8, 4, 0)),
+        ];
+        Assert.True(LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 3).IsValid);
     }
 
     [Fact]

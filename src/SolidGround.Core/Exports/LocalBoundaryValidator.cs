@@ -26,15 +26,23 @@ public static class LocalBoundaryValidator
     public static readonly double DefaultContainmentToleranceMeters = 0.01;
 
     /// <summary>
+    /// The fewest retained terrain samples <see cref="Validate"/> accepts. A native Revit toposolid needs at
+    /// least three non-collinear points to define a surface, and building one from fewer would either throw
+    /// deep in Revit API code or silently produce a degenerate element -- so this is rejected here, at Geometry
+    /// Preflight, before any Revit API call (SolidGround Issue #15 review fix).
+    /// </summary>
+    public const int MinimumRetainedSampleCount = 3;
+
+    /// <summary>
     /// Validates <paramref name="boundary"/>'s own shape (every ring has at least three distinct vertices, no
     /// zero-length or otherwise duplicated cyclically-consecutive edge -- which also rejects a ring that still
     /// carries a redundant closing vertex equal to its first, since a stored <see cref="LocalBoundaryRing"/>
     /// never repeats one, see orchestrator decision (a) -- no self-intersection, every hole inside its shell,
     /// positive area) and <paramref name="retainedSamples"/> against it (no two retained samples share an
     /// (X, Y) position, every retained sample falls within <paramref name="containmentToleranceMeters"/> of
-    /// the boundary, and the retained count does not exceed <paramref name="pointBudget"/>). Out-of-boundary
-    /// samples are aggregated into one summarized problem line (a count and the worst offset), never one line
-    /// per point.
+    /// the boundary, the retained count does not exceed <paramref name="pointBudget"/>, and the retained count
+    /// is at least <see cref="MinimumRetainedSampleCount"/>). Out-of-boundary samples are aggregated into one
+    /// summarized problem line (a count and the worst offset), never one line per point.
     /// </summary>
     /// <param name="containmentToleranceMeters">
     /// Compared directly, with no unit conversion, against <paramref name="boundary"/>/<paramref name="retainedSamples"/>'s
@@ -64,6 +72,17 @@ public static class LocalBoundaryValidator
             problems.Add(
                 $"{retainedSamples.Count.ToString(CultureInfo.InvariantCulture)} retained terrain sample(s) " +
                 $"exceed the point budget of {pointBudget.ToString(CultureInfo.InvariantCulture)}.");
+        }
+
+        if (retainedSamples.Count < MinimumRetainedSampleCount)
+        {
+            problems.Add(
+                $"Only {retainedSamples.Count.ToString(CultureInfo.InvariantCulture)} terrain sample(s) were " +
+                $"retained, fewer than the {MinimumRetainedSampleCount.ToString(CultureInfo.InvariantCulture)} " +
+                "needed to build a toposolid. The parcel or area of interest may be too small, may fall mostly " +
+                "or entirely within a NODATA hole in the source data, or the clip buffer may be too small. " +
+                "Enlarge the area of interest or its buffer, or choose an area with more source coverage, and " +
+                "run this command again.");
         }
 
         ValidateNoDuplicateHorizontalPositions(retainedSamples, problems);
