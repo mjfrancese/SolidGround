@@ -832,20 +832,23 @@ it is a separate, throwaway add-in — it never runs `CreateToposolidCommand`/`S
 Steps 5, 7, and 8a's "**Evidence.**" paragraphs below are accordingly filled in from that session
 (`EVIDENCE-PROBES.md`, outside this repository).
 
-Step 8b (the live ExampleSite fetch) and the shipped add-in's own end-to-end scenarios are now **settled**,
-except for the live fetch's own server-side authorization, as of two further 2026-09-21 sessions against
+Step 8b (the live ExampleSite fetch) and the shipped add-in's own end-to-end scenarios are now **fully
+settled**, including the live fetch's own server-side authorization, as of five 2026-09-21 sessions against
 `EVIDENCE-E2E.md` (also outside this repository). Run 1 built, hash-verified, and deployed the shipped `main`
 `c80af6a` build, then stopped before launching Revit 2027 at all, because a Revit 2026/pyRevit process was
 already running on the shared desktop and remained running through every re-check, triggering that session's
 own interference rule; a second attempt did not produce distinct scenario evidence either. Once the desktop
 was confirmed quiet, Run 3 completed a full interactive walkthrough of Scenarios
-A, B, C, D1-D7, D9, D10, and E against the deployed `c80af6a` build, and Run 4 re-ran the scenarios the
+A, B, C, D1-D7, D9, D10, and E against the deployed `c80af6a` build (Scenario E hit HTTP 401 on a key value
+that a subsequent CLI recheck and Run 5 both showed to be invalid, not a product defect), Run 4
+re-ran the scenarios the
 same-day `796a6a5` commit (the `Revit.ini` point-budget Preflight guard) affected — B4, D10-guard, D11 —
-against the deployed `796a6a5` build. See Step 8b's own "**Evidence.**" paragraph below for the full results.
+against the deployed `796a6a5` build, and Run 5 re-ran Scenario E's identical AOI and settings, with a
+re-entered API key, against the deployed `main` `3831522` build. See Step 8b's own "**Evidence.**" paragraph
+below for the full results.
 
-Every remaining "**Evidence.**" paragraph below (Step 8b) now carries real evidence from these sessions; only
-the live OpenTopography fetch's own server-side key acceptance is still open, and is called out as such
-where it appears below.
+Every "**Evidence.**" paragraph below (Step 8b) now carries real evidence from these sessions, including the
+live OpenTopography fetch's own server-side key acceptance, which Run 5 confirmed.
 
 ### Step 5 — `Result.Cancelled`/`Result.Failed` Undo-stack behavior (settles verification item 2)
 
@@ -1217,7 +1220,7 @@ evidence plan's introduction above for that distinction.
    by construction) below. If the key is still absent when this step is reached, report that explicitly
    rather than skip silently; it is the one acceptance item this milestone cannot close offline.
 
-**Evidence.** Collected 2026-09-21 across four `EVIDENCE-E2E.md` sessions (outside this repository, same
+**Evidence.** Collected 2026-09-21 across five `EVIDENCE-E2E.md` sessions (outside this repository, same
 convention as `EVIDENCE-PROBES.md` above). Run 1 completed the non-interactive preparation — restore,
 `Release` build (0 warnings, 0 errors), hash, deploy, deploy-verify, settings baseline — against the shipped
 `main` `c80af6a` build, then stopped before launching Revit 2027 at all, per that session's own INTERFERENCE
@@ -1246,7 +1249,14 @@ confirming the guard changed nothing about an ordinary run), D10-guard (the same
 guard), and D11 (`pointBudget` exactly at the threshold). `git status --short`/`git diff --stat` in this
 repository were empty immediately before and after Run 4, and Run 3 independently confirmed (via the same
 read-only commands) that a concurrent workflow was mid-edit on exactly the files `796a6a5` went on to change —
-see the D10-vs-D10-guard comparison below.
+see the D10-vs-D10-guard comparison below. Run 5, on the same-day `main` `3831522` commit (which added the
+redacted fetch-mode acquisition-request log lines on top of Run 4's `796a6a5`), rebuilt and redeployed —
+versioned folder `20260921-134414-d16f880f`, SHA-256
+`D16F880FF5C742AA57471044EB7FC8321EBF233639185C653BF1C3A00CAC8846` for `SolidGround.Revit.dll` and
+`D5D1BC58AC5068F9C602ED29EF2D887DDEF701362BCD138311E3849F8CB4B27D` for `SolidGround.Core.dll`, `-Verify`
+confirming all 6 files match both immediately after deploying and again at the very end of the run — then
+re-ran Scenario E in `fetch` mode with a re-entered `OPENTOPOGRAPHY_API_KEY` injected only into Revit's own
+process environment; see that scenario's own paragraph below for the result.
 
 *Scenario A — no settings file (Run 3).* Clicking Create Toposolid with no `settings.json` present wrote the
 documented template verbatim to `C:\ProgramData\SolidGround\Revit\settings.json`
@@ -1415,13 +1425,44 @@ the live-fetch attempt itself all completed once it held. The "`OPENTOPOGRAPHY_A
 `Revit.exe` process's own environment" precondition was also satisfied, via `Start-Revit2027.ps1
 -EnvironmentVariable`, for Run 3's Scenario E.
 
-**Still pending, with the exact remaining blocker.** A currently-valid `OPENTOPOGRAPHY_API_KEY`. The key value
-used for Run 3's Scenario E was present and reached OpenTopography's server, but the server itself rejected it
-(HTTP 401 "Invalid API Key"), reproduced identically by the CLI with the same value through the same
-`SolidGround.Core` request code (Scenario E above) — a credential problem, not a gap in either precondition
-this section used to track. **The live ExampleSite fetch that successfully creates a toposolid therefore remains
-pending on a currently-valid key** — this milestone cannot close that one item offline, or even online without
-a working key, per "Manual evidence plan" above and AGENTS.md's own test-fixture rule.
+**Resolved by Run 5.** A re-entered `OPENTOPOGRAPHY_API_KEY` was confirmed known-good first by an
+independent, read-only CLI recheck (`live-diagnosis\recheck\terrain.source.json`, run shortly before this
+session): `statusCode: 200` for both the AAIGrid and GTiff-GeoKeys requests, `projectedCoordinateSystemCode:
+26915`, `citation: "NAD83 / UTM zone 15N"` — the same key value Run 5 used successfully below, where the
+earlier session's key value had been rejected, confirming this task did not repeat or consume that CLI
+check's own OpenTopography calls. Run 5 then
+launched Revit 2027 (deployed `main` `3831522`, `SolidGround.Revit.dll` SHA-256
+`D16F880FF5C742AA57471044EB7FC8321EBF233639185C653BF1C3A00CAC8846`, `SolidGround.Core.dll` SHA-256
+`D5D1BC58AC5068F9C602ED29EF2D887DDEF701362BCD138311E3849F8CB4B27D`, versioned folder
+`20260921-134414-d16f880f`, `-Verify` **OK**) with the re-entered key injected only into that process's own
+environment, and reran the identical Scenario E settings (radius AOI centered `[withheld], [withheld]`,
+`radiusMeters 30`, `pointBudget 15000`). **The fetch succeeded on the first of two budgeted attempts** — no
+retry was needed. The result dialog was observed present between **t=13 s and t=17 s** of polling
+(`R5-A-03-poll-log.txt`), well inside the documented 300-second ceiling and not a perceptible multi-minute
+stall:
+
+> **SolidGround created the toposolid.**
+> Element id: 317345 / Level: Level 1 / ToposolidType: Toposolid 1
+> Points retained: 2810 of 2810 (budget 15000)
+>
+> SolidGround is a site-form tool, not a survey instrument. SolidGround made no change to
+> ActiveProjectLocation, the project base point, the survey point, or site location during this run.
+
+The log recorded the redacted request line: `Fetch mode acquisition request (succeeded):
+'https://portal.opentopography.org/API/usgsdem?datasetName=USGS1m&south=[withheld]&north=[withheld]&west=[withheld]&east=[withheld]&outputFormat=AAIGrid&API_Key=REDACTED'.`
+Horizontal reference `EPSG:26915` (NAD83 / UTM zone 15N) was resolved from the GeoTIFF GeoKeys of the paired
+metadata request, matching the CLI recheck's own value; vertical reference `NAVD88` (meters) was declared
+from dataset documentation, per AGENTS.md, since neither OpenTopography response carries one. One toposolid
+was committed — element id 317345, Level 1, Toposolid 1, 2810 of 2810 points retained — with the journal
+recording the literal Undo-stack entry `'inTransaction APITransactionIdentity_1:-1 SolidGround: Create
+Toposolid'`; `PostCreationVerification` passed implicitly (no rollback dialog); the export bundle and
+placement record were both written; and Undo was confirmed enabled afterward. A seven-file secret-absence
+check (`.Contains(realKeyValue)` against the main log, the placement record, the export solidground.json,
+the export points CSV, the settings copy, the live ProgramData settings.json, and the newest journal)
+returned `False` for every file. **The live ExampleSite
+fetch that successfully creates a toposolid is therefore no longer pending** — all five of Issue #15's
+acceptance items now have direct 2026-09-21 evidence; see "Decisions recorded from evidence" and "What this
+note does not do" below.
 
 ### Decisions recorded from evidence (2026-09-21)
 
@@ -1482,17 +1523,20 @@ a working key, per "Manual evidence plan" above and AGENTS.md's own test-fixture
   across Run 3 and Run 4 (B, C, B4, D10 before its rollback, D11) logged no
   `Toposolid.get_BoundingBox(null) returned null` warning, closing the gap Step 8a item 4 above left open
   (that probe never called an explicit `Regenerate()` first). See appendix item 6 below.
-- **Live OpenTopography authorization: a credential problem, not an add-in defect.** Scenario E's one live
-  attempt, with a real key injected into Revit's own process environment, was rejected by OpenTopography's
-  server (HTTP 401 "Invalid API Key"); a same-day CLI cross-check with the identical key value reproduced the
-  identical rejection through the same `SolidGround.Core` request code. The add-in's authorization-failure
-  path — accurate surfacing, the key redacted everywhere, no silent fallback to a coarser dataset — is
-  confirmed; a full live ExampleSite creation is not, and remains blocked purely on obtaining a currently-valid
-  key. See Step 8b above.
-- **Still pending.** Only a full live OpenTopography ExampleSite fetch that successfully creates a toposolid
-  remains unexercised, blocked on a currently-valid `OPENTOPOGRAPHY_API_KEY` (Step 8b above). Every other item
-  the Manual evidence plan tracked — Steps 5, 7, 8a, and 8b's own Scenarios A-D — now carries real evidence
-  from either the 2026-09-21 probe session or the 2026-09-21 end-to-end sessions (Runs 3-4).
+- **Live OpenTopography authorization: a credential problem, resolved by re-entering the key, not an
+  add-in defect.** Run 3's Scenario E, with a real key injected into Revit's own process environment, was
+  rejected by OpenTopography's server (HTTP 401 "Invalid API Key"); a same-day CLI cross-check with the
+  identical key value reproduced the identical rejection through the same `SolidGround.Core` request code.
+  The add-in's authorization-failure path — accurate surfacing, the key redacted everywhere, no silent
+  fallback to a coarser dataset — is confirmed. Run 5, with the owner's re-entered key (confirmed known-good
+  first by an independent CLI recheck), succeeded outright on the identical AOI and settings: element id
+  317345, 2810 of 2810 points retained, `EPSG:26915`/`NAVD88` references, and the redacted
+  `API_Key=REDACTED` request line logged. A full live ExampleSite creation is therefore confirmed too. See
+  Step 8b above.
+- **Nothing still pending.** Every item the Manual evidence plan tracked — Steps 5, 7, 8a, and 8b's
+  own Scenarios A-E — now carries real evidence from either the 2026-09-21 probe session or the 2026-09-21
+  end-to-end sessions (Runs 3-5), including the live OpenTopography ExampleSite fetch that successfully creates
+  a toposolid (Run 5: element id 317345, 2810 of 2810 points retained).
 
 ## Revit API members used
 
@@ -1630,13 +1674,17 @@ existence, not compiler-verified independently of the real build (which itself d
    itself, so the item stays open, but nothing observed this session conflicts with the before-`Start()`
    choice.**
 8. The live OpenTopography fetch through Revit's own process environment. Owned by manual test step 8b above.
-   **Exercised once by the 2026-09-21 end-to-end session (Step 8b above, Scenario E): a real key was injected
+   **Settled by the 2026-09-21 end-to-end sessions (Step 8b above, Scenario E): Run 3 injected a real key
    into Revit's own process environment, Doc Preflight's "key is present" check passed, and the request
    reached OpenTopography's server, which rejected that key value with HTTP 401 "Invalid API Key" — reproduced
-   identically by the CLI with the same key value through the same `SolidGround.Core` request code. The
-   mechanics this item asked about (getting a real key into `Revit.exe`'s own process and having the add-in
-   send it) are now confirmed to work; a successful live ExampleSite creation is not yet observed, and needs only
-   a currently-valid key, not further code or evidence-gathering changes.**
+   identically by the CLI with the same key value through the same `SolidGround.Core` request code. Run 5
+   re-entered the key (confirmed known-good first by an independent, read-only CLI recheck), injected it the
+   same way, and the identical fetch succeeded on the first of two budgeted attempts: element id 317345,
+   Level 1, Toposolid 1, 2810 of 2810 points retained, horizontal reference `EPSG:26915` resolved from the
+   paired GeoTIFF GeoKeys request, vertical reference `NAVD88` declared from dataset documentation, and the
+   redacted request URI logged with `API_Key=REDACTED`. The mechanics this item asked about (getting a real
+   key into `Revit.exe`'s own process and having the add-in send it, then successfully creating a toposolid
+   from the live response) are now confirmed to work end to end.**
 9. Whether the flat, single-scalar boundary-ring `Z` persists as visible geometry at or near the parcel edge,
    or is fully overridden by point-driven interpolation — see "The boundary-Z decision" above. Owned by
    manual test step 8a item 5. Both outcomes are benign under the shipped fix; this item records which
@@ -1715,22 +1763,28 @@ This note records what Issue #15 already built; it does not itself change any de
 `docs/architecture/revit-add-in-conventions.md` or `docs/architecture/revit-2027-verification-and-host-design.md`.
 A 2026-09-21 documentation pass filled in the "Manual evidence plan" above's Step 5, 7, and 8a "Evidence"
 entries and part of the "Decisions recorded from evidence" subsection from a real Revit 2027 probe session and
-a first end-to-end deploy session; a second 2026-09-21 documentation pass (this update) filled in Step 8b's
+a first end-to-end deploy session; a second 2026-09-21 documentation pass filled in Step 8b's
 own "Evidence" entry, the rest of "Decisions recorded from evidence," and the appendix items it settles, from
-two further end-to-end sessions (Run 3 on `c80af6a`, Run 4 on `796a6a5`) — none of which this note performed
-itself. It does not begin Issue #16 (Extensible Storage provenance; the extension point above is the only
+two further end-to-end sessions (Run 3 on `c80af6a`, Run 4 on `796a6a5`); a third 2026-09-21 documentation
+pass (this update) recorded Run 5's live ExampleSite fetch on `main` `3831522`, the one item Step 8b's evidence
+had left open — none of which this note performed itself. It does not begin Issue #16 (Extensible Storage
+provenance; the extension point above is the only
 thing Issue #15 leaves for it to change), Issue #17 (signing, packaging, or a clean-install validation), or
 Issue #19 (the real ribbon icon design) — those stay explicit, separately approved implementation tasks per
 AGENTS.md's "Mission and current boundary" section.
 
-It does not close Issue #15. Four of this milestone's five acceptance items now have direct 2026-09-21
-evidence: **(1)** every Doc Preflight rejection path leaves the document provably unchanged (Scenario A and
+It does not close Issue #15; closure itself is recorded on GitHub, not in this note. All five of
+this milestone's acceptance items now have direct 2026-09-21 evidence, and Issue #15's evidence is complete:
+**(1)** every Doc Preflight rejection path leaves the document provably unchanged (Scenario A and
 the Doc-Preflight rows of Scenario D); **(2)** a successful creation matches the offline CLI reference exactly
 — element, level/type, unit factor, placement record, and byte-identical export hashes — and is undoable as
 one entry (Scenario B/B4/C); **(3)** the `Revit.ini` point-budget guard and its post-creation verification
-backstop both work as designed, pre-emptively and after the fact (D10 vs. D10-guard vs. D11); and **(4)** an
+backstop both work as designed, pre-emptively and after the fact (D10 vs. D10-guard vs. D11); **(4)** an
 acquisition or authorization failure is surfaced accurately, with the key redacted everywhere, and never
-silently downgraded to a coarser dataset (Scenario E, D2-D4). Acceptance item **(5)** — a complete live
-OpenTopography ExampleSite fetch that successfully creates a toposolid — remains the milestone's one open item,
-blocked on a currently-valid `OPENTOPOGRAPHY_API_KEY`, not on anything this note's evidence found wrong with
-the shipped code.
+silently downgraded to a coarser dataset (Run 3's Scenario E, D2-D4); and **(5)** a complete live
+OpenTopography ExampleSite fetch successfully creates a toposolid — Run 5's Scenario E, with a re-entered key:
+element id 317345, Level 1, Toposolid 1, 2810 of 2810 points retained, `EPSG:26915`/`NAVD88` references, the
+redacted request line logged, and the key confirmed absent from the log, placement record, export files,
+settings copy, and journal. Issue #16 step 9 (attaching Extensible Storage provenance to a created toposolid)
+can now run on top of either a Scenario B/B4 or a Run 5 toposolid, once it has its own explicit, separately
+approved implementation task per AGENTS.md.
