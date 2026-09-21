@@ -12,7 +12,7 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 
 1. **Reference assemblies.** Option A plus option B. Local and deploy builds reference `RevitAPI.dll`/`RevitAPIUI.dll` from the installed Revit 2027 via HintPath, never committed. A CI-only compile gate, activated once `SolidGround.Revit` exists, uses the pinned `Nice3point.Revit.Api.RevitAPI`/`RevitAPIUI` 2027.x packages. See "10. Revit reference assemblies for local builds and CI" below for the full mechanism and the licensing position.
 2. **ContextName.** `"SolidGround"`. See "3. Manifest and isolated add-in context" below for the full manifest shape.
-3. **Code signing.** Accept Revit's unsigned-add-in prompt for now; no signing in the initial milestone. Revisit with Issue #17 after verification item 14 (Revit 2027 unsigned-add-in prompt behavior) is checked.
+3. **Code signing.** Accept Revit's unsigned-add-in prompt for now; no signing in the initial milestone. Revisit with Issue #17 after verification item 14 (Revit 2027 unsigned-add-in prompt behavior) is checked; verified on 2026-09-20, see `revit-2027-verification-and-host-design.md`, item 14.
 4. **Settings and log location.** Machine-wide, following the owner's other add-in, under `%ProgramData%\SolidGround\Revit\` (a settings file and a `Logs\` folder), not per-user. This is a deliberate, scoped exception: the add-in itself still installs per-user (see decision 6 and "7. Deployment and per-user install" below); only settings and logs are machine-wide. See "5. Settings" and "6. Logging and diagnostics" below.
 5. **Ribbon icon.** Ship an icon for `CreateToposolidCommand` in the initial milestone; Issue #19 designs it. See "4. Ribbon and command structure" below.
 6. **Deployment.** Write a deploy script in the initial milestone, not a by-hand copy loop. See "7. Deployment and per-user install" below.
@@ -53,7 +53,7 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 - One `.addin` manifest, one `Application` entry: `Name` "SolidGround", `Assembly` "SolidGround.Revit.dll" (bare filename), `FullClassName` "SolidGround.Revit.SolidGroundApplication", `AddInId` a freshly minted GUID pinned once, `VendorId` "SolidGround", `VendorDescription` "SolidGround" (owner decision 2). No separate `Command` manifest entry: `CreateToposolidCommand` is registered as a ribbon `PushButtonData` in `OnStartup` instead.
 - `UseRevitContext=false`, `ContextName="SolidGround"` (owner decision 2), `UseAllContextsForDependencyResolution=false` set explicitly rather than left unset, so the manifest states the disabled state directly. No `PublicAssemblies` and no `Dependencies` unless a specific, reviewed integration needs them.
 - No temporary all-users manifest for live testing, and no repeat of the owner's other add-in's ProgramData fixture-manifest drop. If a live-test harness is needed later, it gets its own `ContextName` inside the isolated-context model.
-- Exact element names and manifest syntax for the isolation settings are unverified for Revit 2027; see "Items that need Revit 2027 verification" item 1.
+- Exact element names and manifest syntax for the isolation settings were verified for Revit 2027 on 2026-09-20; see `revit-2027-verification-and-host-design.md`, item 1.
 
 ## 4. Ribbon and command structure
 
@@ -63,8 +63,8 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 
 - One tab "SolidGround", one panel, one `PushButtonData` for `CreateToposolidCommand`. An icon ships in the initial milestone (owner decision 5; Issue #19 designs it), embedded resource, `BitmapCacheOption.OnLoad`, frozen; a missing or broken icon logs a warning and the button still appears, matching the owner's other add-in's non-fatal contract.
 - A full-sentence tooltip stating what the command needs (an active parcel or AOI, network access, an API key) and what it does.
-- No `IExternalCommandAvailability`; the button stays enabled. `CreateToposolidCommand.Execute` runs a read-only Preflight step (AOI present, budget configured, API key resolvable) before opening a transaction, and returns `Result.Cancelled` on a Preflight rejection, pending verification item 2.
-- `[Transaction(TransactionMode.Manual)]` plus `[Regeneration(RegenerationOption.Manual)]` on `CreateToposolidCommand`, fixed by convention rather than left to per-command judgment, pending verification item 10.
+- No `IExternalCommandAvailability`; the button stays enabled. `CreateToposolidCommand.Execute` runs a read-only Preflight step (AOI present, budget configured, API key resolvable) before opening a transaction, and returns `Result.Cancelled` on a Preflight rejection, pending verification item 2; verified-with-caveat by Issue #13's 2026-09-20 pass (the `Result`/`IExternalCommand` shape and the general Failed/Cancelled-reverses-changes semantics are confirmed; the specific zero-transaction Undo-stack side effect remains a runtime-only question deferred to manual test step 5), see `revit-2027-verification-and-host-design.md`, item 2.
+- `[Transaction(TransactionMode.Manual)]` plus `[Regeneration(RegenerationOption.Manual)]` on `CreateToposolidCommand`, fixed by convention rather than left to per-command judgment, pending verification item 10; verified on 2026-09-20, see `revit-2027-verification-and-host-design.md`, item 10.
 - `catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)` as the command's top-level boundary; report via one native `TaskDialog` (section 6) and return `Result.Failed` only when the document was actually left in a bad state.
 
 ## 5. Settings
@@ -99,12 +99,12 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 **Adopted for `SolidGround.Revit`:**
 
 - A deploy script is built in the initial milestone, not a by-hand copy loop (owner decision 6).
-- Default per-user deploy target: `%APPDATA%\Autodesk\Revit\Addins\2027`, folder name confirmed against the local Revit 2027 install at implementation time (see "Items that need Revit 2027 verification" item 3).
+- Default per-user deploy target: `%APPDATA%\Autodesk\Revit\Addins\2027`, folder name confirmed against the local Revit 2027 install at implementation time (see "Items that need Revit 2027 verification" item 3); verified on 2026-09-20, see `revit-2027-verification-and-host-design.md`, item 3.
 - The deploy script refuses to run while `Revit.exe` is running.
 - It enumerates the full dependency closure and fails closed if any file is missing, hash-verifies every file, and publishes by atomic versioned-folder rename plus atomic manifest replace, keeping the previous two versions for rollback, following the owner's other add-in's stage/hash-verify/atomic-rename/atomic-manifest-swap shape.
-- Any all-user path, at runtime or in a future all-user deploy/install script, is read from `Application.AllUsersAddinsLocation`, never hardcoded, consistent with section 3's rejection of the owner's other add-in's ProgramData fixture-manifest drop as the forbidden case; a script that cannot call the Revit API fails closed pending an explicit reviewed value (see "Items that need Revit 2027 verification" item 4).
+- Any all-user path, at runtime or in a future all-user deploy/install script, is read from `Application.AllUsersAddinsLocation`, never hardcoded, consistent with section 3's rejection of the owner's other add-in's ProgramData fixture-manifest drop as the forbidden case; a script that cannot call the Revit API fails closed pending an explicit reviewed value (see "Items that need Revit 2027 verification" item 4); verified on 2026-09-20 and flagged as a conflict with the exact wording used here, see `revit-2027-verification-and-host-design.md` item 4 and section 4.
 - (detail about the owner's other add-in withheld)
-- Code signing: accept Revit's unsigned-add-in prompt for now; no Authenticode signing in the initial milestone (owner decision 3, see "3. Code signing" in Owner decisions above, and verification item 14).
+- Code signing: accept Revit's unsigned-add-in prompt for now; no Authenticode signing in the initial milestone (owner decision 3, see "3. Code signing" in Owner decisions above, and verification item 14; verified on 2026-09-20, see `revit-2027-verification-and-host-design.md`, item 14).
 
 ## 8. Debugging
 
@@ -148,11 +148,11 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 - A freshly minted, stable schema GUID and an explicit `schemaVersion` field, matching `AGENTS.md`'s "stable GUID and explicit schema version" requirement; SolidGround picks the explicit-field mechanism consistently from the first schema rather than the owner's other add-in's mix of both approaches across different schemas.
 - `AccessLevel.Public` read and `AccessLevel.Vendor` write, matching the owner's other add-in's default: any add-in can read the provenance, only SolidGround's own vendor id can write it.
 - Field list: source dataset, collection date, quality level, horizontal datum, vertical datum, original and retained point counts, elevation minimum and maximum, output unit and foot definition, the complete local-origin offset, plus the build-identity fields the owner added (owner decision 7): the `SolidGround.Revit` assembly's informational version, MVID, and SHA-256.
-- The exact `SchemaBuilder`/`Element.GetEntity()`/`DeleteEntity()`/`AccessLevel` API shape is unverified for Revit 2027; see "Items that need Revit 2027 verification" item 8.
+- The exact `SchemaBuilder`/`Element.GetEntity()`/`DeleteEntity()`/`AccessLevel` API shape was verified for Revit 2027 on 2026-09-20; see `revit-2027-verification-and-host-design.md`, item 8.
 
 ## Items that need Revit 2027 verification before implementation
 
-These 14 items are the work of Issue #13. `SolidGround.Revit` must not be scaffolded against an assumption these items leave open.
+These 14 items are the work of Issue #13. Issue #13 verified all 14 of them on 2026-09-20; the results, the locked thin-host design, and the manual integration test plan are recorded in `revit-2027-verification-and-host-design.md`. Item 2's specific `Result.Failed`/`Result.Cancelled` Undo-stack side effect remains a runtime-only open question deferred to that plan's manual test step 5, matching several other items' residual runtime-only gaps. `SolidGround.Revit` must not be scaffolded against an assumption these items leave open.
 
 1. Isolated add-in context manifest syntax: exact element names for `UseRevitContext`, `ContextName`, `Dependencies`, `PublicAssemblies`, `UseAllContextsForDependencyResolution`. The owner's other add-in's manifest predates the feature; cite the Revit 2027 SDK or Autodesk's manifest docs directly.
 2. Whether returning `Result.Failed` clears Revit's native Undo stack even with no transaction open, and `Result.Cancelled` avoids this. Observed in a Revit 2026 add-in; re-confirm against Revit 2027 before `CreateToposolidCommand` relies on it.
