@@ -37,14 +37,15 @@ public sealed class SolidGroundApplication : IExternalApplication
     private const string LargeIconResourceName = "SolidGround.Revit.Resources.SolidGround.32.png";
 
     private const string ButtonToolTip =
-        "Check that this project, an area of interest, and your OpenTopography access are ready for a SolidGround terrain import.";
+        "Create a native Revit toposolid from a settings-file-configured area of interest, using either a live OpenTopography fetch or a local raster.";
 
     private const string ButtonLongDescription =
-        "Runs a read-only check of the active project and reports whether the OPENTOPOGRAPHY_API_KEY " +
-        "environment variable needed to fetch USGS 1-meter bare-earth elevation for a parcel or other " +
-        "area of interest is resolvable, without ever reading, displaying, or logging its value. A later " +
-        "step needs network access to OpenTopography; this check performs none and creates no toposolid. " +
-        "SolidGround is a site-form tool, not a survey instrument, and this command never modifies the model.";
+        "Reads %ProgramData%\\SolidGround\\Revit\\settings.json to acquire USGS 1-meter bare-earth elevation " +
+        "(live from OpenTopography, or from a local AAIGrid .asc/.prj pair), clips it to the configured area " +
+        "of interest, simplifies it to the configured point budget, and creates one native Revit Toposolid " +
+        "inside a single transaction that is provably unchanged on any rejected path. The OPENTOPOGRAPHY_API_KEY " +
+        "environment variable's value is never read, displayed, or logged. SolidGround is a site-form tool, not " +
+        "a survey instrument, and never claims suitability for foundation-perimeter grading.";
 
     public Result OnStartup(UIControlledApplication application)
     {

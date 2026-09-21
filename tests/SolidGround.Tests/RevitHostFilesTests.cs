@@ -325,6 +325,69 @@ public sealed class RevitHostFilesTests
     }
 
     // ------------------------------------------------------------------------------------------------
+    // (h) SolidGround Issue #15
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void NoRevitSourceFileReferencesExtensibleStorageTypesYet()
+    {
+        // SolidGround Issue #15's design record §1.2/§10.3: #15 ships zero Extensible Storage code (Issue
+        // #16 owns that). A CI-checked, falsifiable backstop -- deliberately removed when #16 lands -- for
+        // "no Autodesk.Revit.DB.ExtensibleStorage.* type is referenced anywhere in SolidGround.Revit".
+        string[] forbiddenTokens = ["ExtensibleStorage", "SchemaBuilder", "GetEntity", "SetEntity"];
+
+        List<string> offenders = [];
+        foreach (string file in Directory.EnumerateFiles(RevitProjectDirectory, "*.cs", SearchOption.AllDirectories))
+        {
+            if (IsUnderBuildOutputDirectory(file, RevitProjectDirectory))
+            {
+                continue;
+            }
+
+            string content = File.ReadAllText(file);
+            foreach (string token in forbiddenTokens)
+            {
+                if (content.Contains(token, StringComparison.Ordinal))
+                {
+                    offenders.Add($"{file}: matched '{token}'");
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Extensible Storage token(s) found (Issue #16 territory, not #15):" + Environment.NewLine + string.Join(Environment.NewLine, offenders));
+    }
+
+    [Fact]
+    public void ButtonLongDescriptionKeepsTheSiteFormNotASurveyInstrumentDisclaimer()
+    {
+        // SolidGround Issue #15's design record §0.4 item 9: the tooltip rewrite must retain, in updated
+        // form, the existing disclaimer AGENTS.md's "Accuracy and product claims" section requires -- a
+        // stale-clause fix must not silently drop the disclaimer clause it sits next to.
+        string path = Path.Combine(RevitProjectDirectory, "SolidGroundApplication.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        Assert.Contains("ButtonLongDescription", content, StringComparison.Ordinal);
+        Assert.Contains("site-form tool, not", content, StringComparison.Ordinal);
+        Assert.Contains("a survey instrument", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandSuccessDialogKeepsTheSiteFormNotASurveyInstrumentDisclaimer()
+    {
+        // Same requirement (§0.4 item 9), applied to the rewritten success-dialog body (§6.6 step 4), which
+        // carries the identical disclaimer today and is not otherwise required to keep any fixed wording.
+        string path = Path.Combine(RevitProjectDirectory, "Commands", "CreateToposolidCommand.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        Assert.Contains("site-form tool, not", content, StringComparison.Ordinal);
+        Assert.Contains("a survey instrument", content, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------------
 

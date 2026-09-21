@@ -1,40 +1,54 @@
+using System.Globalization;
+using System.Text.Json;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using SolidGround.Core.Aois;
+using SolidGround.Core.Clipping;
+using SolidGround.Core.Exports;
+using SolidGround.Core.Metadata;
+using SolidGround.Core.Processing;
+using SolidGround.Core.Provenance;
+using SolidGround.Core.Rasters;
 using SolidGround.Core.Simplification;
+using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.OpenTopography;
+using SolidGround.Core.Terrain;
+using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Diagnostics;
+using SolidGround.Revit.Elements;
+using SolidGround.Revit.Geometry;
+using SolidGround.Revit.Provenance;
+using SolidGround.Revit.Settings;
+using SolidGround.Revit.Transactions;
+using CoreLengthUnit = SolidGround.Core.Units.LengthUnit;
 
 namespace SolidGround.Revit.Commands;
 
 /// <summary>
-/// The one SolidGround ribbon command for this milestone (Issue #14).
+/// SolidGround Issue #16's fixed extension point (design record §5, orchestrator decision 1): a bare
+/// nullable delegate invoked at exactly one call site, after post-create geometry verification passes and
+/// before <c>transaction.Commit()</c>, inside the same transaction. <see langword="null"/> in #15; Issue #16
+/// changes only the one assignment at that call site to reference its real Extensible-Storage-attaching
+/// method. May throw: any exception it raises is handled by the same transaction-wide catch that rolls back
+/// and derives <see cref="Result"/> from the observed <see cref="TransactionStatus"/> (orchestrator decision
+/// (d)).
+/// </summary>
+internal delegate void ToposolidCreatedHook(
+    Document document, Toposolid toposolid, TerrainExportPayload payload, PlacementRecordDraft placementDraft);
+
+/// <summary>
+/// Converts a settings-driven acquisition/processing run into a native Revit <see cref="Toposolid"/>, created
+/// inside one <see cref="Transaction"/> with provable-unchanged-on-rejection semantics. See SolidGround Issue
+/// #15's design record §6 for the full six-stage flow this implements. SolidGround is a site-form tool, not a
+/// survey instrument.
 /// </summary>
 /// <remarks>
-/// <para>
-/// Runs a read-only Preflight over the active document and reports the result in exactly one
-/// <see cref="TaskDialog"/>; it never opens a <see cref="Transaction"/> and never creates a toposolid
-/// (Issue #15 does that). SolidGround is a site-form tool, not a survey instrument.
-/// </para>
-/// <para>
-/// <c>message</c> is deliberately left at its caller-provided empty value on every return path: Revit only
-/// shows its own automatic result dialog when <c>message</c> is non-empty, so leaving it empty and always
-/// showing exactly one dialog constructed here is what keeps every outcome to a single dialog.
-/// </para>
-/// <para>
-/// Revit API members used here (namespace-qualified), verified directly against the installed Revit 2027
-/// SDK (27.0.10.13) for this task: <see cref="IExternalCommand"/> and its <c>Execute(ExternalCommandData,
-/// ref string, ElementSet)</c> signature, confirmed both by Issue #13 item 12/13 and by this task's own
-/// local compile experiment against the real installed RevitAPIUI.dll (a plain, non-ref
-/// <c>ElementSet elements</c> parameter compiles with zero errors); <see cref="TransactionAttribute"/>/
-/// <see cref="TransactionMode"/> and <see cref="RegenerationAttribute"/>/<see cref="RegenerationOption"/>
-/// (item 10); <see cref="Result"/> (items 2, 13); <c>ExternalCommandData.Application</c> to
-/// <c>UIApplication.ActiveUIDocument</c> to <c>UIDocument.Document</c>, and
-/// <c>Document.IsFamilyDocument</c> (item 15/16 "Level and type selection rule": "a confirmed installed-sdk
-/// member"); <see cref="TaskDialog"/>'s constructor, <c>MainInstruction</c>, <c>MainContent</c>, and
-/// <c>Show()</c> members (item 13).
-/// </para>
+/// <c>message</c> is deliberately left at its caller-provided empty value on every return path, exactly as
+/// Issue #14's Preflight-only command already did: Revit only shows its own automatic result dialog when
+/// <c>message</c> is non-empty, so leaving it empty and always showing exactly one dialog constructed here is
+/// what keeps every outcome to a single dialog.
 /// </remarks>
 [Transaction(TransactionMode.Manual)]
 [Regeneration(RegenerationOption.Manual)]
@@ -42,24 +56,14 @@ public sealed class CreateToposolidCommand : IExternalCommand
 {
     private const string DialogTitle = "SolidGround";
 
+    /// <summary>Mirrors <c>SolidGround.Cli.Rasters.RasterSetIo.SourceFileExtension</c>'s value: this project cannot reference the CLI assembly (AGENTS.md architecture rule), so the one literal is duplicated here instead.</summary>
+    private const string DefaultSourceJsonExtension = ".source.json";
+
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
         try
         {
-            PreflightResult preflight = RunPreflight(commandData);
-            AddInLog.Info($"CreateToposolidCommand Preflight completed with {preflight.Problems.Count} problem(s).");
-
-            if (preflight.Problems.Count > 0)
-            {
-                ShowRejection(preflight);
-                // A read-only Preflight opened no Transaction. Returning Cancelled, not Failed, avoids
-                // clearing Revit's native Undo stack over a check that changed nothing (conventions note
-                // section 4; verification note item 2, still a runtime-only open question).
-                return Result.Cancelled;
-            }
-
-            ShowSuccess(preflight);
-            return Result.Succeeded;
+            return ExecuteCore(commandData);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -68,48 +72,136 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 DialogTitle,
                 "SolidGround hit an unexpected problem and stopped. Nothing in the model changed." +
                 Environment.NewLine + Environment.NewLine + ex.Message);
-            // No Transaction was opened and the document is unchanged, so this returns Cancelled per
-            // conventions section 4, not Failed. Failed is reserved for a document actually left in a bad
-            // state; Issue #15's transactional code will need to decide that per path once it opens one.
+            // No Transaction was opened on any path that can reach this catch below Stage 5's own
+            // exception handling, so this is always Cancelled, never Failed (design record §7.1).
             return Result.Cancelled;
         }
     }
 
-    private static void ShowRejection(PreflightResult preflight)
+    private static Result ExecuteCore(ExternalCommandData commandData)
     {
-        string body = ProblemReportDialog.BuildRejectionBody(
-            "Nothing changed. Correct every problem below and run this command again.",
-            preflight.Problems,
-            AddInLog.LogDirectory);
-
-        AddInLog.Info("Showing Preflight rejection dialog.");
-        TaskDialog dialog = new(DialogTitle)
+        // ==== Stage 1: Document Preflight (read-only, no network, no transaction) =========================
+        DocumentContext? context = RunDocumentPreflight(commandData, out List<string> preflightProblems);
+        if (context is null || preflightProblems.Count > 0)
         {
-            MainInstruction = "SolidGround Preflight found a problem.",
-            MainContent = body,
-        };
-        dialog.Show();
+            ShowProblemList("SolidGround Preflight found a problem.", "Nothing changed. Correct every problem below and run this command again.", preflightProblems);
+            return Result.Cancelled;
+        }
+
+        // ==== Stage 2: Acquisition (network/file I/O; the only stage using the synchronous bridge) ========
+        if (context.Settings.Request.Mode == TerrainAcquisitionMode.Fetch)
+        {
+            AddInLog.Info(
+                $"Fetch mode: Revit will be unresponsive for up to {context.Settings.Request.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} " +
+                "second(s) while SolidGround requests OpenTopography.");
+        }
+
+        (ElevationGrid Grid, TerrainProcessingOutcome Outcome) acquisition;
+        try
+        {
+            using CancellationTokenSource cts = new(TimeSpan.FromSeconds(context.Settings.Request.NetworkTimeoutSeconds));
+            acquisition = Task.Run(
+                    () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, cts.Token),
+                    cts.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (IsAcquisitionFailure(ex))
+        {
+            ShowSingleCancelledProblem(AcquisitionFailureHeadline(ex, context.Settings.Request.NetworkTimeoutSeconds), AcquisitionFailureDetail(ex));
+            return Result.Cancelled;
+        }
+
+        // ==== Stage 3: Geometry Preflight (Core-only; still no Revit API call) =============================
+        LocalCoordinateFrame localFrame = acquisition.Outcome.Payload.Provenance.LocalFrame;
+        LocalBoundary boundary = acquisition.Outcome.ClipResult is { } clipResult
+            ? LocalBoundaryFactory.FromPolygonalRegion(clipResult.EffectiveRegion, localFrame)
+            : LocalBoundaryFactory.FromGridEnvelope(acquisition.Grid, localFrame);
+
+        LocalBoundaryValidationResult boundaryValidation = LocalBoundaryValidator.Validate(
+            boundary, acquisition.Outcome.Payload.Samples, context.Settings.Request.Simplification.PointBudget, containmentToleranceMeters: null);
+        if (!boundaryValidation.IsValid)
+        {
+            ShowProblemList("SolidGround could not build a valid boundary.", "Nothing changed. Correct every problem below and run this command again.", boundaryValidation.Problems);
+            return Result.Cancelled;
+        }
+
+        FileSystemTerrainExporter exporter;
+        try
+        {
+            exporter = new FileSystemTerrainExporter(context.Settings.Request.Output.Directory, context.Settings.Request.Output.BaseName);
+        }
+        catch (ArgumentException ex)
+        {
+            // Defensive: TerrainRequestSettings.Validate() already confirmed both are valid before Stage 1 accepted this run.
+            ShowSingleCancelledProblem("SolidGround could not use the configured output settings.", $"output.directory or output.baseName is invalid: {ex.Message}");
+            return Result.Cancelled;
+        }
+
+        try
+        {
+            // ValueTask must not be blocked on directly (CA2012); AsTask() converts to the safe-to-block-on form.
+            _ = exporter.ExportAsync(acquisition.Outcome.Payload, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }
+        catch (TerrainExportException ex)
+        {
+            ShowSingleCancelledProblem($"The terrain export could not be written to '{context.Settings.Request.Output.Directory}'.", ex.Message);
+            return Result.Cancelled;
+        }
+
+        string exportDocumentFileName = context.Settings.Request.Output.BaseName + TerrainExportBundleRenderer.DocumentFileSuffix;
+        string exportPointsFileName = context.Settings.Request.Output.BaseName + TerrainExportBundleRenderer.PointsFileSuffix;
+
+        // ==== Stage 4: Geometry construction (pre-transaction; Document untouched) =========================
+        ForgeTypeId revitUnit = RevitUnitConversion.ToForgeTypeId(context.Settings.Request.OutputUnit);
+        AddInLog.Info(
+            $"Output unit ForgeTypeId '{revitUnit.TypeId}' ({context.Settings.Request.OutputUnit}), " +
+            $"{LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit).ToString("R", CultureInfo.InvariantCulture)} m/unit.");
+
+        IList<XYZ> points = BoundaryGeometryBuilder.BuildPoints(acquisition.Outcome.Payload.Samples, revitUnit);
+        double constantZInternal = points.Min(point => point.Z);
+        IList<CurveLoop> profiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit);
+        BoundingBoxXYZ expected = BoundaryGeometryBuilder.ComputeExpectedBoundingBox(points);
+
+        if (!PostCreationVerification.AllProfilesArePlanar(profiles, out string? planarityProblem))
+        {
+            ShowSingleCancelledProblem("SolidGround could not build a valid boundary.", planarityProblem!);
+            return Result.Cancelled;
+        }
+
+        double toleranceInternal = RevitUnitConversion.ToInternal(LocalBoundaryValidator.DefaultContainmentToleranceMeters, CoreLengthUnit.Meter);
+
+        // ==== Stage 5: Transaction (the only stage that mutates Document) ==================================
+        return RunTransaction(
+            context, acquisition.Outcome, profiles, points, expected, revitUnit, constantZInternal, toleranceInternal,
+            exportDocumentFileName, exportPointsFileName);
     }
 
-    private static void ShowSuccess(PreflightResult preflight)
-    {
-        AddInLog.Info("Showing Preflight success dialog.");
-        TaskDialog dialog = new(DialogTitle)
-        {
-            MainInstruction = "SolidGround Preflight passed.",
-            MainContent = BuildSuccessBody(preflight),
-        };
-        dialog.Show();
-    }
+    // -------------------------------------------------------------------------------------------------------
+    // Stage 1
+    // -------------------------------------------------------------------------------------------------------
+
+    private sealed record DocumentContext(
+        Document Document,
+        RevitSettings Settings,
+        string SettingsPath,
+        HorizontalReference Wgs84Reference,
+        AreaOfInterest Aoi,
+        Level Level,
+        ToposolidType ToposolidType,
+        OrphanSnapshot OrphanBefore);
 
     /// <summary>
-    /// Read-only by construction: reads document state and Core-level defaults only, opens no
-    /// <see cref="Transaction"/>, and never reads the OpenTopography API key's value into any string --
-    /// only whether <see cref="IOpenTopographyApiKeyProvider.GetApiKey"/> returned a non-null key at all.
+    /// Read-only by construction: reads document state, the settings file, and Core-level defaults only,
+    /// opens no <see cref="Transaction"/>, and never reads the OpenTopography API key's value into any
+    /// string -- only whether <see cref="IOpenTopographyApiKeyProvider.GetApiKey"/> returned a non-null key
+    /// at all. Every problem found is accumulated into <paramref name="problems"/> rather than stopping at
+    /// the first (design record §6.1); returns <see langword="null"/> only when a structural problem (no
+    /// document, or the settings file itself could not be created/decoded) makes the remaining checks
+    /// impossible to run.
     /// </summary>
-    private static PreflightResult RunPreflight(ExternalCommandData commandData)
+    private static DocumentContext? RunDocumentPreflight(ExternalCommandData commandData, out List<string> problems)
     {
-        List<string> problems = [];
+        problems = [];
 
         Document? document = commandData.Application.ActiveUIDocument?.Document;
         if (document is null)
@@ -119,40 +211,595 @@ public sealed class CreateToposolidCommand : IExternalCommand
         else if (document.IsFamilyDocument)
         {
             problems.Add("The active document is a family document. Open a project document and run this command again.");
+            document = null;
         }
 
-        EnvironmentOpenTopographyApiKeyProvider keyProvider = new();
-        if (keyProvider.GetApiKey() is null)
+        string settingsPath = RevitSettingsLocator.Resolve();
+        RevitSettingsIo.EnsureTemplateExists(settingsPath, out bool justCreated, out string? writeError);
+        if (justCreated)
+        {
+            problems.Add($"A starting template was written to '{settingsPath}'. Edit it and run this command again.");
+            return null;
+        }
+
+        if (writeError is not null)
+        {
+            problems.Add(writeError);
+            return null;
+        }
+
+        if (!RevitSettingsIo.TryLoad(settingsPath, out RevitSettings? settings, out string? loadError))
+        {
+            problems.AddRange((loadError ?? "The settings file could not be loaded.").Split(Environment.NewLine));
+            return null;
+        }
+
+        if (document is null)
+        {
+            // The document problem above already explains why nothing further can run.
+            return null;
+        }
+
+        if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && new EnvironmentOpenTopographyApiKeyProvider().GetApiKey() is null)
         {
             problems.Add("The OPENTOPOGRAPHY_API_KEY environment variable is not set (or is empty). Set it to a valid OpenTopography API key and restart Revit.");
         }
 
-        SimplificationRequest defaultSimplification = new();
-        return new PreflightResult(problems, defaultSimplification.PointBudget, LengthConverter.DefaultOutputUnit, document?.Title);
+        HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
+
+        string? parcelGeometryText = null;
+        if (settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel)
+        {
+            string parcelPath = settings.Request.AreaOfInterest.Parcel!.Path;
+            try
+            {
+                parcelGeometryText = File.ReadAllText(parcelPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                problems.Add($"Could not read '{parcelPath}': {ex.Message}");
+            }
+        }
+
+        AreaOfInterest? aoi = null;
+        if (settings.Request.AreaOfInterest.Kind != AreaOfInterestKind.Parcel || parcelGeometryText is not null)
+        {
+            try
+            {
+                aoi = AoiSettingsFactory.Build(settings.Request.AreaOfInterest, wgs84Reference, parcelGeometryText);
+            }
+            catch (Exception ex) when (ex is FormatException or ArgumentException)
+            {
+                problems.Add($"The configured area of interest is invalid: {ex.Message}");
+            }
+        }
+
+        // Existence-only (never content) checks for the three process-mode file paths: design record §4.1
+        // documents each as "existence checked at Preflight, not settings-validate, since it is a
+        // file-system concern" (ProcessInputSettings's own doc comment says the same). Mirrors the parcel
+        // path handling above so a process-mode file-path problem reaches this same accumulated Preflight
+        // list instead of surfacing later, differently worded, from Stage 2's acquisition failure path.
+        // Mode == Process guarantees Process is non-null and Asc is non-blank: TryLoad above already ran
+        // settings.Request.Validate(), which rejects a null Process or blank Process.Asc before this point.
+        if (settings.Request.Mode == TerrainAcquisitionMode.Process)
+        {
+            ProcessInputSettings process = settings.Request.Process!;
+            string ascPath = process.Asc;
+            string prjPath = process.Prj ?? Path.ChangeExtension(ascPath, ".prj");
+
+            if (!File.Exists(ascPath))
+            {
+                problems.Add($"process.asc does not exist: '{ascPath}'.");
+            }
+
+            if (!File.Exists(prjPath))
+            {
+                problems.Add($"process.prj does not exist: '{prjPath}'.");
+            }
+
+            if (process.SourceJson is { } sourceJsonPath && !File.Exists(sourceJsonPath))
+            {
+                problems.Add($"process.sourceJson does not exist: '{sourceJsonPath}'.");
+            }
+        }
+
+        Level? level = LevelAndTypeResolver.ResolveLevel(document, settings.Target.LevelName);
+        if (level is null)
+        {
+            problems.Add("This project has no Level. SolidGround needs at least one Level to assign the created toposolid to.");
+        }
+        else if (!string.IsNullOrWhiteSpace(settings.Target.LevelName) && !string.Equals(level.Name, settings.Target.LevelName, StringComparison.Ordinal))
+        {
+            problems.Add($"No Level named '{settings.Target.LevelName}' was found in this project.");
+        }
+
+        ToposolidType? toposolidType = LevelAndTypeResolver.ResolveToposolidType(document, settings.Target.ToposolidTypeName);
+        if (toposolidType is null)
+        {
+            problems.Add("This project has no ToposolidType. SolidGround needs at least one ToposolidType to create the toposolid with.");
+        }
+        else if (!string.IsNullOrWhiteSpace(settings.Target.ToposolidTypeName) && !string.Equals(toposolidType.Name, settings.Target.ToposolidTypeName, StringComparison.Ordinal))
+        {
+            problems.Add($"No ToposolidType named '{settings.Target.ToposolidTypeName}' was found in this project.");
+        }
+
+        if (problems.Count > 0 || aoi is null || level is null || toposolidType is null)
+        {
+            return null;
+        }
+
+        OrphanSnapshot orphanBefore = OrphanCheck.Capture(document);
+        return new DocumentContext(document, settings, settingsPath, wgs84Reference, aoi, level, toposolidType, orphanBefore);
     }
 
-    private static string BuildSuccessBody(PreflightResult preflight) => string.Join(
-        Environment.NewLine,
-        $"Project: {preflight.DocumentTitle}",
-        "OpenTopography API key: present. (This check never reads, displays, or logs the key's value.)",
-        $"Default point budget: {preflight.PointBudget:N0} points.",
-        $"Default output unit: {DescribeUnit(preflight.OutputUnit)}.",
-        string.Empty,
-        "Creating a toposolid from a parcel or other area of interest arrives with a later SolidGround " +
-        "milestone (Issue #15). SolidGround is a site-form tool, not a survey instrument, and this check " +
-        "did not modify the model.");
+    // -------------------------------------------------------------------------------------------------------
+    // Stage 2
+    // -------------------------------------------------------------------------------------------------------
 
-    private static string DescribeUnit(LengthUnit unit) => unit switch
+    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunPipelineAsync(
+        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi, CancellationToken cancellationToken)
     {
-        LengthUnit.UsSurveyFoot => "U.S. survey foot",
-        LengthUnit.InternationalFoot => "international foot",
-        LengthUnit.Meter => "meter",
-        _ => unit.ToString(),
+        return request.Mode == TerrainAcquisitionMode.Fetch
+            ? await RunFetchPipelineAsync(request, wgs84Reference, aoi, cancellationToken).ConfigureAwait(false)
+            : await RunProcessPipelineAsync(request, aoi, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunFetchPipelineAsync(
+        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi, CancellationToken cancellationToken)
+    {
+        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
+
+        using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
+        OpenTopographyUsgs1mSource source = new(httpClient, new EnvironmentOpenTopographyApiKeyProvider());
+
+        OpenTopographyUsgs1mAcquisition acquisition = await source.AcquireDetailedAsync(
+            new ElevationSourceRequest(fetchEnvelope), cancellationToken).ConfigureAwait(false);
+
+        ElevationGrid grid = (ElevationGrid)acquisition.Acquisition.Data;
+        IHorizontalCoordinateTransform transform = ProjNetHorizontalCoordinateTransformFactory.Create(
+            ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText, acquisition.Evidence.WellKnownText);
+
+        if (transform.Definition.TargetReference != grid.HorizontalReference)
+        {
+            throw new InvalidOperationException(
+                "The fetched grid's horizontal reference does not match the coordinate reference the WGS 84 transform was built from.");
+        }
+
+        ElevationSourceMetadata sourceMetadata = new(
+            acquisition.Acquisition.Source.SourceName,
+            acquisition.Acquisition.Source.DatasetIdentifier,
+            acquisition.Acquisition.Source.CollectionPeriod,
+            acquisition.Acquisition.Source.QualityLevel);
+        ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
+
+        TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
+                grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, aoi,
+                request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
+                request.Simplification.CoverageFloorFraction, cancellationToken)
+            .ConfigureAwait(false);
+
+        return (grid, outcome);
+    }
+
+    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunProcessPipelineAsync(
+        TerrainRequestSettings request, AreaOfInterest aoi, CancellationToken cancellationToken)
+    {
+        ProcessInputSettings process = request.Process!;
+        string ascPath = process.Asc;
+        string prjPath = process.Prj ?? Path.ChangeExtension(ascPath, ".prj");
+        string? explicitSourceJsonPath = process.SourceJson;
+        string defaultSourceJsonPath = Path.ChangeExtension(ascPath, DefaultSourceJsonExtension);
+
+        string ascText = ReadTextFile(ascPath);
+        string prjText = ReadTextFile(prjPath);
+
+        RasterSourceSidecar? sidecar = null;
+        if (explicitSourceJsonPath is not null)
+        {
+            sidecar = RasterSourceSidecarIo.Read(ReadBytesFile(explicitSourceJsonPath), explicitSourceJsonPath);
+        }
+        else if (File.Exists(defaultSourceJsonPath))
+        {
+            sidecar = RasterSourceSidecarIo.Read(ReadBytesFile(defaultSourceJsonPath), defaultSourceJsonPath);
+        }
+
+        WellKnownTextReference parsedPrj = WellKnownTextReferenceParser.Parse(prjText);
+        IHorizontalCoordinateTransform transform = ProjNetHorizontalCoordinateTransformFactory.Create(
+            ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText, prjText);
+
+        VerticalReferenceResolution.ResolvedVerticalReference resolvedVertical;
+        try
+        {
+            resolvedVertical = VerticalReferenceResolution.Resolve(process.VerticalDatum, process.VerticalUnit, process.Geoid, sidecar, parsedPrj.Vertical);
+        }
+        catch (FormatException)
+        {
+            // Translated at this one call site (design record §6.2/§0.4 item 8): never Resolve's own
+            // CLI-flavored --vertical-datum/--vertical-unit/--source-json message text (error catalogue row 12).
+            throw new FormatException(
+                "SolidGround could not determine this terrain's vertical reference. Set 'process.verticalDatum' " +
+                "and 'process.verticalUnit', provide a 'process.sourceJson' sidecar, or use a compound .prj with a VERT_CS.");
+        }
+
+        VerticalReference verticalReference = resolvedVertical.Reference;
+
+        ElevationGrid grid;
+        using (StringReader ascReader = new(ascText))
+        {
+            grid = AaiGridParser.Parse(ascReader, transform.Definition.TargetReference, verticalReference);
+        }
+
+        string sourceName = process.SourceName ?? sidecar?.SourceName ?? "local-file";
+        string datasetIdentifier = process.Dataset ?? sidecar?.DatasetIdentifier ?? Path.GetFileNameWithoutExtension(ascPath);
+        CollectionPeriod? collectionPeriod = ParseCollectionPeriod(process) ?? sidecar?.CollectionPeriod;
+        string? qualityLevel = process.QualityLevel ?? sidecar?.QualityLevel;
+        ElevationSourceMetadata sourceMetadata = new(sourceName, datasetIdentifier, collectionPeriod, qualityLevel);
+
+        ReferenceOrigins referenceOrigins = new(ReferenceOrigin.Operator, resolvedVertical.Origin);
+
+        TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
+                grid, transform, verticalReference, referenceOrigins, sourceMetadata, aoi,
+                request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
+                request.Simplification.CoverageFloorFraction, cancellationToken)
+            .ConfigureAwait(false);
+
+        return (grid, outcome);
+    }
+
+    private static CollectionPeriod? ParseCollectionPeriod(ProcessInputSettings process)
+    {
+        if (process.CollectionStart is not { } startText || process.CollectionEnd is not { } endText)
+        {
+            return null;
+        }
+
+        if (!DateOnly.TryParseExact(startText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly start)
+            || !DateOnly.TryParseExact(endText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly end))
+        {
+            // TerrainRequestSettings.Validate() already rejected this before Stage 1 accepted the run.
+            return null;
+        }
+
+        return new CollectionPeriod(start, end);
+    }
+
+    private static string ReadTextFile(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not read '{path}'.", ex);
+        }
+    }
+
+    private static byte[] ReadBytesFile(string path)
+    {
+        try
+        {
+            return File.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not read '{path}'.", ex);
+        }
+    }
+
+    private static bool IsAcquisitionFailure(Exception ex) =>
+        ex is OpenTopographyException or FormatException or IOException or OperationCanceledException or InvalidOperationException;
+
+    private static string AcquisitionFailureHeadline(Exception ex, int networkTimeoutSeconds) => ex switch
+    {
+        OperationCanceledException =>
+            $"The request did not complete within {networkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} seconds.",
+        IOException => "Could not read a configured file.",
+        _ => "SolidGround could not acquire terrain data.",
     };
 
-    private sealed record PreflightResult(
-        IReadOnlyList<string> Problems,
-        int PointBudget,
-        LengthUnit OutputUnit,
-        string? DocumentTitle);
+    private static string AcquisitionFailureDetail(Exception ex) => ex switch
+    {
+        OperationCanceledException => "The acquisition timed out. Increase 'networkTimeoutSeconds' in settings.json, or check network connectivity, and try again.",
+        _ => ex.Message,
+    };
+
+    // -------------------------------------------------------------------------------------------------------
+    // Stage 5 / 6
+    // -------------------------------------------------------------------------------------------------------
+
+    private static Result RunTransaction(
+        DocumentContext context,
+        TerrainProcessingOutcome outcome,
+        IList<CurveLoop> profiles,
+        IList<XYZ> points,
+        BoundingBoxXYZ expected,
+        ForgeTypeId revitUnit,
+        double constantZInternal,
+        double toleranceInternal,
+        string exportDocumentFileName,
+        string exportPointsFileName)
+    {
+        Document document = context.Document;
+        ToposolidCreationFailureLog failureLog = new();
+
+        using Transaction transaction = new(document, "SolidGround: Create Toposolid");
+        transaction.SetFailureHandlingOptions(
+            transaction.GetFailureHandlingOptions()
+                .SetFailuresPreprocessor(new ToposolidCreationFailurePreprocessor(failureLog))
+                .SetClearAfterRollback(true));
+
+        TransactionStatus started = transaction.Start();
+        if (started != TransactionStatus.Started)
+        {
+            ShowSingleCancelledProblem("SolidGround could not start a Revit transaction.", $"Transaction.Start() returned {started}.");
+            return Result.Cancelled;
+        }
+
+        // toposolid/draft are assigned only on the path that reaches a confirmed Committed status; that
+        // path falls through to ReportSuccess below, deliberately OUTSIDE this try/catch (see the comment
+        // there): once Commit() has returned Committed, nothing that happens while reporting success may
+        // flip Result away from Succeeded (error catalogue row 22's principle, generalized).
+        Toposolid? toposolid = null;
+        PlacementRecordDraft? draft = null;
+
+        try
+        {
+            toposolid = ToposolidCreationService.Create(
+                document, profiles, points, context.ToposolidType.Id, context.Level.Id, ToposolidCreationService.DefaultStrategy);
+
+            document.Regenerate();
+
+            VerificationResult verification = PostCreationVerification.Verify(
+                toposolid, expected, points, ToposolidCreationService.DefaultStrategy, toleranceInternal);
+
+            if (!verification.Passed || failureLog.HasBlockingFailure)
+            {
+                // Error catalogue rows 19 and 20: a failed geometry verification and a blocking Revit
+                // failure message get distinct headlines; verification takes priority when both occur.
+                (string headline, string detail) = !verification.Passed
+                    ? ("The created toposolid's geometry did not match the source data; the change was undone.", verification.Detail)
+                    : ("Revit reported a problem while creating the toposolid.", string.Join(" | ", failureLog.Messages));
+                TransactionStatus rolledBack = transaction.RollBack();
+                return ShowTransactionOutcome(rolledBack, headline, detail);
+            }
+
+            draft = BuildPlacementDraft(
+                context, outcome, revitUnit, constantZInternal, toposolid, exportDocumentFileName, exportPointsFileName);
+
+            ToposolidCreatedHook? postCreationHook = null; // Issue #16 supplies a non-null value here.
+            postCreationHook?.Invoke(document, toposolid, outcome.Payload, draft);
+
+            TransactionStatus commitStatus = transaction.Commit();
+            if (commitStatus != TransactionStatus.Committed)
+            {
+                AddInLog.Error($"SolidGround's transaction ended with status {commitStatus}, not Committed.");
+                ShowSingleFailed("SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed.");
+                return Result.Failed;
+            }
+
+            // Falls through to ReportSuccess below: commitStatus == Committed is the only way this try
+            // block completes without an explicit return or a caught exception.
+        }
+        catch (ToposolidCreationException ex)
+        {
+            TransactionStatus status = transaction.HasEnded() ? transaction.GetStatus() : transaction.RollBack();
+            // ex.Message already restates "Revit rejected..."; the inner exception's own message is the
+            // non-redundant detail for the dialog body.
+            return ShowTransactionOutcome(status, "Revit rejected the generated toposolid boundary or points.", ex.InnerException?.Message ?? ex.Message);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            AddInLog.Error("SolidGround hit a problem after the transaction started.", ex);
+            TransactionStatus status = transaction.HasEnded() ? transaction.GetStatus() : transaction.RollBack();
+            return ShowTransactionOutcome(status, "SolidGround hit a problem while finishing the toposolid.", ex.Message);
+        }
+
+        // Reached only when commitStatus == Committed. Deliberately outside the try/catch above: a failure
+        // while reporting success (writing the placement record, the orphan check, showing the dialog) must
+        // never re-derive Result from TransactionStatus.RolledBack/HasEnded() -- the model change is already
+        // durable. ReportSuccess is itself defensive (never lets a reporting failure escape) for the same reason.
+        return ReportSuccess(context, draft!, toposolid!);
+    }
+
+    private static PlacementRecordDraft BuildPlacementDraft(
+        DocumentContext context,
+        TerrainProcessingOutcome outcome,
+        ForgeTypeId revitUnit,
+        double constantZInternal,
+        Toposolid toposolid,
+        string exportDocumentFileName,
+        string exportPointsFileName)
+    {
+        TerrainProvenance provenance = outcome.Payload.Provenance;
+        double roundTrip = UnitUtils.ConvertFromInternalUnits(UnitUtils.ConvertToInternalUnits(1.0, revitUnit), revitUnit) - 1.0;
+
+        PlacementUnitConversionRecord unitConversion = new(
+            LengthUnitToken(context.Settings.Request.OutputUnit),
+            revitUnit.TypeId,
+            LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit),
+            roundTrip);
+
+        PlacementLocalOriginRecord localOrigin = new(
+            provenance.LocalFrame.Origin.X,
+            provenance.LocalFrame.Origin.Y,
+            provenance.LocalFrame.Origin.Elevation,
+            provenance.HorizontalTransformation.TargetReference.CoordinateReferenceSystem,
+            new PlacementVerticalReferenceRecord(
+                provenance.SourceVerticalReference.Datum,
+                LengthUnitToken(provenance.SourceVerticalReference.Unit),
+                provenance.SourceVerticalReference.GeoidModel));
+
+        PlacementBoundaryPlaneElevationRecord boundaryPlaneElevation = new(
+            constantZInternal,
+            "minimumRetainedSampleElevation",
+            context.Level.Elevation,
+            "Every boundary CurveLoop vertex shares this one internal-unit Z, the minimum of the retained terrain " +
+            "samples' own local elevation (not the resolved Level's Elevation, recorded here only for reference); " +
+            "terrain shape comes entirely from the points array.");
+
+        OrphanSnapshot midTransaction = OrphanCheck.Capture(context.Document);
+        PlacementRevitCoordinatesRecord revitCoordinates = new(
+            InternalOrigin.Get(context.Document).Position.IsAlmostEqualTo(new XYZ(0d, 0d, 0d)),
+            ToPointRecord(midTransaction.BasePointPosition),
+            ToPointRecord(midTransaction.BasePointSharedPosition),
+            ToPointRecord(midTransaction.SurveyPointPosition),
+            ToPointRecord(midTransaction.SurveyPointSharedPosition),
+            midTransaction.ActiveProjectLocationName);
+
+        PlacementPointCountsRecord pointCounts = new(
+            provenance.OriginalPointCount, provenance.RetainedPointCount, context.Settings.Request.Simplification.PointBudget);
+
+        return new PlacementRecordDraft(
+            exportDocumentFileName,
+            exportPointsFileName,
+            context.Level.Name,
+            context.Level.Id.Value,
+            context.ToposolidType.Name,
+            context.ToposolidType.Id.Value,
+            CreationStrategyToken(ToposolidCreationService.DefaultStrategy),
+            unitConversion,
+            localOrigin,
+            boundaryPlaneElevation,
+            revitCoordinates,
+            "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
+            pointCounts);
+    }
+
+    private static PlacementPointRecord ToPointRecord(XYZ point) => new(point.X, point.Y, point.Z);
+
+    /// <summary>
+    /// The exact camelCase token <see cref="TerrainRequestSettings.JsonOptions"/>'s <c>JsonStringEnumConverter</c>
+    /// would produce for <paramref name="unit"/> (for example <c>"usSurveyFoot"</c>) -- reused here so the
+    /// placement record's own unit fields match settings.json's convention exactly, never
+    /// <c>LengthUnitTokens</c>'s deliberately different kebab-case CLI flag tokens (design record §0.2's
+    /// "two casing conventions" note).
+    /// </summary>
+    private static string LengthUnitToken(CoreLengthUnit unit) =>
+        JsonSerializer.Serialize(unit, TerrainRequestSettings.JsonOptions).Trim('"');
+
+    /// <summary>The camelCase token for <paramref name="strategy"/> (design record §9's example: <c>"combinedOverload"</c>), matching this record's other camelCase-token fields.</summary>
+    private static string CreationStrategyToken(ToposolidCreationStrategy strategy) => strategy switch
+    {
+        ToposolidCreationStrategy.CombinedOverload => "combinedOverload",
+        ToposolidCreationStrategy.ProfilesThenSlabShapeEditor => "profilesThenSlabShapeEditor",
+        _ => strategy.ToString(),
+    };
+
+    /// <summary>
+    /// Called only after a confirmed <see cref="TransactionStatus.Committed"/> status. Deliberately never
+    /// lets an exception escape (beyond the two catastrophic exclusions every catch filter in this class
+    /// uses): the modeling action is already durable, so a failure while writing the placement record,
+    /// running the orphan check, or showing the dialog must be logged, never allowed to make the caller
+    /// derive a Cancelled/Failed result for a run that actually succeeded (error catalogue row 22's
+    /// principle, generalized to every post-commit step, not only the placement-record write).
+    /// </summary>
+    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid)
+    {
+        long elementId = toposolid.Id.Value;
+
+        string? placementPath = null;
+        try
+        {
+            PlacementRecord record = draft.ToRecord(elementId, DateTime.UtcNow);
+            placementPath = PlacementRecordWriter.Write(context.Settings.Request.Output.Directory, context.Settings.Request.Output.BaseName, record);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            AddInLog.Error("SolidGround created the toposolid, but could not write the placement record.", ex);
+        }
+
+        try
+        {
+            OrphanSnapshot orphanAfter = OrphanCheck.Capture(context.Document);
+            if (OrphanCheck.Unchanged(context.OrphanBefore, orphanAfter, out string? orphanProblem))
+            {
+                AddInLog.Info("Orphan check: shared coordinate state unchanged.");
+            }
+            else
+            {
+                AddInLog.Warning($"Orphan check: {orphanProblem}");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            AddInLog.Error("SolidGround created the toposolid, but the post-commit orphan check itself failed.", ex);
+        }
+
+        AddInLog.Info(
+            $"{BuildIdentity.Current.ToLogLine()} -- created Toposolid {elementId.ToString(CultureInfo.InvariantCulture)} " +
+            $"on Level '{context.Level.Name}' with ToposolidType '{context.ToposolidType.Name}'; retained " +
+            $"{draft.PointCounts.Retained.ToString(CultureInfo.InvariantCulture)} of {draft.PointCounts.Original.ToString(CultureInfo.InvariantCulture)} point(s).");
+
+        try
+        {
+            string body = string.Join(
+                Environment.NewLine,
+                $"Element id: {elementId.ToString(CultureInfo.InvariantCulture)}",
+                $"Level: {context.Level.Name}",
+                $"ToposolidType: {context.ToposolidType.Name}",
+                $"Points retained: {draft.PointCounts.Retained.ToString(CultureInfo.InvariantCulture)} of {draft.PointCounts.Original.ToString(CultureInfo.InvariantCulture)} (budget {draft.PointCounts.Budget.ToString(CultureInfo.InvariantCulture)})",
+                $"Export bundle: {Path.Combine(context.Settings.Request.Output.Directory, draft.ExportDocument)}",
+                placementPath is not null ? $"Placement record: {placementPath}" : "Placement record: could not be written (see log).",
+                $"Log directory: {AddInLog.LogDirectory ?? "(unavailable)"}",
+                string.Empty,
+                "SolidGround is a site-form tool, not a survey instrument. SolidGround made no change to " +
+                "ActiveProjectLocation, the project base point, the survey point, or site location during this run.");
+
+            AddInLog.Info("Showing success dialog.");
+            TaskDialog dialog = new(DialogTitle)
+            {
+                MainInstruction = "SolidGround created the toposolid.",
+                MainContent = body,
+            };
+            dialog.Show();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            AddInLog.Error("SolidGround created the toposolid, but could not show the success dialog.", ex);
+        }
+
+        return Result.Succeeded;
+    }
+
+    // -------------------------------------------------------------------------------------------------------
+    // Dialogs
+    // -------------------------------------------------------------------------------------------------------
+
+    private static void ShowProblemList(string mainInstruction, string bodyHeadline, IReadOnlyList<string> problems)
+    {
+        string body = ProblemReportDialog.BuildRejectionBody(bodyHeadline, problems, AddInLog.LogDirectory);
+        AddInLog.Info($"Showing rejection dialog: {mainInstruction}");
+        TaskDialog dialog = new(DialogTitle) { MainInstruction = mainInstruction, MainContent = body };
+        dialog.Show();
+    }
+
+    private static void ShowSingleCancelledProblem(string mainInstruction, string detail) =>
+        ShowProblemList(mainInstruction, "Nothing changed. Correct the problem below and run this command again.", [detail]);
+
+    private static void ShowSingleFailed(string mainInstruction)
+    {
+        AddInLog.Info($"Showing failure dialog: {mainInstruction}");
+        TaskDialog dialog = new(DialogTitle) { MainInstruction = mainInstruction };
+        dialog.Show();
+    }
+
+    /// <summary>
+    /// Shared by every post-<c>Start()</c> failure path: derives <see cref="Result"/> only from the observed
+    /// <see cref="TransactionStatus"/> (design record §7.1), never from "an exception happened".
+    /// </summary>
+    private static Result ShowTransactionOutcome(TransactionStatus status, string rolledBackHeadline, string detail)
+    {
+        if (status == TransactionStatus.RolledBack)
+        {
+            AddInLog.Info($"Showing rollback dialog: {rolledBackHeadline}");
+            TaskDialog dialog = new(DialogTitle) { MainInstruction = rolledBackHeadline, MainContent = detail };
+            dialog.Show();
+            return Result.Cancelled;
+        }
+
+        AddInLog.Error($"Transaction ended with status {status} instead of RolledBack or Committed; reporting Failed.");
+        ShowSingleFailed($"SolidGround could not confirm whether the model was reverted (transaction status: {status}). Check the document and Undo if needed. {detail}");
+        return Result.Failed;
+    }
 }
