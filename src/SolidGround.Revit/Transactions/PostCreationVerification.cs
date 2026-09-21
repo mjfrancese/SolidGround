@@ -57,12 +57,26 @@ internal static class PostCreationVerification
     /// treated as a failure, for the same "general Revit convention, not independently confirmed" reason the
     /// design record gives.
     /// </summary>
+    /// <param name="nativeToposolidMaxPointThreshold">
+    /// The <c>Revit.ini</c> <c>NativeToposolidMaxPointThreshold</c> value <c>CreateToposolidCommand</c>'s
+    /// Preflight stage already parsed and logged, or <see langword="null"/> when it could not be read this
+    /// session. Named as the likely cause in the message below only when the slab-shape-vertex count comes
+    /// back short of <paramref name="points"/> AND the supplied point count actually exceeded this value --
+    /// SolidGround Issue #15's 2026-09-21 probe session found that combination is the likely cause: the
+    /// combined <c>Toposolid.Create</c> overload never throws past that count, it just silently retains
+    /// fewer vertices (<c>evidence/EVIDENCE-PROBES.md</c> Run 2, <c>ThresholdProbe</c>;
+    /// <c>docs/architecture/revit-toposolid-creation.md</c>'s "Step 7"). Since Preflight already rejects a
+    /// configured <c>pointBudget</c> above a known threshold before any transaction opens, a shortfall found
+    /// here with the supplied point count still at or below a known threshold is not explained by this
+    /// setting, and is reported differently.
+    /// </param>
     internal static VerificationResult Verify(
         Toposolid toposolid,
         BoundingBoxXYZ expected,
         IList<XYZ> points,
         ToposolidCreationStrategy strategy,
-        double toleranceInternal)
+        double toleranceInternal,
+        int? nativeToposolidMaxPointThreshold)
     {
         ArgumentNullException.ThrowIfNull(toposolid);
         ArgumentNullException.ThrowIfNull(expected);
@@ -94,14 +108,55 @@ internal static class PostCreationVerification
             vertexDetail = $"Slab shape editor reports {vertexCount} vertex(es) for {points.Count} supplied point(s).";
             if (vertexCount < points.Count)
             {
-                return new VerificationResult(
-                    false,
-                    $"The created toposolid recorded fewer slab shape vertices ({vertexCount}) than points supplied " +
-                    $"({points.Count}); some points may have been silently dropped.");
+                return new VerificationResult(false, DescribeVertexShortfall(vertexCount, points.Count, nativeToposolidMaxPointThreshold));
             }
         }
 
         return new VerificationResult(true, $"Bounding box matched within tolerance ({strategy}). {vertexDetail}");
+    }
+
+    /// <summary>
+    /// Names the likely cause and the remedy for a vertex shortfall, rather than just reporting the two
+    /// counts: SolidGround Issue #15's 2026-09-21 probe session (<c>evidence/EVIDENCE-PROBES.md</c> Run 2,
+    /// <c>ThresholdProbe</c>) found the combined <c>Toposolid.Create</c> overload silently caps its retained
+    /// vertex count near <c>Revit.ini</c>'s <c>NativeToposolidMaxPointThreshold</c> once the supplied point
+    /// count exceeds it, with no thrown exception -- the evidence never established which points are kept or
+    /// by what mechanism, only the resulting count, so the message below describes the capped count, not a
+    /// specific "discards points past N" selection rule. <paramref name="nativeToposolidMaxPointThreshold"/>
+    /// is named as the likely cause only when <paramref name="pointCount"/> actually exceeds it. Because
+    /// <c>CreateToposolidCommand</c>'s Preflight stage already rejects a configured <c>pointBudget</c> above
+    /// a known threshold before any transaction opens, <paramref name="pointCount"/> can only reach this
+    /// method already at or below a known threshold, or with the threshold unknown -- the "exceeded" branch
+    /// exists for a hypothetical future path where that invariant no longer holds.
+    /// </summary>
+    private static string DescribeVertexShortfall(int vertexCount, int pointCount, int? nativeToposolidMaxPointThreshold)
+    {
+        string cause;
+        if (nativeToposolidMaxPointThreshold is { } threshold && pointCount > threshold)
+        {
+            cause = "the likely cause is Revit's own Revit.ini NativeToposolidMaxPointThreshold setting, read as " +
+                $"{threshold.ToString(CultureInfo.InvariantCulture)} at Preflight: Revit silently caps the retained " +
+                "vertex count near that setting instead of throwing. Lower simplification.pointBudget to at most " +
+                $"{threshold.ToString(CultureInfo.InvariantCulture)}, or raise the Revit.ini value within Autodesk's " +
+                "documented 10,000 to 50,000 range and restart Revit, then run this command again";
+        }
+        else if (nativeToposolidMaxPointThreshold is { } knownThreshold)
+        {
+            cause = "the configured simplification.pointBudget was already at or below this machine's Revit.ini " +
+                $"NativeToposolidMaxPointThreshold (read as {knownThreshold.ToString(CultureInfo.InvariantCulture)} " +
+                "at Preflight), so that setting is unlikely to be the cause. Check SolidGround's log folder for " +
+                "further diagnosis";
+        }
+        else
+        {
+            cause = "the likely cause is Revit's own Revit.ini NativeToposolidMaxPointThreshold setting, whose value " +
+                "could not be read at Preflight this session: Revit silently caps the retained vertex count near " +
+                "that setting instead of throwing. Lower simplification.pointBudget, or raise the Revit.ini value " +
+                "within Autodesk's documented 10,000 to 50,000 range and restart Revit, then run this command again";
+        }
+
+        return $"The created toposolid recorded fewer slab shape vertices ({vertexCount}) than points supplied " +
+            $"({pointCount}); {cause}.";
     }
 
     private static bool Contains(BoundingBoxXYZ actual, BoundingBoxXYZ expected, double tolerance)

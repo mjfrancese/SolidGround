@@ -42,8 +42,11 @@ and the `IFailuresPreprocessor` defensive design (item 9), the locked synchronou
 construction — the shipped code makes one fixed choice for each, recorded under "Design decisions" below —
 but does not settle item 2, keeps item 6 exactly as locked, and leaves the numeric point-threshold
 relationship item 9 raises open pending manual test step 7's own evidence. See "Manual evidence plan" below
-for all three. (2026-09-21 update: Steps 5 and 7 below now carry real probe-session evidence that narrows,
-but does not fully close, items 2 and 9; see "Decisions recorded from evidence" below.)
+for all three. (2026-09-21 update: Steps 5 and 7 below now carry real probe-session evidence that narrows
+item 2 and settles item 9's practical question: Revit silently caps the combined overload's retained vertex
+count near `Revit.ini`'s configured `NativeToposolidMaxPointThreshold` instead of throwing, so the shipped
+add-in now guards the configured `pointBudget` against it at Preflight and re-verifies the created vertex
+count afterward; see "Decisions recorded from evidence" below.)
 
 ## What Issue #15 built
 
@@ -83,6 +86,7 @@ directly against the commit range.
 | `Processing/NamedSelection.cs` | `NamedCandidate`/`NamedSelector.SelectFirstByOrdinalName` — the `ToposolidType` selection rule. |
 | `Processing/AoiSettingsFactory.cs` | Builds a real `AreaOfInterest` from `AoiSettings`, reusing `Wgs84BoundingBoxAoi`/`Wgs84RadiusAoi`/`ParcelGeometryAoi`'s own constructors rather than re-deriving their rules. |
 | `Processing/TerrainRequestSettings.cs` | The host-neutral settings contract (see "Settings file reference" below), its never-throws `Validate()`, and the one shared `JsonOptions` every decode of this record uses. |
+| `Hosting/RevitIniToposolidThresholds.cs` (2026-09-21 threshold-evidence addendum) | Revit-free `Parse(string)` (throws only `ArgumentNullException` for a null argument; never throws on malformed `Revit.ini` content) for a `Revit.ini` file's `[Misc]` `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold` — text in, `int?` pair out; `SolidGround.Revit` owns locating and reading the real file. |
 | `Geometry/Coordinates.cs` (edited) | Adds `LocalCoordinate2D`, the same finite-value guard as `Coordinate2D`/`Coordinate3D`/`LocalCoordinate`. |
 | `Transformations/LocalCoordinateFrame.cs` (edited) | Adds `ToLocalHorizontal(Coordinate2D)`, reusing the existing private `HorizontalUnit` computation. |
 | `Exports/TerrainExportBundleRenderer.cs` (edited) | `TerrainExportBaseName`: `internal` → `public`, body unchanged, so settings validation can reuse the exporter's own base-name rule. |
@@ -99,10 +103,10 @@ directly against the commit range.
 | `Elements/LevelAndTypeResolver.cs` | Thin adapter over the two Core selectors; never `Level.Create`, never creates or duplicates a `ToposolidType`. |
 | `Transactions/ToposolidCreationService.cs` | `ToposolidCreationStrategy`, `Create` (dispatches to the combined or profiles-then-`SlabShapeEditor` overload), `ToposolidCreationException`. |
 | `Transactions/ToposolidCreationFailurePreprocessor.cs`, `ToposolidCreationFailureLog` | `IFailuresPreprocessor`: logs every `FailureMessageAccessor`, requests rollback on `Error`/`DocumentCorruption`, deletes warnings otherwise. |
-| `Transactions/PostCreationVerification.cs` | The pre-transaction planarity guard and the post-create bounding-box/slab-shape-vertex-count check. |
+| `Transactions/PostCreationVerification.cs` | The pre-transaction planarity guard and the post-create bounding-box/slab-shape-vertex-count check; the vertex-shortfall message (2026-09-21 threshold-evidence addendum) now names `Revit.ini`'s `NativeToposolidMaxPointThreshold` as the likely cause and states the remedy only when the supplied point count actually exceeded a Preflight-known threshold; otherwise it says that setting is unlikely to be the cause. |
 | `Transactions/OrphanCheck.cs` | `OrphanSnapshot` (BasePoint/SurveyPoint position and shared position, `SiteLocation` place name, `ActiveProjectLocation` name), `Capture`, `Unchanged`. |
 | `Provenance/PlacementRecord.cs`, `PlacementRecordWriter.cs` | The placement-record shape (see "Placement record schema" below) and its hand-written `Utf8JsonWriter` renderer. |
-| `Commands/CreateToposolidCommand.cs` (rewritten) | The full six-stage flow — see "Command flow" below. |
+| `Commands/CreateToposolidCommand.cs` (rewritten) | The full six-stage flow — see "Command flow" below. Document Preflight's step 8 (2026-09-21 threshold-evidence addendum) reads and logs `Revit.ini`'s toposolid point-count thresholds and rejects an over-budget `pointBudget` before any transaction opens. |
 | `SolidGroundApplication.cs` (edited) | `ButtonToolTip`/`ButtonLongDescription` updated to describe real creation; the site-form/not-a-survey-instrument disclaimer retained. |
 
 ### Tests
@@ -113,6 +117,10 @@ New, fully offline: `LocalBoundaryTests`, `LocalBoundaryFactoryTests`, `LocalBou
 `ClipRegionFactoryTests`, `LocalOriginFactoryTests`, `VerticalReferenceResolutionTests`, and
 `RasterSourceSidecarIoTests` (new against the now-public Core type — no CLI-scoped predecessor test existed
 to move; the type was `internal` and previously exercised only indirectly through `CliApplication.RunAsync`).
+`RevitIniToposolidThresholdsTests` (2026-09-21 threshold-evidence addendum) covers
+`RevitIniToposolidThresholds.Parse`: present values, an absent `[Misc]` section, an absent key, a malformed
+value, a key outside `[Misc]`, CRLF line endings, a leading UTF-8 BOM, case-insensitive keys, an empty
+document, and surrounding whitespace.
 `LengthUnitTokensTests` moved (`using SolidGround.Cli.Options;` → `using SolidGround.Core.Units;`); its
 round-trip and default-token assertions carry over unchanged, and its unknown-token rejection assertion now
 checks `FormatException` instead of `CliUsageException`. `ArchitectureTests` gained
@@ -123,8 +131,12 @@ checks `FormatException` instead of `CliUsageException`. `ArchitectureTests` gai
 (a plain-text scan of every `src/SolidGround.Revit/**/*.cs` for `ExtensibleStorage`/`SchemaBuilder`/
 `GetEntity`/`SetEntity`, a falsifiable backstop for "#15 ships zero Extensible Storage code," deliberately
 removed when Issue #16 lands), `ButtonLongDescriptionKeepsTheSiteFormNotASurveyInstrumentDisclaimer`, and
-`CreateToposolidCommandSuccessDialogKeepsTheSiteFormNotASurveyInstrumentDisclaimer`. See "Verification" below
-for the current pass count.
+`CreateToposolidCommandSuccessDialogKeepsTheSiteFormNotASurveyInstrumentDisclaimer`. The 2026-09-21
+threshold-evidence addendum further gained `CreateToposolidCommandReadsRevitIniAndGuardsThePointBudgetAtPreflight`
+and `PostCreationVerificationNamesTheRevitIniThresholdAsTheLikelyCauseOfAVertexShortfall` — the same kind of
+plain-text regression backstop, since neither the Preflight guard nor the vertex-shortfall message can be
+exercised through a real Revit process from this offline test project. See "Verification" below for the
+current pass count.
 
 ## Design decisions with reasons
 
@@ -438,6 +450,17 @@ always a decode failure (`System.Text.Json`'s own `required`-member support), ne
 | `output.baseName` | string | yes | `"terrain"` | `TerrainExportBaseName.Validate` |
 | `networkTimeoutSeconds` | integer | no | `300` | positive |
 
+`simplification.pointBudget`'s `1..50000 inclusive` validation above is host-independent and unchanged by
+SolidGround Issue #15's 2026-09-21 threshold evidence. Document Preflight adds one further, host-dependent
+check this table does not capture: `CreateToposolidCommand` reads the running machine's own `Revit.ini`
+`[Misc]` section (`SolidGround.Core.Hosting.RevitIniToposolidThresholds`, located via
+`Application.CurrentUsersDataFolderPath`) and rejects the run when `pointBudget` exceeds that machine's own
+`NativeToposolidMaxPointThreshold` — see "Command flow" > "Stage 1" step 8 and "Step 7" below for why: Revit
+silently caps the retained vertex count near that setting instead of throwing. This machine-dependent guard cannot be
+expressed as a static range in this table, since `NativeToposolidMaxPointThreshold` itself is configurable
+per machine within Autodesk's documented 10,000-50,000 range, and the check is skipped (not enforced) when
+`Revit.ini` could not be read this session.
+
 ### Template
 
 Written verbatim, byte for byte, from `RevitSettingsIo.TemplateJson` — the only time `EnsureTemplateExists`
@@ -532,7 +555,7 @@ outer catch can have opened a `Transaction`.
 with three exceptions that return early (a structural problem makes every later check meaningless): no
 usable active document, the settings file having just been written, and a settings write or load failure.
 The no-document return is deferred until after settings load — steps 2 and 3 below still run with no
-document, so a missing document never masks a settings problem — which means steps 4 through 7 below only
+document, so a missing document never masks a settings problem — which means steps 4 through 8 below only
 run once step 1 found a usable, non-family document. In order:
 
 1. Active document present, not a family document.
@@ -549,10 +572,26 @@ run once step 1 found a usable, non-family document. In order:
    review beyond the original design record, so a missing process-mode file surfaces here, identically
    worded, instead of later from Stage 2's acquisition-failure path).
 7. `LevelAndTypeResolver.ResolveLevel`/`ResolveToposolidType` against the configured names.
-8. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
+8. `CheckRevitIniPointThreshold` (added for SolidGround Issue #15's 2026-09-21 threshold evidence, "Step 7"
+   below): reads `commandData.Application.Application.CurrentUsersDataFolderPath`, combines it with
+   `"Revit.ini"`, and reads that file — a missing file, an inaccessible data folder, or any other read error
+   just logs a warning and returns (no problem added; the rest of Preflight still runs). Otherwise parses it
+   with `SolidGround.Core.Hosting.RevitIniToposolidThresholds.Parse` and always logs one line naming both
+   configured values (or `(absent)` for a value that was not found or did not parse), for example:
+
+   ```
+   'C:\Users\<user>\AppData\Roaming\Autodesk\Revit\Autodesk Revit 2027\Revit.ini' [Misc]: NativeToposolidMaxPointThreshold=20000, LinkToposolidMaxPointThreshold=20000.
+   ```
+
+   When `NativeToposolidMaxPointThreshold` was read and `simplification.pointBudget` exceeds it, adds error
+   catalogue row 9a's problem line naming the exact machine, configured, and allowed-range values. The parsed
+   `NativeToposolidMaxPointThreshold` (or `null` if unavailable) is carried forward into
+   `DocumentContext.NativeToposolidMaxPointThreshold` for Stage 5's `PostCreationVerification.Verify` call
+   below, whether or not this step itself added a problem.
+9. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
    baseline.
 
-Steps 4 through 7 can all contribute problems to one combined dialog; only steps 2 and 3 short-circuit with a
+Steps 4 through 8 can all contribute problems to one combined dialog; only steps 2 and 3 short-circuit with a
 single-cause dialog, since nothing past a settings failure can be meaningfully checked. Any problem →
 `ShowProblemList("SolidGround Preflight found a problem.", ...)` (the existing `ProblemReportDialog.BuildRejectionBody`,
 capped at 8 inline lines, full list to the log folder) → `Result.Cancelled`. Nothing past this stage runs.
@@ -622,7 +661,10 @@ Otherwise: `ToposolidCreationService.Create` → `document.Regenerate()` → `Po
 (and the failure-preprocessor's own blocking-failure flag) → the Issue #16 hook → `transaction.Commit()`,
 all inside one `try` whose two `catch` clauses derive `Result` from the observed `TransactionStatus`. A
 `Commit()` that returns anything but `Committed` is `Result.Failed` with no further `RollBack()` attempt (the
-transaction has already ended, one way or another).
+transaction has already ended, one way or another). `Verify` also takes Stage 1's
+`context.NativeToposolidMaxPointThreshold` (SolidGround Issue #15's 2026-09-21 threshold evidence, "Step 7"
+below): a vertex-count shortfall's message names that Preflight-parsed value as the likely cause only when the
+supplied point count actually exceeded it; otherwise the message says that setting is unlikely to be the cause.
 
 ### Stage 6 — Success (only after a confirmed `Committed` status)
 
@@ -710,7 +752,7 @@ pasted back into settings.json is the only guaranteed-stable choice.
 
 Doc Preflight (Stage 1) funnels every one of its own problems into **one shared dialog**,
 `"SolidGround Preflight found a problem."`, with the distinguishing text appearing as one capped inline
-problem line (never as a separate dialog headline) — rows 1 through 9 below all share that one `MainInstruction`.
+problem line (never as a separate dialog headline) — rows 1 through 9a below all share that one `MainInstruction`.
 Acquisition (Stage 2) funnels every one of its own exception types into a **shared headline per exception
 category** (rows 10 through 12), with the distinguishing text as the dialog's body detail. Every later stage
 shows its own distinct headline.
@@ -726,6 +768,7 @@ shows its own distinct headline.
 | 7 | AOI construction fails (bad bbox/radius/parcel geometry, or an unreadable parcel file) | Doc Preflight | Cancelled | shared dialog; problem line names the constructor's own message |
 | 8 | `process.asc`/`.prj`/`.sourceJson` missing | Doc Preflight | Cancelled | shared dialog; one problem line per missing file |
 | 9 | Level / ToposolidType unresolved | Doc Preflight | Cancelled | shared dialog; one problem line per unresolved kind |
+| 9a | Configured `pointBudget` exceeds this machine's `Revit.ini` `NativeToposolidMaxPointThreshold` (added for Issue #15's 2026-09-21 threshold evidence; see "Step 7" and "Command flow" > "Stage 1") | Doc Preflight | Cancelled | shared dialog; "pointBudget \<N\> exceeds this machine's NativeToposolidMaxPointThreshold of \<M\> in '\<Revit.ini path\>'; lower pointBudget to at most \<M\> or raise the Revit.ini value within Autodesk's documented 10,000 to 50,000 range and restart Revit." Skipped (no problem line, just a log warning) when `Revit.ini` could not be read this session. |
 | 10 | Network/OpenTopography failure, grid/transform reference mismatch, `GridClipException`, `TerrainProvenanceException`, or a translated vertical-reference `FormatException` | Acquisition | Cancelled | "SolidGround could not acquire terrain data." + `ex.Message` (already the translated sentence for the vertical-reference case) |
 | 11 | Fetch-mode timeout (`OperationCanceledException`) | Acquisition | Cancelled | "The request did not complete within \<N\> seconds." + a suggestion to raise `networkTimeoutSeconds` |
 | 12 | Local file unreadable (content read, not existence — an `IOException`) | Acquisition | Cancelled | "Could not read a configured file." + `ex.Message` |
@@ -734,7 +777,7 @@ shows its own distinct headline.
 | 15 | Export-bundle write failure | Geometry Preflight | Cancelled | "The terrain export could not be written to '\<directory\>'." + `ex.Message` |
 | 16 | Defensive planarity check fails (construction bug only, never terrain data) | Geometry construction | Cancelled | same "could not build a valid boundary" headline as row 13 |
 | 17 | `Transaction.Start()` not `Started` | Transaction | Cancelled | "SolidGround could not start a Revit transaction." + observed status |
-| 18 | Post-create bounding-box or slab-shape-vertex-count mismatch | Transaction | Cancelled if `RolledBack`, else Failed | "The created toposolid's geometry did not match the source data; the change was undone." (or the generic Failed text) |
+| 18 | Post-create bounding-box or slab-shape-vertex-count mismatch | Transaction | Cancelled if `RolledBack`, else Failed | "The created toposolid's geometry did not match the source data; the change was undone." (or the generic Failed text) + `PostCreationVerification`'s own detail — for a vertex-count shortfall specifically, the detail names Revit's own `Revit.ini` `NativeToposolidMaxPointThreshold` setting as the likely cause and states the remedy only when the supplied point count actually exceeded a Preflight-known threshold, per Step 7's evidence; otherwise it says that setting is unlikely to be the cause |
 | 19 | `IFailuresPreprocessor` observed a blocking (`Error`/`DocumentCorruption`) failure | Transaction | Cancelled if `RolledBack`, else Failed | "Revit reported a problem while creating the toposolid." + joined failure messages |
 | 20 | `Toposolid.Create`/`AddPoints` throws (`ToposolidCreationException`) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the generated toposolid boundary or points." + inner exception message |
 | 21 | `Regenerate()`, the Issue #16 hook, or `Commit()` itself throwing | Transaction | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + `ex.Message` |
@@ -937,22 +980,44 @@ duplicate or degenerate input: direct inspection of `ProbeGeometry.CreateInterio
 spacing at these two counts — `dx` 0.84-1.09 ft, `dy` 0.67-0.86 ft — is nowhere near degenerate) — confirmed by direct simulation of the
 same algorithm, which found 0 duplicate (X, Y) pairs and exactly `count` distinct coordinates at all five
 tested counts. The 30000/50001 runs therefore did submit that many genuinely distinct points to
-`Toposolid.Create`. What capped the resulting vertex count at 20015/20031 is not established by this evidence;
-a genuine Revit-side point cap in that neighborhood, coinciding with `Revit.ini`'s own 20,000 default, is at
-least as plausible as any other explanation, and is flagged here as an open question rather than a dismissed
-probe artifact.
+`Toposolid.Create`. With duplicate/degenerate probe input ruled out by that simulation, the evidence-backed
+reading of the plateau is: **the probe's submitted points were unique, and Revit itself silently capped the
+combined overload's retained vertex count near `Revit.ini`'s own configured `NativeToposolidMaxPointThreshold`
+(20,000 on this machine) once the truly-distinct point count exceeded it, raising no exception either at or
+past that boundary.** 20015 and 20031 are close to, though not exactly at, that configured value — consistent
+with a real cap near the threshold, not with the coincidence duplicate/degenerate probe input would have
+produced instead.
 
 **Outcome.** For the combined `Toposolid.Create` overload, at exactly 19,999/20,000/20,001 genuinely distinct
 points (confirmed by the 1:1 tracking between requested count and reported vertex count), Revit does not
 throw, truncate, or otherwise change behavior at the `Revit.ini`-documented 20,000 boundary — the combined
 overload is not gated by `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold` at that exact
-count. Behavior above roughly 20,000-20,031 *truly unique* points is still not established: the 30000/50001
-sweep did submit that many genuinely distinct coordinates (see above), but what capped the resulting vertex
-count is unconfirmed, so the sweep cannot be read as evidence either way for that range. A dedicated follow-up
-probe — for example, one that logs the actual number of distinct XY pairs `Toposolid.Create`/the
-`SlabShapeEditor` report back, or that uses non-grid-aligned points — would be needed before relying on "not
-gated above 20,000" for anything past 20,001 points. AGENTS.md's conservative ~15,000 application default is
-unaffected by this finding and is not changed by it.
+count. Above that count, the 30000/50001 sweep's own plateau (20015/20031 retained vertices for 30,000/50,001
+genuinely distinct submitted points, duplicate input independently ruled out by simulation) is read as Revit
+silently capping the retained vertex count near its own configured `NativeToposolidMaxPointThreshold`/
+`LinkToposolidMaxPointThreshold` ceiling, raising no exception either way.
+
+**Consequence for the shipped add-in (this evidence's practical conclusion, landed the same day as this
+probe session).** A `pointBudget` configured above the running machine's own `NativeToposolidMaxPointThreshold`
+risks exactly this silent point loss. `CreateToposolidCommand`'s Document Preflight stage now reads the
+machine's real `Revit.ini` (via `Autodesk.Revit.ApplicationServices.Application.CurrentUsersDataFolderPath`,
+reached as `commandData.Application.Application.CurrentUsersDataFolderPath` — see "Revit API members used"
+below), parses its `[Misc]` section with the new Core-hosted
+`SolidGround.Core.Hosting.RevitIniToposolidThresholds.Parse`, logs both configured thresholds (one
+`AddInLog.Info` line of the shape `'<path>' [Misc]: NativeToposolidMaxPointThreshold=<value or (absent)>,
+LinkToposolidMaxPointThreshold=<value or (absent)>.`), and rejects the run — before any transaction opens —
+when the configured `pointBudget` exceeds `NativeToposolidMaxPointThreshold` (see "Command flow" > "Stage 1"
+and the "Error catalogue" below). This Preflight read is itself tolerant: a missing file, an inaccessible
+data folder, or any other read error just logs a warning and skips the check, exactly like every other
+best-effort diagnostic in this add-in (AGENTS.md "Diagnostics must never throw back into Revit").
+`PostCreationVerification.Verify`'s existing post-create vertex-count check (error catalogue row 18) still
+rolls back when it observes a shortfall anyway — a Preflight read that could not reach `Revit.ini` this
+session, or a `Revit.ini` edit between Preflight and the transaction, are both still possible — but its
+message names this Revit.ini setting as the likely cause and states the remedy only when the supplied point
+count actually exceeded a known threshold, instead of only reporting the two counts; when a known threshold
+was already respected (the ordinary case, since Preflight itself already enforces it), the message says so
+instead of blaming a setting that was not the cause. AGENTS.md's conservative ~15,000 application
+default is unchanged; this finding motivates the new Preflight guard, not a different default.
 
 ### Step 8 — ExampleSite end to end, Option A/B probe, unit round trip (settles verification items 15, 16), plus the orphan check
 
@@ -1190,14 +1255,21 @@ the live-acceptance item offline, per "Manual evidence plan" above and AGENTS.md
   `RevitUnitConversion.ToForgeTypeId`'s existing mapping is unaffected — this only confirms the conversion
   calls it relies on do genuine unit math for both options. See Step 8a item 3 above and "Unit conversion"
   above.
-- **Thresholds narrowed, not fully closed.** `Revit.ini` re-confirmed `NativeToposolidMaxPointThreshold=20000`/
-  `LinkToposolidMaxPointThreshold=20000`. The combined overload accepts 19,999/20,000/20,001 genuinely distinct
-  points with no observable gating. Behavior above roughly 20,000-20,031 truly unique points remains
-  unverified: the 30,000/50,001 sweep did submit that many genuinely distinct coordinates (the point generator
-  was checked directly and produces no duplicates), but the resulting toposolid retained only ~20,015/~20,031
-  vertices for a reason this evidence does not establish — a real Revit-side point cap near 20,000 remains a
-  live possibility, not a dismissed probe artifact. AGENTS.md's conservative ~15,000 application default is
-  unchanged. See Step 7 above.
+- **Thresholds resolved: Revit silently caps past them, it does not throw.** `Revit.ini` re-confirmed
+  `NativeToposolidMaxPointThreshold=20000`/`LinkToposolidMaxPointThreshold=20000`. The combined overload
+  accepts 19,999/20,000/20,001 genuinely distinct points with no observable gating. Above that, the
+  30,000/50,001 sweep submitted that many genuinely distinct coordinates (the point generator was checked
+  directly and simulated, and produces no duplicates), yet the resulting toposolid retained only
+  ~20,015/~20,031 vertices with no thrown exception — read as Revit itself silently capping the retained vertex
+  count near its own configured threshold, not as a dismissed probe artifact. **Consequence, landed the same day:**
+  `CreateToposolidCommand`'s Preflight stage now reads the real `Revit.ini` (via
+  `Application.CurrentUsersDataFolderPath`) and rejects a `pointBudget` configured above the machine's own
+  `NativeToposolidMaxPointThreshold` before any transaction opens
+  (`SolidGround.Core.Hosting.RevitIniToposolidThresholds`), and `PostCreationVerification`'s post-create
+  vertex-count check (error catalogue row 18) now names this setting as the likely cause when a shortfall is
+  observed anyway with the supplied point count above a known threshold (and notes the setting is unlikely
+  to be the cause when it was not). AGENTS.md's conservative ~15,000 application default is unchanged. See
+  Step 7 above.
 - **Boundary Z confirmed overridden.** The flat, single-scalar boundary Z this design passes to
   `Toposolid.Create` produces no visible rim; it is fully reconciled to the interior point data at every
   tested value (Z=0, 100, 110). See Step 8a item 5 above and "The boundary-Z decision" above.
@@ -1287,19 +1359,25 @@ existence, not compiler-verified independently of the real build (which itself d
 | `ElementId.Value: long` (modern; not a pre-2024 `int IntegerValue`) | Verified | [ElementId.Value Property](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/6f216e39-b66d-5df5-c60c-b9aaccb1e28a.htm) |
 | `Autodesk.Revit.Exceptions.ArgumentException`, `.InvalidOperationException` | Verified | (caught by `ToposolidCreationService.Create`; not separately opened this pass) |
 | `ExtensibleStorage.Entity`/`Schema` (sizing only — **zero code in Issue #15 references these types**) | Verified, present | [Entity Class](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/cf17f0e8-33bd-ef95-bf4b-e6298406f29b.htm) — referenced only to size the Issue #16 extension-point signature above |
-| No managed member named or containing `Threshold` relating to point count exists in any of the three managed assemblies; `SiteDB.dll` (the only binary naming `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold`) has no CLR header | Verified — global reflection member-name search, `assemblies.txt` confirms `SiteDB.dll` `HasCorHeader(Managed): False` | (absence claim; no documentation page to cite) |
+| `Autodesk.Revit.ApplicationServices.Application.CurrentUsersDataFolderPath` (instance, get-only `string`; reached from command-time code as `commandData.Application.Application.CurrentUsersDataFolderPath`, the same pattern AGENTS.md's "Revit 2027 rules" already use for `Application.AllUsersAddinsLocation`) | Verified, signature matches (`apidump/out/Autodesk.Revit.ApplicationServices.Application.txt`) | [Application.CurrentUsersDataFolderPath Property](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/39698a5d-01fd-7aff-9df4-2d5ca1504930.htm) — Remarks: "Similar to C:\Users\[UserName]\AppData\Roaming\Autodesk\[ProductType]\[ReleaseName]", matching Autodesk's separate "About the Revit.ini File for Installation" page's "User Profile folder" location (used once Revit has been started and exited at least once) and this machine's own observed `Revit.ini` path (`evidence/EVIDENCE-PROBES.md` Step 1) |
+| No managed member named or containing `Threshold` relating to point count exists in any of the three managed assemblies; `SiteDB.dll` (the only binary naming `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold`) has no CLR header | Verified — global reflection member-name search, `assemblies.txt` confirms `SiteDB.dll` `HasCorHeader(Managed): False` | (absence claim; no documentation page to cite) — this is exactly why `SolidGround.Core.Hosting.RevitIniToposolidThresholds` reads `Revit.ini`'s own text instead of a Revit API member: no such member exists to read the configured value from |
 
 ### Not established by reflection or documentation (each has a named owner below)
 
 1. Whether `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold` gates the
    `Toposolid.Create(profiles, points, ...)` code path at all — every documentation source scopes both
    settings to interactive DWG/text-file import and linked-topography reload, never to this general-purpose
-   overload. Owned by manual test step 7 above. **Settled for 19,999-20,001 points by the 2026-09-21 probe
-   session (Step 7 above): the combined overload is not gated at that exact boundary.** Behavior above roughly
-   20,000-20,031 truly distinct points is still not established — the only sweep that reached higher nominal
-   counts (30,000/50,001) did submit that many genuinely distinct coordinates (its point generator was checked
-   directly and produces no duplicates), but what capped the resulting vertex count near 20,000-20,031 is
-   unconfirmed and needs a dedicated follow-up probe.
+   overload. Owned by manual test step 7 above. **Settled by the 2026-09-21 probe session (Step 7 above): the
+   combined overload is not gated at exactly 19,999-20,001 points (1:1 vertex-count tracking, no exception),
+   and it is not gated by a thrown exception above that count either — instead it silently retains only about
+   `NativeToposolidMaxPointThreshold` vertices (20,015/20,031 retained for 30,000/50,001 genuinely distinct
+   submitted points; uniqueness confirmed by direct simulation of the probe's own point generator, ruling out
+   a probe-geometry artifact).** No further follow-up probe is planned: the shipped add-in now treats this as
+   a guard-and-verify problem rather than an open research question — `CreateToposolidCommand`'s Preflight
+   stage (`SolidGround.Core.Hosting.RevitIniToposolidThresholds`) rejects an over-budget `pointBudget` before
+   any transaction opens, and `PostCreationVerification` still verifies the created vertex count and rolls
+   back, naming this setting as the likely cause when a shortfall is observed anyway with the supplied point
+   count above a known threshold (and noting the setting is unlikely to be the cause when it was not).
 2. `Result.Cancelled` vs. `Result.Failed` Undo-stack side effects, specifically after a genuine `RolledBack`
    status (as opposed to zero transactions ever opened). Owned by manual test step 5 above; the Result-code
    policy table is explicitly provisional pending this evidence. **Settled by the 2026-09-21 probe session
@@ -1357,7 +1435,9 @@ existence, not compiler-verified independently of the real build (which itself d
 `dotnet restore SolidGround.slnx --locked-mode`, `dotnet build SolidGround.slnx --configuration Release
 --no-restore`, and `dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration
 Release --no-build` all pass against the code this note describes: 0 warnings, 0 errors, and the full offline
-suite green (870 tests: 869 passed, 1 skipped — the live OpenTopography test, which requires
+suite green (914 tests as of the 2026-09-21 threshold-evidence addendum — 10 of them
+`RevitIniToposolidThresholdsTests`, plus 2 more in `RevitHostFilesTests` guarding the Revit-host call sites
+built on top of it — 913 passed, 1 skipped — the live OpenTopography test, which requires
 `SOLIDGROUND_OPENTOPOGRAPHY_LIVE=1` and a real key and is kept skipped by design). The CI-shaped compile gate
 — `dotnet restore src/SolidGround.Revit/SolidGround.Revit.csproj --locked-mode -p:UseRevitReferenceAssemblies=true`
 then `dotnet build ... -p:UseRevitReferenceAssemblies=true` — also passes with 0 warnings, confirming

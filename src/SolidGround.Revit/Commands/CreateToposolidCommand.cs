@@ -6,6 +6,7 @@ using Autodesk.Revit.UI;
 using SolidGround.Core.Aois;
 using SolidGround.Core.Clipping;
 using SolidGround.Core.Exports;
+using SolidGround.Core.Hosting;
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Provenance;
@@ -194,7 +195,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
         AreaOfInterest Aoi,
         Level Level,
         ToposolidType ToposolidType,
-        OrphanSnapshot OrphanBefore);
+        OrphanSnapshot OrphanBefore,
+        int? NativeToposolidMaxPointThreshold);
 
     /// <summary>
     /// Read-only by construction: reads document state, the settings file, and Core-level defaults only,
@@ -329,14 +331,80 @@ public sealed class CreateToposolidCommand : IExternalCommand
             problems.Add($"No ToposolidType named '{settings.Target.ToposolidTypeName}' was found in this project.");
         }
 
+        int? nativeToposolidMaxPointThreshold = CheckRevitIniPointThreshold(
+            commandData, settings.Request.Simplification.PointBudget, problems);
+
         if (problems.Count > 0 || aoi is null || level is null || toposolidType is null)
         {
             return null;
         }
 
         OrphanSnapshot orphanBefore = OrphanCheck.Capture(document);
-        return new DocumentContext(document, settings, settingsPath, wgs84Reference, aoi, level, toposolidType, orphanBefore);
+        return new DocumentContext(document, settings, settingsPath, wgs84Reference, aoi, level, toposolidType, orphanBefore, nativeToposolidMaxPointThreshold);
     }
+
+    /// <summary>
+    /// SolidGround Issue #15's 2026-09-21 probe session found that Revit's combined <c>Toposolid.Create</c>
+    /// overload never throws when handed more points than <c>Revit.ini</c>'s <c>NativeToposolidMaxPointThreshold</c>
+    /// allows -- it silently retains only about that many <see cref="SlabShapeEditor"/> vertices (evidence:
+    /// <c>evidence/EVIDENCE-PROBES.md</c> Run 2, <c>ThresholdProbe</c>/its extended sweep;
+    /// <c>docs/architecture/revit-toposolid-creation.md</c>'s "Step 7"). This guards the configured point
+    /// budget here, before acquisition and before any transaction, instead of only discovering the loss
+    /// afterward from <see cref="PostCreationVerification"/>.
+    /// </summary>
+    /// <returns>
+    /// The parsed <c>NativeToposolidMaxPointThreshold</c>, or <see langword="null"/> when it could not be
+    /// read this session (missing/unreadable <c>Revit.ini</c>, or the key was absent/malformed) --
+    /// <see cref="PostCreationVerification.Verify"/> names this value in its own message when known.
+    /// </returns>
+    private static int? CheckRevitIniPointThreshold(ExternalCommandData commandData, int pointBudget, List<string> problems)
+    {
+        string revitIniPath;
+        string revitIniText;
+        try
+        {
+            // Autodesk.Revit.ApplicationServices.Application.CurrentUsersDataFolderPath: an instance,
+            // get-only `string` property, verified present in the installed Revit 2027 (27.0.10.13) dump
+            // (apidump/out/Autodesk.Revit.ApplicationServices.Application.txt) and, separately, in
+            // Autodesk's own 27.2.0.0-labelled Revit-API-MainReference page for this exact member
+            // ("Similar to C:\Users\[UserName]\AppData\Roaming\Autodesk\[ProductType]\[ReleaseName]") --
+            // matching Autodesk's "About the Revit.ini File for Installation" page's "User Profile folder"
+            // location (used once Revit has been started and exited at least once) and this machine's own
+            // observed path (SolidGround Issue #15 `evidence/EVIDENCE-PROBES.md` Step 1). Reached from
+            // command-time code the same way AGENTS.md's "Revit 2027 rules" already reach
+            // `Application.AllUsersAddinsLocation`: `commandData.Application.Application.<member>`.
+            string dataFolderPath = commandData.Application.Application.CurrentUsersDataFolderPath;
+            revitIniPath = Path.Combine(dataFolderPath, "Revit.ini");
+            revitIniText = File.ReadAllText(revitIniPath);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Tolerant by design (design record for this check): a missing file, an inaccessible data
+            // folder, or any other read error just logs and skips this one check -- it must never itself
+            // block a run the way a real over-budget finding does.
+            AddInLog.Warning($"Could not read Revit.ini to check its point-count threshold; skipping this check: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+
+        RevitIniToposolidThresholds.Thresholds thresholds = RevitIniToposolidThresholds.Parse(revitIniText);
+        AddInLog.Info(
+            $"'{revitIniPath}' [Misc]: NativeToposolidMaxPointThreshold={DescribeThreshold(thresholds.NativeToposolidMaxPointThreshold)}, " +
+            $"LinkToposolidMaxPointThreshold={DescribeThreshold(thresholds.LinkToposolidMaxPointThreshold)}.");
+
+        if (thresholds.NativeToposolidMaxPointThreshold is { } nativeThreshold && pointBudget > nativeThreshold)
+        {
+            string budgetText = pointBudget.ToString(CultureInfo.InvariantCulture);
+            string thresholdText = nativeThreshold.ToString(CultureInfo.InvariantCulture);
+            problems.Add(
+                $"pointBudget {budgetText} exceeds this machine's NativeToposolidMaxPointThreshold of {thresholdText} in " +
+                $"'{revitIniPath}'; lower pointBudget to at most {thresholdText} or raise the Revit.ini value within " +
+                "Autodesk's documented 10,000 to 50,000 range and restart Revit.");
+        }
+
+        return thresholds.NativeToposolidMaxPointThreshold;
+    }
+
+    private static string DescribeThreshold(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "(absent)";
 
     // -------------------------------------------------------------------------------------------------------
     // Stage 2
@@ -557,7 +625,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
             document.Regenerate();
 
             VerificationResult verification = PostCreationVerification.Verify(
-                toposolid, expected, points, ToposolidCreationService.DefaultStrategy, toleranceInternal);
+                toposolid, expected, points, ToposolidCreationService.DefaultStrategy, toleranceInternal,
+                context.NativeToposolidMaxPointThreshold);
 
             if (!verification.Passed || failureLog.HasBlockingFailure)
             {

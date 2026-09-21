@@ -388,6 +388,42 @@ public sealed class RevitHostFilesTests
     }
 
     // ------------------------------------------------------------------------------------------------
+    // (i) SolidGround Issue #15's 2026-09-21 threshold-evidence addendum
+    // ------------------------------------------------------------------------------------------------
+    //
+    // Neither check below can be exercised through a real Revit process from this offline, Revit-free test
+    // project (docs/architecture/revit-toposolid-creation.md's "Step 7": Revit itself silently caps the
+    // combined `Toposolid.Create` overload's retained vertex count near `Revit.ini`'s own configured
+    // `NativeToposolidMaxPointThreshold`, raising no exception). These are the same kind of falsifiable,
+    // plain-text regression backstop as the disclaimer checks above: `RevitIniToposolidThresholdsTests`
+    // covers the Revit-free parser itself; these two only guard that the Revit-host call sites built on top
+    // of it -- the Preflight guard and the post-create verification message -- have not silently regressed.
+
+    [Fact]
+    public void CreateToposolidCommandReadsRevitIniAndGuardsThePointBudgetAtPreflight()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Commands", "CreateToposolidCommand.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        Assert.Contains("CurrentUsersDataFolderPath", content, StringComparison.Ordinal);
+        Assert.Contains("RevitIniToposolidThresholds.Parse", content, StringComparison.Ordinal);
+        Assert.Contains("NativeToposolidMaxPointThreshold", content, StringComparison.Ordinal);
+        Assert.Contains("exceeds this machine's NativeToposolidMaxPointThreshold", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostCreationVerificationNamesTheRevitIniThresholdAsTheLikelyCauseOfAVertexShortfall()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Transactions", "PostCreationVerification.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        Assert.Contains("NativeToposolidMaxPointThreshold", content, StringComparison.Ordinal);
+        Assert.Contains("the likely cause is Revit's own Revit.ini NativeToposolidMaxPointThreshold setting", content, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------------
 
