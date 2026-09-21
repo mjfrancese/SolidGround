@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "Nice3point.Revit.Api.RevitAPI": {
+        "type": "Direct",
+        "requested": "[2027.0.10, )",
+        "resolved": "2027.0.10",
+        "contentHash": "N7AP0N+hAyIkQXQdzcQQJX0CqoW0F0x0pXmrSYD5HFFkRIqqyNbHG2T11Wo++UrMvsxH+CXzUgbdtr0E1+Nalg=="
+      },
+      "Nice3point.Revit.Api.RevitAPIUI": {
+        "type": "Direct",
+        "requested": "[2027.0.10, )",
+        "resolved": "2027.0.10",
+        "contentHash": "dRB8Z6/ypc1CdJgxT4no/tWOGfVy/tqbJvxD2yEuK/Au4QzoTnrXrFzoKZ3yS8JX9s2zq4/Q/NtL+//iwNfOaQ=="
+      },
+      "NetTopologySuite": {
+        "type": "Transitive",
+        "resolved": "2.6.0",
+        "contentHash": "1B1OTacTd4QtFyBeuIOcThwSSLUdRZU3bSFIwM8vk36XiZlBMi3K36u74e4OqwwHRHUuJC1PhbDx4hyI266X1Q=="
+      },
+      "ProjNET": {
+        "type": "Transitive",
+        "resolved": "2.1.0",
+        "contentHash": "4F0xEYe+cQCgWgnf1UaDlRPFm9RxTaSFt4C/axNnCgSCNWU1AFDNvTyVdN/RwNmTYoGEWxo4sOYMQrW9kQtwpg=="
+      },
+      "solidground.core": {
+        "type": "Project",
+        "dependencies": {
+          "NetTopologySuite": "[2.6.0, )",
+          "ProjNET": "[2.1.0, )"
+        }
+      }
+    }
+  }
+}

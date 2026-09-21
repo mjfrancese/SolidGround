@@ -86,6 +86,10 @@ public sealed class ArchitectureTests
         Assert.DoesNotContain(
             references,
             reference => reference.Name?.StartsWith("RevitAPI", StringComparison.OrdinalIgnoreCase) == true);
+
+        Assert.DoesNotContain(
+            references,
+            reference => string.Equals(reference.Name, "SolidGround.Revit", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -263,6 +267,10 @@ public sealed class ArchitectureTests
             references,
             reference => reference.Name?.StartsWith("RevitAPI", StringComparison.OrdinalIgnoreCase) == true);
 
+        Assert.DoesNotContain(
+            references,
+            reference => string.Equals(reference.Name, "SolidGround.Revit", StringComparison.OrdinalIgnoreCase));
+
         string[] allowedNames = ["SolidGround.Core", "NetTopologySuite", "ProjNET", "System.Private.CoreLib", "System.Runtime", "netstandard"];
         foreach (AssemblyName reference in references)
         {
@@ -273,5 +281,22 @@ public sealed class ArchitectureTests
                 isFrameworkAssembly || isAllowedThirdParty,
                 $"SolidGround.Cli references '{name}', which is neither a framework assembly nor one of: {string.Join(", ", allowedNames)}.");
         }
+    }
+
+    [Fact]
+    public void TestAssemblyReferencesNeitherTheRevitApiNorTheRevitHostAssembly()
+    {
+        // SolidGround.Tests itself must keep building and running on the Linux solidground-pve2 CI
+        // runner without Revit installed: it must never pick up a reference to the Revit API or to
+        // SolidGround.Revit, whether directly or transitively through a future ProjectReference mistake.
+        AssemblyName[] references = typeof(ArchitectureTests).Assembly.GetReferencedAssemblies();
+
+        Assert.DoesNotContain(
+            references,
+            reference => reference.Name?.StartsWith("RevitAPI", StringComparison.OrdinalIgnoreCase) == true);
+
+        Assert.DoesNotContain(
+            references,
+            reference => string.Equals(reference.Name, "SolidGround.Revit", StringComparison.OrdinalIgnoreCase));
     }
 }

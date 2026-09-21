@@ -55,10 +55,30 @@ jobs:
           global-json-file: global.json
 
       - name: Restore locked dependencies
-        run: dotnet restore SolidGround.slnx --locked-mode
+        run: dotnet restore SolidGround.slnx --locked-mode -p:UseRevitReferenceAssemblies=true
 
       - name: Build
-        run: dotnet build SolidGround.slnx --configuration Release --no-restore
+        run: dotnet build SolidGround.slnx --configuration Release --no-restore -p:UseRevitReferenceAssemblies=true
+
+      - name: Assert the CI compile gate ships no Revit reference assembly
+        shell: bash
+        # Issue #14 activated the UseRevitReferenceAssemblies compile gate above (AGENTS.md "Build and
+        # CI"; docs/architecture/revit-add-in-conventions.md section 10). This proves it stays CI-only:
+        # PrivateAssets="all" and ExcludeAssets="runtime" on the Nice3point.Revit.Api.RevitAPI/RevitAPIUI
+        # PackageReferences should already keep their DLLs out of build output, and this step fails the
+        # job if one ever appears there anyway.
+        run: |
+          set -euo pipefail
+          if [ ! -d src/SolidGround.Revit/bin ]; then
+            echo "src/SolidGround.Revit/bin does not exist; the CI-only compile gate produced no output to verify." >&2
+            exit 1
+          fi
+          matches="$(find src/SolidGround.Revit/bin \( -iname 'RevitAPI*.dll' -o -iname 'Nice3point*.dll' \))"
+          if [ -n "$matches" ]; then
+            echo "Found a Revit reference assembly under src/SolidGround.Revit/bin; the CI-only compile gate must never ship one:" >&2
+            echo "$matches" >&2
+            exit 1
+          fi
 
       - name: Run offline tests
         run: dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release --no-build

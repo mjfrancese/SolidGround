@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/SolidGround.Cli/SolidGround.Cli.csproj" />
     <Project Path="src/SolidGround.Core/SolidGround.Core.csproj" />
+    <Project Path="src/SolidGround.Revit/SolidGround.Revit.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SolidGround.Tests/SolidGround.Tests.csproj" />

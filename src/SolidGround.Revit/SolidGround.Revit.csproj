@@ -1,0 +1,149 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SolidGround.Revit: Revit 2027 add-in host (Phase 2, Issue #14).
+
+    Layout, manifest, and CI-gate mechanics follow docs/architecture/revit-add-in-conventions.md and
+    docs/architecture/revit-2027-verification-and-host-design.md's "Thin-host design" section. This
+    project deliberately inherits TreatWarningsAsErrors, Nullable, ImplicitUsings, LangVersion,
+    AnalysisLevel, and RestorePackagesWithLockFile from the root Directory.Build.props instead of
+    repeating them here (conventions note section 2, "Adopted for SolidGround.Revit": "inherits the
+    repository's existing root Directory.Build.props rather than repeating the owner's other add-in's per-project
+    property blocks").
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>SolidGround.Revit</RootNamespace>
+
+    <!--
+      A Revit add-in class library does not copy PackageReference/lock-file assemblies to bin/ by
+      default; confirmed unchanged under net10.0-windows/SDK 10.0.401 (Issue #13 item 5). Set from this
+      project's creation per conventions note section 2: SolidGround.Revit takes a ProjectReference to
+      SolidGround.Core, which already carries the NetTopologySuite/ProjNET PackageReferences that must
+      land physically beside SolidGround.Revit.dll for Revit's isolated add-in context to load them.
+    -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <!--
+      Local and deploy builds reference the installed Revit 2027 SDK directly (owner decision 1,
+      docs/architecture/revit-add-in-conventions.md "Owner decisions, 2026-09-20", and section 2).
+      Override with `dotnet build -p:RevitInstallDir="D:\Revit"` or an environment variable of the same
+      name. This property only locates local *reference assemblies* for compiling against; AGENTS.md's
+      "Revit 2027 rules" ban on hardcoding an all-user *add-in install* directory is a separate concern
+      handled at runtime via ControlledApplication.AllUsersAddinsLocation/Application.AllUsersAddinsLocation.
+    -->
+    <RevitInstallDir Condition="'$(RevitInstallDir)' == ''">C:\Program Files\Autodesk\Revit 2027</RevitInstallDir>
+
+    <!--
+      RevitAPI.dll/RevitAPIUI.dll's own dependency closure (RevitAPIFoundation.dll, AdskRcManaged.dll,
+      and a dozen more sibling Revit DLLs pulled in by reference resolution) declares a reference to
+      Microsoft.VisualBasic 10.1.0.0, conflicting with the net10.0 ref-pack's own 10.0.0.0. Neither this
+      project nor any real Revit add-in call site uses Microsoft.VisualBasic; MSBuild already resolves
+      the conflict deterministically (the ref-pack copy is chosen), so this only silences the informational
+      MSB3277 report, matching the owner's other add-in add-in's own precedent for the identical conflict
+      (detail about the owner's other add-in withheld)
+      unify here").
+    -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <!--
+    CI-only compile gate. AGENTS.md "Dependency policy": "The Nice3point.Revit.Api.RevitAPI and
+    RevitAPIUI packages are acceptable, CI-only, exact-pinned to one 2027.x release, because they let
+    the self-hosted Linux runner compile-check SolidGround.Revit without a licensed Revit
+    install... The agent must never reference these packages from a local build and must never let the
+    shipped add-in depend on them." Conventions note section 10, "Revit reference assemblies for local
+    builds and CI", records the full mechanism this block implements. Activated only by
+    `-p:UseRevitReferenceAssemblies=true`, which only the existing push-to-main self-hosted CI lane
+    passes; nothing in a local or deploy build ever sets it.
+  -->
+  <PropertyGroup Condition="'$(UseRevitReferenceAssemblies)' == 'true'">
+    <!--
+      The CI runner is Linux (self-hosted); net10.0-windows otherwise refuses to build there
+      (NETSDK1100). Scoped to this same condition so local/deploy Windows builds never need the opt-in
+      (conventions note section 10, quoting the owner's other add-in's identical rationale).
+    -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!--
+      A separate lock file for the CI-only package graph: the default packages.lock.json (used by every
+      local restore and by CI's own Core/Cli/Tests restores) never contains the Nice3point entries, and
+      a local `dotnet restore` of this project never rewrites the CI lock file. Both files are committed;
+      CI restores and builds with `-p:UseRevitReferenceAssemblies=true` and locked mode enabled.
+    -->
+    <NuGetLockFilePath>packages.ci.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseRevitReferenceAssemblies)' == 'true'">
+    <!--
+      Exact-pinned to 2027.0.10, confirmed SHA-256-byte-identical to the installed 27.0.10.13
+      RevitAPI.dll/RevitAPIUI.dll (Issue #13 item 17). PrivateAssets="all": these packages must never
+      flow to anything consuming SolidGround.Revit. ExcludeAssets="runtime": this CI gate only ever
+      compiles the project (dotnet build), never runs the result, so the metadata-only reference
+      assembly is all CI needs; excluding the runtime asset keeps the real (stubbed) RevitAPI*.dll
+      bytes out of every build output, reinforcing that the shipped add-in must never depend on them.
+    -->
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2027.0.10" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2027.0.10" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseRevitReferenceAssemblies)' != 'true'">
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitInstallDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitInstallDir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!--
+    Fails the local/deploy build with a clear, actionable message instead of a bare "could not resolve
+    this reference" (MSB3245) when the installed Revit 2027 SDK is missing at RevitInstallDir. Never
+    runs in CI mode: UseRevitReferenceAssemblies=true never touches RevitInstallDir at all.
+  -->
+  <Target Name="SolidGroundEnsureRevitApiPresent" BeforeTargets="ResolveAssemblyReferences;BeforeBuild" Condition="'$(UseRevitReferenceAssemblies)' != 'true'">
+    <Error
+      Condition="!Exists('$(RevitInstallDir)\RevitAPI.dll') or !Exists('$(RevitInstallDir)\RevitAPIUI.dll')"
+      Text="RevitAPI.dll and/or RevitAPIUI.dll were not found under RevitInstallDir ('$(RevitInstallDir)'). Local and deploy builds of SolidGround.Revit reference the installed Revit 2027 SDK directly (docs/architecture/revit-add-in-conventions.md section 2). Install Revit 2027 at the default location, or pass -p:RevitInstallDir=&quot;&lt;path to your Revit 2027 install&gt;&quot;. CI instead compiles with -p:UseRevitReferenceAssemblies=true against the pinned Nice3point.Revit.Api reference packages (AGENTS.md 'Dependency policy'; conventions note section 10) and never needs RevitInstallDir." />
+  </Target>
+
+  <!--
+    No <UseWPF>: the only WPF surface this milestone needs is System.Windows.Media.Imaging for the
+    ribbon icon (BitmapFrame/ImageSource), confirmed to compile cleanly against a bare FrameworkReference
+    (Issue #13 item 7; verification note "Thin-host design" section). UseWPF stays reserved for when an
+    actual XAML/Window surface exists (AGENTS.md "Revit add-in conventions": "UseWPF is set only once a
+    WPF surface exists").
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SolidGround.Core\SolidGround.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Fixed LogicalName values (not a %(Filename)-templated glob) so SolidGroundApplication.cs can name
+    them as literal string constants. Issue #19 replaces the placeholder PNG bytes; the logical names
+    and the icon-loading mechanism itself do not change when it does.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\SolidGround.16.png" LogicalName="SolidGround.Revit.Resources.SolidGround.16.png" />
+    <EmbeddedResource Include="Resources\SolidGround.32.png" LogicalName="SolidGround.Revit.Resources.SolidGround.32.png" />
+  </ItemGroup>
+
+  <!--
+    "Update", not "Include": SolidGround.addin is already captured by the SDK's own default "None" item
+    glob, and adding a second explicit <None Include> for the same path would fail the build with
+    NETSDK1022 (duplicate None items). Update only attaches CopyToOutputDirectory metadata to the item
+    the default glob already created.
+  -->
+  <ItemGroup>
+    <None Update="SolidGround.addin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

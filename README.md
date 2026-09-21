@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, provenance with deterministic exports, and the end-to-end CLI workflow established**. Core, CLI, and offline test projects compile on .NET 10; the `process`/`fetch`/`run`/`verify` CLI workflow is implemented and tested — see [Usage](#usage) below. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md), and the [CLI workflow design note](docs/architecture/cli-workflow.md). The Revit add-in project intentionally does not exist yet; it starts only after Phase 1 is complete and the owner's established Revit add-in conventions have been supplied.
+The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, provenance with deterministic exports, and the end-to-end CLI workflow established**. Core, CLI, and offline test projects compile on .NET 10; the `process`/`fetch`/`run`/`verify` CLI workflow is implemented and tested — see [Usage](#usage) below. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md), and the [CLI workflow design note](docs/architecture/cli-workflow.md). Phase 2 has begun: Issue #14 (2026-09-21) scaffolded `src/SolidGround.Revit`, the Revit 2027 add-in host, following the owner's established conventions; it ships a manifest, a ribbon with one read-only Preflight-and-report command, diagnostics, a deploy script, and an active CI compile gate, but does not yet create a toposolid or attach provenance — see [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md).
 
 ## Scope
 
@@ -48,13 +48,15 @@ Primary references are the [Revit 2027 API changes](https://help.autodesk.com/vi
 SolidGround.slnx
 +-- src/
 |   +-- SolidGround.Core/     pure .NET 10; no Revit reference
-|   `-- SolidGround.Cli/      console host over Core
+|   +-- SolidGround.Cli/      console host over Core
+|   `-- SolidGround.Revit/    net10.0-windows; Revit 2027 host adapter, ribbon, and manifest
 `-- tests/
     `-- SolidGround.Tests/    xUnit tests against Core
-
-Phase 2 adds:
-`-- src/SolidGround.Revit/    Revit 2027 host adapter and add-in manifest
 ```
+
+`SolidGround.Revit` is Issue #14's scaffold: a manifest, a ribbon with one read-only Preflight-and-report
+command, diagnostics, and a deploy script. It does not yet create a toposolid or attach provenance; see
+[the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md).
 
 The central design rule is that acquisition, parsing, geometry, transformations, simplification, provenance models, and exports remain testable without Revit installed. [Groundit](https://github.com/lewismconte/groundit) demonstrates the useful architectural pattern of a pure core with offline tests and a thin Revit-specific build step. SolidGround does not adopt Groundit's Python, pyRevit, browser, multi-version, or data-source choices.
 
@@ -71,13 +73,39 @@ No native dependency may be loaded into the Revit process. There is no Python or
 
 ## Build
 
-Install the .NET 10 SDK listed in [`global.json`](global.json). Visual Studio users need Visual Studio 2026 version 18.0 or later to target .NET 10. Revit is not required for the current solution.
+Install the .NET 10 SDK listed in [`global.json`](global.json). Visual Studio users need Visual Studio 2026 version 18.0 or later to target .NET 10.
 
 ```powershell
 dotnet restore SolidGround.slnx --locked-mode
 dotnet build SolidGround.slnx --configuration Release --no-restore
 dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release --no-build
 ```
+
+`SolidGround.Revit` (Issue #14) is now part of `SolidGround.slnx`, so a full-solution build needs the Revit
+2027 SDK installed locally; `SolidGround.Core`, `SolidGround.Cli`, and their tests do not. `SolidGround.Revit.csproj`
+references `RevitAPI.dll`/`RevitAPIUI.dll` through a `RevitInstallDir` MSBuild property, default
+`C:\Program Files\Autodesk\Revit 2027`, overridable with `-p:RevitInstallDir="<path>"` or an environment
+variable of the same name; a clear build error reports a missing install at that path instead of a bare
+"could not resolve this reference." Without Revit installed, build or test `SolidGround.Core`/`SolidGround.Cli`/
+`SolidGround.Tests` individually instead of the whole `.slnx`:
+
+```powershell
+dotnet build src/SolidGround.Core/SolidGround.Core.csproj --configuration Release
+dotnet build src/SolidGround.Cli/SolidGround.Cli.csproj --configuration Release
+dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release
+```
+
+Deploy a locally built add-in to your per-user Revit 2027 Add-Ins folder with
+[`scripts/Deploy-RevitAddIn.ps1`](scripts/Deploy-RevitAddIn.ps1) (PowerShell 5.1 or 7):
+
+```powershell
+.\scripts\Deploy-RevitAddIn.ps1
+```
+
+then fully restart Revit 2027 — add-ins are not hot-reloaded — and confirm the deployed bytes match the
+build with `.\scripts\Deploy-RevitAddIn.ps1 -Verify`. See [`scripts/README.md`](scripts/README.md) and
+[the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md) for the full
+deploy-script design, safety switches, and parameters.
 
 Run the CLI with a real command; see [Usage](#usage) below for one example per command:
 
@@ -145,13 +173,13 @@ codes, secrets resolution order, and known limitations.
 
 ## Continuous integration and the Revit project
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, and runs the offline Core tests on the repository-scoped `self-hosted` ephemeral runner in the infrastructure project. Actions are pinned to immutable commit SHAs, and the workflow does not use GitHub-hosted cache storage.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, compile-checks `SolidGround.Revit` under the CI-only reference-assembly gate described below, and runs the offline Core tests on the repository-scoped `self-hosted` ephemeral runner in the infrastructure project. Actions are pinned to immutable commit SHAs, and the workflow does not use GitHub-hosted cache storage.
 
 SolidGround is public, so the self-hosted workflow accepts only trusted pushes to `main`. It has no pull-request trigger, checks the repository, owner, event, ref, and runner identity before checkout, and has no GitHub-hosted or a second self-hosted runner fallback. Pull requests therefore do not run this workflow. If self-hosted is unavailable, the job remains visibly queued instead of moving to another runner.
 
 The trust-boundary conditions this lane must keep true, the authorizing the infrastructure project issue number, and the infrastructure project never-list it must honor are recorded in [`AGENTS.md`](AGENTS.md)'s "Build and CI" section, mirroring a prior infrastructure decision. a prior infrastructure decision authorized and audited the `self-hosted` lane under that ADR, and a prior infrastructure decision recorded the owner's decision to harden this repository's Actions settings, which now require full-commit-SHA pinning and limit the allow-list to exactly `actions/checkout` and `actions/setup-dotnet`.
 
-`SolidGround.Revit` can compile in CI only when the runner has lawful access to the Revit 2027 reference assemblies. The current Linux the infrastructure project runner does not include them, and this repository will not commit Autodesk binaries or quietly depend on an unofficial repackaging. The recommended Phase 2 choices are an approved reproducible SDK/reference source or a suitable Windows self-hosted runner, selected alongside the owner's add-in conventions.
+As of Issue #14 (2026-09-21), the CI-only compile gate is active: the workflow passes `-p:UseRevitReferenceAssemblies=true` to both `dotnet restore SolidGround.slnx --locked-mode` and `dotnet build SolidGround.slnx --configuration Release --no-restore`, which swaps `SolidGround.Revit`'s local `HintPath` references for the exact-pinned, CI-only `Nice3point.Revit.Api.RevitAPI`/`RevitAPIUI` `2027.0.10` packages — SHA-256-byte-identical to the installed Revit 2027 build — restored against a second, separate lock file (`packages.ci.lock.json`) so the default `packages.lock.json` never gains a Nice3point entry. `PrivateAssets="all"`/`ExcludeAssets="runtime"` on those packages, plus a dedicated CI step that fails the job if any `RevitAPI*`/`Nice3point*` assembly appears under `src/SolidGround.Revit/bin`, keep the gate CI-only: no Autodesk binary is ever committed, and neither a local build nor the shipped add-in ever depends on it. Local and deploy builds keep referencing the installed Revit 2027 SDK directly via `RevitInstallDir` (default `C:\Program Files\Autodesk\Revit 2027`). See [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md) for the full mechanism and [`docs/architecture/revit-add-in-conventions.md`](docs/architecture/revit-add-in-conventions.md) section 10 for the original design and licensing position.
 
 ## Agent portability
 
