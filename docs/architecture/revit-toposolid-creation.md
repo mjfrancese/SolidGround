@@ -42,7 +42,8 @@ and the `IFailuresPreprocessor` defensive design (item 9), the locked synchronou
 construction — the shipped code makes one fixed choice for each, recorded under "Design decisions" below —
 but does not settle item 2, keeps item 6 exactly as locked, and leaves the numeric point-threshold
 relationship item 9 raises open pending manual test step 7's own evidence. See "Manual evidence plan" below
-for all three.
+for all three. (2026-09-21 update: Steps 5 and 7 below now carry real probe-session evidence that narrows,
+but does not fully close, items 2 and 9; see "Decisions recorded from evidence" below.)
 
 ## What Issue #15 built
 
@@ -756,10 +757,31 @@ find and capture dialogs, click both WPF ribbon controls and native `TaskDialog`
 handling); this note records the plan and every step's expected observation, not the harness's own
 implementation.
 
-Every "**Evidence.**" paragraph below is a placeholder. This documentation stage did not launch Revit and did
-not run any of these steps; each is left for the manual session that follows, per this milestone's own
-implementation sequencing (manual verification, then docs, with the evidence-dependent sections of this note
-filled in afterward).
+A 2026-09-21 probe session (`SolidGroundProbe`, a throwaway add-in kept entirely outside this repository, per
+"No probe or test-only code ships in the add-in" above) exercised the same Revit 2027 API members Steps 5, 7,
+and 8a below rely on, directly, across its eleven ribbon commands (seven API probes — `UnitProbe`,
+`ThresholdProbe`, `InvalidPointsProbe`, `OptionBProbe`, `BoundaryZProbe`, `SharedCoordinatesProbe`,
+`FreezeProbe` — plus four `Result`-code stand-ins). Run 1 (roughly 09:20-09:30) was interrupted before any
+probe command executed — Revit 2027 was closed by an external actor on the shared desktop, confirmed from the
+journal (`Jrn.Command "KeyboardShortcut", "Close the active project..."` followed, about 33 seconds later, by
+`Jrn.Command "Internal", "Quit the application..."`) while an independent computer-use agent (with a literal
+"ChatGPT is using your computer" window) and a third-party Revit MCP server were both active on the same
+desktop. Run 2 (roughly 10:18-10:40), after confirming the desktop was quiet (a `MainWindowTitle -match 'using
+your computer'` process check and a Revit-process check, both clean before launch and before every one of the
+11 clicks plus the extra sweep), completed all eleven ribbon commands and an optional extended threshold sweep
+without interruption. This evidence directly exercises the Revit API surface Steps 5, 7, and 8a describe, but
+it is a separate, throwaway add-in — it never runs `CreateToposolidCommand`/`SolidGround.Revit.dll` itself.
+Steps 5, 7, and 8a's "**Evidence.**" paragraphs below are accordingly filled in from that session
+(`EVIDENCE-PROBES.md`, outside this repository).
+
+Step 8b (the live ExampleSite fetch) and the shipped add-in's own end-to-end scenarios remain **pending**. A
+same-day end-to-end session (`EVIDENCE-E2E.md`, also outside this repository) built, hash-verified, and
+deployed the shipped `main` `c80af6a` build — see Step 8b below — but stopped before launching Revit 2027 at
+all, because a Revit 2026/pyRevit process was already running on the shared desktop and remained running
+through every re-check, triggering that session's own interference rule.
+
+Every remaining "**Evidence.**" paragraph below (Step 8b) is still a placeholder: no live Revit session or
+Revit-launching session has yet completed the steps it describes.
 
 ### Step 5 — `Result.Cancelled`/`Result.Failed` Undo-stack behavior (settles verification item 2)
 
@@ -792,7 +814,56 @@ Two throwaway stand-in commands sharing `CreateToposolidCommand`'s exact `[Trans
 Record every Undo tooltip verbatim. Apply the finding to "Transaction status and the Result-code policy"
 above (it is written as a single, easily-flipped table row for exactly this reason).
 
-**Evidence.** Not yet collected.
+**Evidence.** Collected 2026-09-21 (probe Run 2; `EVIDENCE-PROBES.md`, files `81`-`121`), via four dedicated
+stand-in commands rather than the two throwaway commands and six numbered scenarios sketched above —
+`ReturnCancelledNoTransactionCommand`/`ReturnFailedNoTransactionCommand` (open no `Transaction` at all) and
+`ReturnFailedAfterRollBackCommand`/`ReturnCancelledAfterRollBackCommand` (create one trivial `Toposolid`, call
+`RollBack()` explicitly, verify `TransactionStatus.RolledBack`, then return the named `Result`), each sharing
+`CreateToposolidCommand`'s exact `[Transaction(TransactionMode.Manual)]`/`[Regeneration(RegenerationOption.Manual)]`
+pair. Undo-stack state was read directly from the Quick Access Toolbar's
+`ID_Undo_HistoryButtonExecute`/`ID_Redo_HistoryButtonExecute` `IsEnabled` property before and after each
+command, rather than by performing a baseline edit and pressing Ctrl+Z — both `False` throughout the run
+(files `82`, `88`, `100`, `111`, `119`), confirmed against a clean pre-command baseline
+(`34-run2-sgprobe-tab-selected-controls.txt`).
+
+Verbatim results (`EVIDENCE-PROBES.md` Run 2 Answers, item (h)):
+
+| Command | Probe's own dialog (verbatim) | Revit's own automatic dialog? | Undo before | Undo after | New Undo entry? |
+| --- | --- | --- | --- | --- | --- |
+| `ReturnCancelledNoTransaction` | "Did nothing. Opened no Transaction. Returning Result.Cancelled." | None (empty `message` on `Cancelled`) | `False` | `False` | No |
+| `ReturnFailedNoTransaction` | "Did nothing. Opened no Transaction. Returning Result.Failed." | Yes — "Probe: Failed with no transaction" | `False` | `False` | No |
+| `ReturnFailedAfterRollBack` | "Created a trivial Toposolid (id 317422), then rolled the transaction back. RollBack() status: RolledBack (expected RolledBack: True). Returning Result.Failed." | Yes — "Probe: Failed after RollBack" | `False` | `False` | No |
+| `ReturnCancelledAfterRollBack` | "Created a trivial Toposolid (id 317429), then rolled the transaction back. RollBack() status: RolledBack (expected RolledBack: True). Returning Result.Cancelled." | None (empty `message` on `Cancelled`) | `False` | `False` | No |
+
+The same pattern independently shows up in the combined journal tail
+(`121-run2-journal-tail-all-four-resultcode-commands.txt`): both `Failed` commands log a `Probe: ...` /
+`Error: Probe: ...` / `EndOrAbortUndoTransaction();DOPT;` triple; neither `Cancelled` command does.
+`OptionBProbeCommand`'s own unhandled exception (Step 8a item 2 below) independently reproduced the same
+`Failed`-with-message pattern outside this dedicated battery: its catch-all set `message = "Probe: unhandled
+InvalidOperationException: Could not add point (36.666667, 30.000000, 12.073444) at index 0 to the
+element."` and returned `Result.Failed`, and Revit's own "Error - cannot be ignored" dialog showed exactly
+that text (`67-run2-optionbprobe-unexpected-window-controls.txt`); a post-hoc check confirmed Undo/Redo were
+still both `False` afterward (`73-run2-undo-redo-state-after-optionbprobe.txt`).
+
+**Outcome.** `Result.Cancelled` and `Result.Failed` both leave the Undo stack exactly as they found it — no
+entry is ever added, whether the command opened zero transactions or opened one, mutated it, and explicitly
+rolled it back. The only observed difference between the two codes is dialog behavior, not Undo-stack impact:
+`Result.Failed` with a non-empty `message` always triggers Revit's own automatic "Error - cannot be ignored"
+dialog showing that exact text, in addition to any dialog the command shows itself; `Result.Cancelled` never
+triggers Revit's own dialog. This confirms `CreateToposolidCommand`'s policy of leaving `message` empty on
+every SolidGround-authored return path (see "Command flow" above) is what keeps every outcome to exactly the
+one `TaskDialog` the command constructs — had any rejection path used `Result.Failed` with a non-empty
+`message`, Revit would show a second, automatic dialog on top of it. This settles verification item 2 for the
+question "Transaction status and the Result-code policy" above was provisional on (whether a genuine
+`RolledBack` status behaves differently from a zero-transaction result, for Undo-stack purposes): it does not.
+
+**Not exercised.** The written plan's scenario 1 (baseline edit + Ctrl+Z, superseded above by a direct
+Undo-button-state read); scenario 3 specifically (a `RollBack()` triggered by a failing
+`PostCreationVerification` bounding-box check, rather than the rollback probes' own direct, unconditional
+`RollBack()` call); scenario 5 (a command that *commits* one trivial transaction and then still hardcodes
+`Result.Failed`); and scenario 6 (a post-`Start()` exception unrelated to `Create`/verification, thrown before
+`Commit()`, with `transaction.HasEnded()` checked at the moment of the throw) were not run in this session and
+remain open — appendix item 10 below is unchanged by this evidence.
 
 ### Step 7 — `Revit.ini` threshold values and the point-count boundary (settles verification item 9)
 
@@ -820,7 +891,68 @@ above (it is written as a single, easily-flipped table row for exactly this reas
 5. Record the read `Revit.ini` value and all three outcomes verbatim below; correct AGENTS.md's point-budget
    guidance only if evidence contradicts it, per AGENTS.md's own governance rule.
 
-**Evidence.** Not yet collected.
+**Evidence.** Revit.ini re-read 2026-09-21 (`17-run2-baseline-interference-and-ini.txt`, matching the earlier
+Run 1 baseline in `01-baseline-processes-and-ini.txt`), verbatim:
+
+```
+NativeToposolidMaxPointThreshold=20000
+LinkToposolidMaxPointThreshold=20000
+```
+
+Items 2-4 above (synthetic `.asc` fixtures run through `process` mode's `GridTerrainSimplifier` retain-all
+branch) were not built or run. Instead, `ThresholdProbeCommand` exercised the shipped default combined overload
+directly: for each of `settings.thresholdCounts` (default `[19999, 20000, 20001]`), it built one rectangular
+boundary and one deterministic interior point grid sized to the exact requested count
+(`ProbeGeometry.CreateInteriorGrid`), called `Toposolid.Create(document, [boundary], points, type.Id,
+level.Id)` in its own transaction, and rolled back. This tests the same underlying question (does
+`Toposolid.Create` observe the `Revit.ini` ceiling) more directly than the written plan, but bypasses
+`SolidGround.Core`'s AOI/decimation pipeline and `PostCreationVerification`'s own read-back check entirely —
+and it registers no `IFailuresPreprocessor`, so item 4's "does a registered preprocessor observe anything
+toposolid-related in the over-threshold run" question was not exercised either. Verbatim
+(`46-run2-thresholdprobe-dialog-controls.txt`):
+
+```
+count=19999 outcome=created (Level='Level 1', ToposolidType='Toposolid 1') elapsedMs=288.4734 elementId=317345 bbox=Min=(0,0,9.000967722965967) Max=(200,160,10.000967722965967) slabShapeEditorEnabled=True vertexCount=20003 finalTransactionStatus=RolledBack
+count=20000 outcome=created (Level='Level 1', ToposolidType='Toposolid 1') elapsedMs=241.1513 elementId=317352 bbox=Min=(0,0,9.000967722965967) Max=(200,160,10.000967722965967) slabShapeEditorEnabled=True vertexCount=20004 finalTransactionStatus=RolledBack
+count=20001 outcome=created (Level='Level 1', ToposolidType='Toposolid 1') elapsedMs=265.8557 elementId=317359 bbox=Min=(0,0,9.000967722965967) Max=(200,160,10.000967722965967) slabShapeEditorEnabled=True vertexCount=20005 finalTransactionStatus=RolledBack
+```
+
+All three counts succeeded identically: no exception, near-identical elapsed times (241-289 ms),
+`slabShapeEditorEnabled=True`, and a `SlabShapeVertices` count that tracks the requested count exactly (nominal
+count + 4 boundary corners).
+
+An optional extended sweep at 30000/50001 (the probe session's own optional step 3, `134-run2-thresholdprobe2-dialog-controls.txt`) also
+succeeded with no exception:
+
+```
+count=30000 outcome=created (Level='Level 1', ToposolidType='Toposolid 1') elapsedMs=402.6605 elementId=317436 bbox=Min=(0,0,9.000069566648538) Max=(200,160,10.000069566648538) slabShapeEditorEnabled=True vertexCount=20015 finalTransactionStatus=RolledBack
+count=50001 outcome=created (Level='Level 1', ToposolidType='Toposolid 1') elapsedMs=508.7432 elementId=317443 bbox=Min=(0,0,9.00026574325348) Max=(200,160,10.00026574325348) slabShapeEditorEnabled=True vertexCount=20031 finalTransactionStatus=RolledBack
+```
+
+but its own vertex counts (20015, 20031) did not scale with the requested nominal count the way the
+19999/20000/20001 sweep's did (20003-20005). This is **not** because the probe's own point generator produced
+duplicate or degenerate input: direct inspection of `ProbeGeometry.CreateInteriorGrid`'s row-major
+`(row, column)` decomposition shows it is injective for every tested count, including 30000 and 50001 (the
+`(row, column)` pairs for `k` in `[0, count)` are pairwise distinct by construction, and the resulting per-axis
+spacing at these two counts — `dx` 0.84-1.09 ft, `dy` 0.67-0.86 ft — is nowhere near degenerate) — confirmed by direct simulation of the
+same algorithm, which found 0 duplicate (X, Y) pairs and exactly `count` distinct coordinates at all five
+tested counts. The 30000/50001 runs therefore did submit that many genuinely distinct points to
+`Toposolid.Create`. What capped the resulting vertex count at 20015/20031 is not established by this evidence;
+a genuine Revit-side point cap in that neighborhood, coinciding with `Revit.ini`'s own 20,000 default, is at
+least as plausible as any other explanation, and is flagged here as an open question rather than a dismissed
+probe artifact.
+
+**Outcome.** For the combined `Toposolid.Create` overload, at exactly 19,999/20,000/20,001 genuinely distinct
+points (confirmed by the 1:1 tracking between requested count and reported vertex count), Revit does not
+throw, truncate, or otherwise change behavior at the `Revit.ini`-documented 20,000 boundary — the combined
+overload is not gated by `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold` at that exact
+count. Behavior above roughly 20,000-20,031 *truly unique* points is still not established: the 30000/50001
+sweep did submit that many genuinely distinct coordinates (see above), but what capped the resulting vertex
+count is unconfirmed, so the sweep cannot be read as evidence either way for that range. A dedicated follow-up
+probe — for example, one that logs the actual number of distinct XY pairs `Toposolid.Create`/the
+`SlabShapeEditor` report back, or that uses non-grid-aligned points — would be needed before relying on "not
+gated above 20,000" for anything past 20,001 points. AGENTS.md's conservative ~15,000 application default is
+unaffected by this finding and is not changed by it.
 
 ### Step 8 — ExampleSite end to end, Option A/B probe, unit round trip (settles verification items 15, 16), plus the orphan check
 
@@ -854,7 +986,135 @@ Split to conserve OpenTopography's finite daily quota.
    confirm it matches the automatic in-command log line (`OrphanCheck.Unchanged`'s own info/warning message).
    This cross-checks the automatic check itself, not only terrain-creation correctness.
 
-**Evidence.** Not yet collected.
+**Evidence.** Collected 2026-09-21 (probe Run 2). Item 1's synthetic `.asc` fixture was not built;
+`InvalidPointsProbeCommand` and `OptionBProbeCommand` instead built their point sets directly in
+Revit-internal `XYZ`s, bypassing `SolidGround.Core` (no AOI, no `LocalBoundaryValidator`) entirely — the same
+practical effect the plan's "scratch bypass of Core's own `LocalBoundaryValidator`" language called for,
+reached by simply never routing through Core at all.
+
+*Item 2 — does the combined overload silently accept invalid points, and how does the profiles-only +
+`AddPoints` alternative compare?* `InvalidPointsProbeCommand` added one extra point to a 25-point valid
+interior grid and called the combined overload for three variants, verbatim
+(`53-run2-invalidpointsprobe-dialog-controls.txt`):
+
+```
+variant=outside-rectangle extraPoint=(220,80,12) outcome=accepted silently, no exception elementId=317366 bbox=Min=(0,0,9.491641654942027) Max=(200,160,10.491641654942027) vertexCount=29 finalTransactionStatus=RolledBack
+variant=duplicate-xy-different-z extraPoint=(36.66666666666667,30,14.073443613035863) outcome=accepted silently, no exception elementId=317373 bbox=Min=(0,0,9.491641654942027) Max=(200,160,10.491641654942027) vertexCount=29 finalTransactionStatus=RolledBack
+variant=on-boundary-edge extraPoint=(100,0,12) outcome=accepted silently, no exception elementId=317380 bbox=Min=(0,0,9.491641654942027) Max=(200,160,10.491641654942027) vertexCount=30 finalTransactionStatus=RolledBack
+```
+
+All three — a point outside the boundary rectangle, a duplicate-XY point with a different Z, and a point
+exactly on a boundary edge — were silently accepted by the combined overload; none threw. Separately,
+`OptionBProbeCommand` exercised the profiles-only overload plus `GetSlabShapeEditor().Enable()`/`AddPoints()`
+— not against these same three invalid variants, but against the same ordinary 25-point valid interior grid
+every other probe uses. No probe `TaskDialog` ever appeared; Revit's own native "Error - cannot be ignored"
+dialog appeared instead (`67-run2-optionbprobe-unexpected-window-controls.txt`), verbatim:
+
+```
+Probe: unhandled InvalidOperationException: Could not add point (36.666667, 30.000000, 12.073444) at index 0 to the element.
+```
+
+`probe.log` confirms the probe's own catch-all logged the identical exception; no element or Undo entry was
+left behind (`73-run2-undo-redo-state-after-optionbprobe.txt`).
+
+**Outcome (decides the Option A/B question).** The combined overload (Option A) does silently accept every
+invalid-point case tested — the literal trigger condition for the locked design's "flip only if Option A
+silently accepts invalid points, with the reason recorded" rule. The flip is not taken, because the evidence
+also shows Option B is not a viable alternative: its `AddPoints()` call threw on an ordinary, valid 25-point
+grid, not only on deliberately invalid input, so it cannot simply replace Option A as a stricter guard. Option
+A stays the shipped default. The recorded reason is that SolidGround's own Core-side Preflight
+(`LocalBoundaryValidator`) already rejects out-of-boundary and duplicate-XY points before any Revit call is
+reached — "Stage 3 — Geometry Preflight" above runs `LocalBoundaryValidator.Validate` and stops on any
+problem, well before Stage 5 ever calls `Toposolid.Create`, and Error catalogue row 13 shows the resulting
+dialog. `LocalBoundaryValidator`'s containment check is tolerance-based by design (`LocalBoundaryFactory.DistanceTo`
+returns zero for a point inside or exactly on the boundary, and only a point farther than the tolerance is
+flagged), so it does not, and is not meant to, reject a point exactly on a boundary edge: Option A's
+permissiveness toward that specific on-edge case is real and unmitigated in the shipped product. This does not
+change the Option A/B decision, since Option B is independently disqualified by its own `AddPoints()` failure
+on valid input regardless of the on-edge case. Whether `AddPoints()` throws specifically because of the
+invalid variants themselves, as opposed to some other property of the profiles-only overload's freshly created
+mesh, was not isolated by this evidence and is not needed to make the Option A/B decision.
+
+*Item 3 — unit factor.* `UnitProbeCommand`, verbatim (`39-run2-unitprobe-dialog-controls.txt`):
+
+```
+Feet: ConvertToInternalUnits(1, Feet) = 1; ConvertFromInternalUnits(1.0, Feet) = 1
+UsSurveyFeet: ConvertToInternalUnits(1, UsSurveyFeet) = 1.000002000004; ConvertFromInternalUnits(1.0, UsSurveyFeet) = 0.999998
+Meters: ConvertToInternalUnits(0.3048, Meters) = 0.9999999999999999; ConvertFromInternalUnits(1.0, Meters) = 0.3048
+UnitTypeId.UsSurveyFeet.TypeId = 'autodesk.unit.unit:usSurveyFeet-1.0.0'
+```
+
+**Outcome.** `UnitTypeId.Feet` (the international foot, exactly `0.3048` m) is Revit's internal foot:
+`ConvertToInternalUnits(1.0, Feet)` is exactly `1`. `UnitTypeId.UsSurveyFeet` is not:
+`ConvertToInternalUnits(1.0, UsSurveyFeet)` is `1.000002000004`, the `1200/3937` international-vs-U.S.-survey
+-foot ratio. This settles the question "Unit conversion" above left open; it does not change
+`RevitUnitConversion.ToForgeTypeId`'s mapping (`UsSurveyFoot` → `UnitTypeId.UsSurveyFeet`, `InternationalFoot`
+→ `UnitTypeId.Feet`), which was already correct for selecting the right `ForgeTypeId` per configured output
+unit — it confirms that `UnitUtils.ConvertToInternalUnits`/`ConvertFromInternalUnits` do real, non-trivial (if
+small, ~0.0002%) conversion work for the U.S. survey foot option rather than a no-op, and that
+`PlacementUnitConversionRecord.RoundTripDelta` is exercising a genuine, if tiny, round trip for that option.
+
+*Item 4 — `get_BoundingBox(null)` and `GetSlabShapeEditor().IsEnabled` after the combined overload.* Every
+combined-overload probe that logged them reports a populated, non-null bounding box and an enabled
+`SlabShapeEditor` — e.g. the Step 7 threshold sweep above (`slabShapeEditorEnabled=True` at all five counts)
+and every `InvalidPointsProbe`/`BoundaryZProbe` line quoted in this section (inferable there from a populated
+`vertexCount`/`vertices=[...]` value, since both commands' own code only fills that value in when
+`editor.IsEnabled` is true and otherwise leaves it empty — neither ever logs a literal
+`slabShapeEditorEnabled=` field itself, unlike `ThresholdProbeCommand`/`OptionBProbeCommand`). None of these probes
+called `document.Regenerate()` before reading either value (only `OptionBProbeCommand`'s source contains a
+`Regenerate()` call at all, and at runtime it never reached that call, or its own bounding-box read after it,
+because `AddPoints()` threw first) — so this is not a literal same-conditions replica of appendix item 6's
+question (which asks about the state immediately after an explicit `Regenerate()` call, matching the shipped
+command's own flow), but a strictly
+harder condition that still succeeded every time: a non-null bounding box and an enabled `SlabShapeEditor` are
+available immediately after the combined `Create` call with no intervening `Regenerate()` at all. Appendix
+item 6 below is narrowed, not closed, on this basis.
+
+*Item 5 — boundary-Z persistence.* `BoundaryZProbeCommand`, boundary loop flat at Z=0, Z=100 (the interior
+points' own minimum Z), and Z=110, verbatim (`60-run2-boundaryzprobe-dialog-controls.txt`):
+
+```
+boundary=Z=0                    bbox=Min=(0,0,100.22910413735507) Max=(200,160,101.22910413735507)
+boundary=Z=100 (min point Z)    bbox=Min=(0,0,100.22910413735507) Max=(200,160,101.22910413735507)
+boundary=Z=110                  bbox=Min=(0,0,100.22910413735507) Max=(200,160,101.22910413735507)
+```
+
+Identical bounding boxes across all three variants, and every one of the 29 logged vertex coordinates (four
+boundary corners plus 25 interior points) is identical across all three as well, with every boundary-corner
+vertex at Z=`101.22910413735507` regardless of the authored boundary Z.
+
+**Outcome.** The flat, single-scalar boundary-ring `Z` this design passes to `Toposolid.Create` (see "The
+boundary-Z decision" above) is fully overridden by the interior point data — it produces no visible rim or
+"shelf" at the parcel edge at any of the three tested values. Of the two outcomes "The boundary-Z decision"
+left open, this is the point-driven-interpolation branch, not the visible-rim branch; both were already
+documented as benign under the shipped fix, and this evidence confirms which one actually occurs.
+
+*Item 6 — orphan check.* `SharedCoordinatesProbeCommand` snapshotted
+`BasePoint`/`SurveyPoint`/`ActiveProjectLocation`/`SiteLocation` before and after creating (then rolling back)
+one toposolid, verbatim (`80-run2-probe-log-sharedcoordsprobe-full.txt`):
+
+```
+Before: projectBasePoint.Position=(0,0,0) projectBasePoint.SharedPosition=(0,0,0) surveyPoint.Position=(0,0,0) surveyPoint.SharedPosition=(0,0,0) activeProjectLocation.Name='Internal' projectPositionAtOrigin=(EW=0,NS=0,Elev=0,Angle=0) siteLocation=(Lat=0.7392981125588769,Lon=-1.2401740653673199,PlaceName='Boston, MA')
+Created Toposolid id=317415.
+finalTransactionStatus=RolledBack
+After: projectBasePoint.Position=(0,0,0) projectBasePoint.SharedPosition=(0,0,0) surveyPoint.Position=(0,0,0) surveyPoint.SharedPosition=(0,0,0) activeProjectLocation.Name='Internal' projectPositionAtOrigin=(EW=0,NS=0,Elev=0,Angle=0) siteLocation=(Lat=0.7392981125588769,Lon=-1.2401740653673199,PlaceName='Boston, MA')
+Differences: none
+```
+
+**Outcome.** No difference in any snapshotted field. The probe's snapshot is a superset of what
+`OrphanCheck.Capture`/`.Unchanged` itself tracks in the shipped command (`BasePoint`/`SurveyPoint` position and
+shared position, `SiteLocation` place name, `ActiveProjectLocation` name — see "`SolidGround.Revit` —
+new/rewritten" above): it additionally captured `ProjectPosition` at the origin and `SiteLocation`
+latitude/longitude, neither of which `OrphanCheck` itself reads. Read through the probe's own independent
+snapshot code rather than through `OrphanCheck`'s own class, it cross-checks the underlying Revit behavior
+`OrphanCheck` depends on — that toposolid creation has no shared-coordinate side effect — rather than
+`OrphanCheck`'s own code path directly. The orphan check has no dedicated numbered item in "Revit API members
+used" below; this paragraph is its only Evidence entry.
+
+Every Step 8a probe above ran against the shipped default strategy (Option A, the combined overload) — except
+`OptionBProbeCommand`'s own comparison run against Option B (item 2 above) — through a purpose-built probe
+add-in, never against `SolidGround.Core`'s own pipeline or `SolidGround.Revit.dll` itself — see the Manual
+evidence plan's introduction above for that distinction.
 
 **8b — live acceptance (fetch mode, exactly one run).**
 
@@ -871,7 +1131,88 @@ Split to conserve OpenTopography's finite daily quota.
    by construction) below. If the key is still absent when this step is reached, report that explicitly
    rather than skip silently; it is the one acceptance item this milestone cannot close offline.
 
-**Evidence.** Not yet collected.
+**Evidence.** Not run. A 2026-09-21 end-to-end session (`EVIDENCE-E2E.md`, manual plan step 8, "process mode
+with synthetic fixtures") completed the non-interactive preparation — restore, `Release` build (0 warnings, 0
+errors), hash, deploy, deploy-verify, settings baseline — against the shipped `main` `c80af6a` build, then
+stopped before launching Revit 2027 at all, per that session's own INTERFERENCE RULE: a Revit 2026 process
+(pid `34512`, title eventually `pyRevit`) was already running at the first interference check (`Get-Process
+-Name Revit`) and remained running, freshly started (`StartTime` `2026-09-21T10:56:01`, about 17 minutes after
+the prior probe session's own evidence confirmed zero Revit processes running), through the final re-check
+immediately before `Start-Revit2027.ps1` would have run. Scenarios A-D (the fuller Doc-Preflight-through
+-success-dialog manual verification battery covering dialog text, log lines, journal lines, screenshots, and
+placement-record content) were not attempted, for the same reason.
+
+The shipped build is deployed and hash-verified as the live per-user deployment (`E2E-02-deploy-real.txt`,
+`E2E-03-deploy-verify.txt`), verbatim:
+
+```
+Deployed SolidGround.Revit build 20260921-105859-cd0bcda1 to
+  %USERPROFILE%\AppData\Roaming\Autodesk\Revit\Addins\2027\SolidGround\20260921-105859-cd0bcda1
+```
+
+with SHA-256 `CD0BCDA16076DC47DC3C01A1F94DB1DD212ECEECF2375A3AB9193B87EEC63C03` for `SolidGround.Revit.dll`
+and `035157D3469289FB16AE31501D339A8D907AA8E2A3093643F7E8A36BF33DDA6F` for `SolidGround.Core.dll`, both from
+the `main` `c80af6a` `Release` build, `-Verify` confirming all 6 managed files match. No rebuild or redeploy is
+needed once the preconditions below clear.
+
+**Still pending, with exact preconditions:**
+
+1. `OPENTOPOGRAPHY_API_KEY` present in the **`Revit.exe` process's own environment** — a user-level environment
+   variable set before Revit was launched (or the machine last signed in), or a launching shell/script that
+   passes it directly to the child process (`Start-Revit2027.ps1 -EnvironmentVariable @{ OPENTOPOGRAPHY_API_KEY
+   = ... }`), per "The live ExampleSite dependency on `OPENTOPOGRAPHY_API_KEY`" above. No session that has
+   produced evidence for this note has had the key present.
+2. A quiet desktop with no other automation agent or interfering Revit process. Both probe Run 1 and the
+   end-to-end session were blocked or interrupted by exactly this condition: Run 1 was interrupted mid-session
+   by an external `"KeyboardShortcut"`-tagged close command while `codex-computer-use.exe` (with a literal
+   "ChatGPT is using your computer" window) and a third-party `RevitMcp.Server.exe` were both active on the
+   same desktop; the end-to-end session never launched Revit 2027 at all because a Revit 2026/pyRevit process
+   was already running and stayed running through every re-check. Run 2's own success shows the precondition is
+   checkable and satisfiable: it confirmed a clean `Get-Process | Where-Object { $_.MainWindowTitle -match
+   'using your computer' }` result and a clean Revit-process check before launching Revit and before every one
+   of the 11 probe clicks plus the extra threshold sweep, and none of those checks ever came back dirty.
+
+Both preconditions must hold together for Step 8b (and for Scenarios A-D) to run; this milestone cannot close
+the live-acceptance item offline, per "Manual evidence plan" above and AGENTS.md's own test-fixture rule.
+
+### Decisions recorded from evidence (2026-09-21)
+
+- **Option A retained, with reason.** The combined `Toposolid.Create` overload stays the shipped default. It
+  does silently accept every invalid-point case tested (the literal condition the locked design's flip rule
+  names), but Option B (profiles-only + `SlabShapeEditor.AddPoints`) is not a viable replacement — it threw on
+  an ordinary valid point set in this same evidence pass. The recorded reason for keeping Option A is that
+  SolidGround's own Core-side `LocalBoundaryValidator` Preflight already rejects out-of-boundary and
+  duplicate-XY points before any Revit call happens. That containment check is tolerance-based and does not
+  reject a point exactly on a boundary edge, so Option A's permissiveness toward an on-edge point specifically
+  is real and unmitigated in the shipped product; the Option A/B decision itself is unaffected, since Option B
+  is independently disqualified on its own. See Step 8a item 2 above.
+- **Unit factor confirmed.** `UnitTypeId.Feet` is Revit's internal foot; `UnitTypeId.UsSurveyFeet` is not.
+  `RevitUnitConversion.ToForgeTypeId`'s existing mapping is unaffected — this only confirms the conversion
+  calls it relies on do genuine unit math for both options. See Step 8a item 3 above and "Unit conversion"
+  above.
+- **Thresholds narrowed, not fully closed.** `Revit.ini` re-confirmed `NativeToposolidMaxPointThreshold=20000`/
+  `LinkToposolidMaxPointThreshold=20000`. The combined overload accepts 19,999/20,000/20,001 genuinely distinct
+  points with no observable gating. Behavior above roughly 20,000-20,031 truly unique points remains
+  unverified: the 30,000/50,001 sweep did submit that many genuinely distinct coordinates (the point generator
+  was checked directly and produces no duplicates), but the resulting toposolid retained only ~20,015/~20,031
+  vertices for a reason this evidence does not establish — a real Revit-side point cap near 20,000 remains a
+  live possibility, not a dismissed probe artifact. AGENTS.md's conservative ~15,000 application default is
+  unchanged. See Step 7 above.
+- **Boundary Z confirmed overridden.** The flat, single-scalar boundary Z this design passes to
+  `Toposolid.Create` produces no visible rim; it is fully reconciled to the interior point data at every
+  tested value (Z=0, 100, 110). See Step 8a item 5 above and "The boundary-Z decision" above.
+- **Result-code policy confirmed for the tested paths.** `Result.Cancelled` and `Result.Failed` both leave the
+  Undo stack unchanged, whether zero-transaction or after an explicit `RollBack()`; only `Result.Failed` with a
+  non-empty `message` triggers Revit's own automatic dialog. `CreateToposolidCommand`'s message-empty policy is
+  confirmed to keep every outcome to exactly one dialog. The scenarios this evidence did not exercise (a
+  `RollBack()` specifically triggered by a failing `PostCreationVerification` check, a commit-then-`Failed`
+  path, and a post-`Start()` exception unrelated to `Create`/verification) remain open. See Step 5 above.
+- **Orphan check corroborated.** `BasePoint`/`SurveyPoint`/`ActiveProjectLocation`/`SiteLocation` were
+  unchanged by creating and rolling back a toposolid, matching what `OrphanCheck.Unchanged` is designed to
+  report. See Step 8a item 6 above.
+- **Still pending.** The live OpenTopography ExampleSite fetch through Revit's own process (Step 8b) and the
+  shipped add-in's end-to-end Scenarios A-D remain unexercised; the shipped `main` `c80af6a` build is already
+  deployed and hash-verified and needs no rebuild once Step 8b's preconditions clear.
 
 ## Revit API members used
 
@@ -953,23 +1294,42 @@ existence, not compiler-verified independently of the real build (which itself d
 1. Whether `NativeToposolidMaxPointThreshold`/`LinkToposolidMaxPointThreshold` gates the
    `Toposolid.Create(profiles, points, ...)` code path at all — every documentation source scopes both
    settings to interactive DWG/text-file import and linked-topography reload, never to this general-purpose
-   overload. Owned by manual test step 7 above.
+   overload. Owned by manual test step 7 above. **Settled for 19,999-20,001 points by the 2026-09-21 probe
+   session (Step 7 above): the combined overload is not gated at that exact boundary.** Behavior above roughly
+   20,000-20,031 truly distinct points is still not established — the only sweep that reached higher nominal
+   counts (30,000/50,001) did submit that many genuinely distinct coordinates (its point generator was checked
+   directly and produces no duplicates), but what capped the resulting vertex count near 20,000-20,031 is
+   unconfirmed and needs a dedicated follow-up probe.
 2. `Result.Cancelled` vs. `Result.Failed` Undo-stack side effects, specifically after a genuine `RolledBack`
    status (as opposed to zero transactions ever opened). Owned by manual test step 5 above; the Result-code
-   policy table is explicitly provisional pending this evidence.
+   policy table is explicitly provisional pending this evidence. **Settled by the 2026-09-21 probe session
+   (Step 5 above) for the zero-transaction-vs-rolled-back comparison: neither leaves an Undo entry, and only
+   `Result.Failed` with a non-empty message triggers Revit's own automatic dialog.** The sub-scenarios of a
+   verification-triggered rollback, a commit-then-`Failed` path, and a post-`Start()` exception unrelated to
+   `Create`/verification were not exercised and remain open.
 3. Whether `UnitTypeId.Feet` or `UnitTypeId.UsSurveyFeet` is numerically Revit's own internal foot — neither
    member's reference page states a numeric definition or an internal-unit correspondence. Owned by manual
    test step 8a item 3; the shipped code never assumes an answer either way (see "Unit conversion" above).
+   **Settled by the 2026-09-21 probe session (Step 8a item 3 above): `UnitTypeId.Feet` is Revit's internal
+   foot; `UnitTypeId.UsSurveyFeet` is not** (`ConvertToInternalUnits(1.0, Feet)` is exactly `1`; the same call
+   with `UsSurveyFeet` is `1.000002000004`).
 4. Whether the combined `Toposolid.Create` overload (the shipped default) silently accepts invalid, duplicate,
    or out-of-boundary points, throws, or clamps — its own Exceptions table documents boundary-validity
    conditions but not point-distinctness or containment, unlike the sibling `AddPoints` method's documented
-   contract. Owned by manual test step 8a item 2; decides whether the default strategy flips.
+   contract. Owned by manual test step 8a item 2; decides whether the default strategy flips. **Settled by the
+   2026-09-21 probe session (Step 8a item 2 above): it silently accepts an out-of-boundary point, a
+   duplicate-XY point, and an on-edge point alike, with no exception.** The default strategy does not flip
+   regardless — see "Decisions recorded from evidence" above.
 5. Whether `GetSlabShapeEditor().IsEnabled` is `true` after the combined `Create` call. Owned by manual test
-   step 8a item 4; `PostCreationVerification` degrades to bounding-box-only if false.
+   step 8a item 4; `PostCreationVerification` degrades to bounding-box-only if false. **Settled by the
+   2026-09-21 probe session (Step 8a item 4 above): `True` in every combined-overload probe run, across five
+   point counts and three invalid-point variants.**
 6. Whether `Element.get_BoundingBox(null)` reliably returns a populated, non-null result immediately after
    `document.Regenerate()` on a freshly created `Toposolid` — general Revit convention, not independently
    confirmed. `PostCreationVerification` treats a null/disabled result as a logged warning, never an automatic
-   rollback trigger, for exactly this reason.
+   rollback trigger, for exactly this reason. **Narrowed, not fully closed, by the 2026-09-21 probe session
+   (Step 8a item 4 above): non-null in every combined-overload probe run, but no probe called an explicit
+   `Regenerate()` first, so this is a harder, not identical, condition than the one this item asks about.**
 7. Whether `Transaction.GetFailureHandlingOptions()`/`SetFailureHandlingOptions()` must be called before vs.
    after `Start()` — Autodesk's own documentation states options "can be set at any time before... committed
    or rolled back" (textually permitting the before-`Start()` ordering this code uses), but its one published
@@ -979,7 +1339,8 @@ existence, not compiler-verified independently of the real build (which itself d
 9. Whether the flat, single-scalar boundary-ring `Z` persists as visible geometry at or near the parcel edge,
    or is fully overridden by point-driven interpolation — see "The boundary-Z decision" above. Owned by
    manual test step 8a item 5. Both outcomes are benign under the shipped fix; this item records which
-   actually occurs, not which is safe.
+   actually occurs, not which is safe. **Settled by the 2026-09-21 probe session (Step 8a item 5 above): fully
+   overridden by point-driven interpolation, at every tested boundary Z (0, 100, 110) — no visible rim.**
 10. Whether `Transaction.HasEnded()` reliably reflects the transaction's true end-state immediately after an
     exception thrown mid-`Commit()`/mid-`Regenerate()`, well enough to safely gate whether a second
     `RollBack()` call is attempted. The code never calls `RollBack()` a second time on a transaction
@@ -1039,9 +1400,14 @@ which is exactly why the manual plan exists as a separate, later step.
 ## What this note does not do
 
 This note records what Issue #15 already built; it does not itself change any decision recorded in
-`docs/architecture/revit-add-in-conventions.md` or `docs/architecture/revit-2027-verification-and-host-design.md`,
-and it does not perform the manual evidence plan above — every "Evidence" entry is a placeholder for a later,
-real Revit 2027 session, not a claim this note makes itself. It does not begin Issue #16 (Extensible Storage
-provenance; the extension point above is the only thing Issue #15 leaves for it to change), Issue #17
-(signing, packaging, or a clean-install validation), or Issue #19 (the real ribbon icon design) — those stay
-explicit, separately approved implementation tasks per AGENTS.md's "Mission and current boundary" section.
+`docs/architecture/revit-add-in-conventions.md` or `docs/architecture/revit-2027-verification-and-host-design.md`.
+A 2026-09-21 documentation pass (this update) filled in the "Manual evidence plan" above's Step 5, 7, and 8a
+"Evidence" entries and the "Decisions recorded from evidence" subsection from a real Revit 2027 probe session
+and a separate end-to-end deploy session, neither of which this note performed itself. Step 8b's "Evidence"
+entry is still a placeholder for a later, real Revit 2027 session with `OPENTOPOGRAPHY_API_KEY` present in
+Revit's own process and a quiet desktop, per Step 8b above — not a claim this note makes itself. It does not
+begin Issue #16 (Extensible Storage provenance; the extension point above is the only thing Issue #15 leaves
+for it to change), Issue #17 (signing, packaging, or a clean-install validation), or Issue #19 (the real
+ribbon icon design) — those stay explicit, separately approved implementation tasks per AGENTS.md's "Mission
+and current boundary" section. It does not close Issue #15: the live fetch and end-to-end scenarios above
+remain the milestone's one open acceptance item.
