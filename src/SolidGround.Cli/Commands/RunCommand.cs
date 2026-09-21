@@ -80,7 +80,7 @@ internal static class RunCommand
         // SolidGround Issue #15's Core lift: ClipRegionFactory.Build no longer reconstructs an AreaOfInterest
         // from flattened fields, so the caller must hand it the exact same instance used here.
         AreaOfInterest areaOfInterest = aoi.ToAreaOfInterest(wgs84Reference);
-        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(areaOfInterest, wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(areaOfInterest);
 
         host.StandardOutput.WriteLine("run: requesting OpenTopography...");
         FetchCommand.PrintFetchEnvelopeExpansion(host, "run", fetchEnvelopeExpansion);

@@ -1,10 +1,10 @@
-namespace SolidGround.Revit.Provenance;
+namespace SolidGround.Core.Provenance;
 
 /// <summary>One XYZ point, already in Revit-internal units, for <see cref="PlacementRevitCoordinatesRecord"/>.</summary>
-internal sealed record PlacementPointRecord(double X, double Y, double Z);
+public sealed record PlacementPointRecord(double X, double Y, double Z);
 
 /// <summary>The created element and the Level/ToposolidType it was assigned to. See design record §9.</summary>
-internal sealed record PlacementToposolidRecord(
+public sealed record PlacementToposolidRecord(
     long ElementId,
     string LevelName,
     long LevelId,
@@ -20,21 +20,21 @@ internal sealed record PlacementToposolidRecord(
 /// numerically Revit's own internal foot (Appendix A UNVERIFIED item 3), which that manual procedure logs
 /// separately.
 /// </summary>
-internal sealed record PlacementUnitConversionRecord(
+public sealed record PlacementUnitConversionRecord(
     string OutputUnit,
     string ForgeTypeId,
     double MetersPerOutputUnit,
     double RoundTripDelta);
 
 /// <summary>The vertical reference recorded alongside the local origin.</summary>
-internal sealed record PlacementVerticalReferenceRecord(string Datum, string Unit, string? GeoidModel);
+public sealed record PlacementVerticalReferenceRecord(string Datum, string Unit, string? GeoidModel);
 
 /// <summary>
 /// The complete local-origin offset needed to reverse the transform (AGENTS.md "Provenance decision"): the
 /// original source coordinate the local frame's origin subtracts, plus the horizontal and vertical
 /// references that offset is expressed in.
 /// </summary>
-internal sealed record PlacementLocalOriginRecord(
+public sealed record PlacementLocalOriginRecord(
     double SourceX,
     double SourceY,
     double SourceElevation,
@@ -46,7 +46,7 @@ internal sealed record PlacementLocalOriginRecord(
 /// record §7.2's planarity fix), and, for reference only, the resolved Level's own elevation -- never used
 /// for boundary geometry itself.
 /// </summary>
-internal sealed record PlacementBoundaryPlaneElevationRecord(
+public sealed record PlacementBoundaryPlaneElevationRecord(
     double ConstantZInternal,
     string Source,
     double LevelElevationInternal,
@@ -56,7 +56,7 @@ internal sealed record PlacementBoundaryPlaneElevationRecord(
 /// A read-only snapshot of the shared-coordinate state at commit time, proving SolidGround left it
 /// untouched (<c>OrphanCheck</c> is the runtime check this describes).
 /// </summary>
-internal sealed record PlacementRevitCoordinatesRecord(
+public sealed record PlacementRevitCoordinatesRecord(
     bool InternalOriginIsZero,
     PlacementPointRecord BasePointPosition,
     PlacementPointRecord BasePointSharedPosition,
@@ -64,14 +64,17 @@ internal sealed record PlacementRevitCoordinatesRecord(
     PlacementPointRecord SurveyPointSharedPosition,
     string ActiveProjectLocationName);
 
-internal sealed record PlacementPointCountsRecord(int Original, int Retained, int Budget);
+public sealed record PlacementPointCountsRecord(int Original, int Retained, int Budget);
 
 /// <summary>
 /// The full, final placement record written next to the export bundle only after a confirmed
-/// <see cref="Autodesk.Revit.DB.TransactionStatus.Committed"/> status (design record §9). Assembled from a
-/// <see cref="PlacementRecordDraft"/> plus the confirmed element id (§6.6 step 1).
+/// <c>Autodesk.Revit.DB.TransactionStatus.Committed</c> status (design record §9). Assembled from a
+/// <see cref="PlacementRecordDraft"/> plus the confirmed element id (§6.6 step 1). Revit-free: kept in
+/// <c>SolidGround.Core</c> (SolidGround Issue #15 review fix) so <c>SolidGround.Core.Provenance.PlacementRecordRenderer</c>'s
+/// determinism is directly, offline testable -- only <c>SolidGround.Revit.Provenance.PlacementRecordWriter</c>'s
+/// thin <c>Directory.CreateDirectory</c>/<c>File.WriteAllBytes</c> wrapper stays in the Revit host project.
 /// </summary>
-internal sealed record PlacementRecord(
+public sealed record PlacementRecord(
     string Schema,
     int SchemaVersion,
     DateTime CreatedUtc,
@@ -93,7 +96,7 @@ internal sealed record PlacementRecord(
 /// coming from "the confirmed <c>toposolid.Id</c>" once <c>Commit()</c> has actually returned
 /// <c>Committed</c> (§6.6 step 1).
 /// </summary>
-internal sealed record PlacementRecordDraft(
+public sealed record PlacementRecordDraft(
     string ExportDocument,
     string ExportPoints,
     string LevelName,
@@ -108,10 +111,10 @@ internal sealed record PlacementRecordDraft(
     string SharedCoordinatesStatement,
     PlacementPointCountsRecord PointCounts)
 {
-    internal const string Schema = "solidground.revit-placement";
-    internal const int SchemaVersion = 1;
+    public const string Schema = "solidground.revit-placement";
+    public const int SchemaVersion = 1;
 
-    internal PlacementRecord ToRecord(long confirmedElementId, DateTime createdUtc) => new(
+    public PlacementRecord ToRecord(long confirmedElementId, DateTime createdUtc) => new(
         Schema,
         SchemaVersion,
         createdUtc,

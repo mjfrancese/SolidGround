@@ -36,7 +36,14 @@ public static class LocalBoundaryValidator
     /// samples are aggregated into one summarized problem line (a count and the worst offset), never one line
     /// per point.
     /// </summary>
-    /// <param name="containmentToleranceMeters">Falls back to <see cref="DefaultContainmentToleranceMeters"/> when <see langword="null"/>.</param>
+    /// <param name="containmentToleranceMeters">
+    /// Compared directly, with no unit conversion, against <paramref name="boundary"/>/<paramref name="retainedSamples"/>'s
+    /// own coordinate values -- despite this parameter's name, it must already be expressed in whatever
+    /// linear unit those coordinates use (a caller building them from a <see cref="SolidGround.Core.Transformations.LocalCoordinateFrame"/>
+    /// must convert into that frame's own <c>OutputUnit</c> first, which is not always meters). Falls back to
+    /// <see cref="DefaultContainmentToleranceMeters"/> -- genuinely meters, since <see langword="null"/> means
+    /// "use the untransformed default" -- when <see langword="null"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="boundary"/> or <paramref name="retainedSamples"/> is <see langword="null"/>.</exception>
     public static LocalBoundaryValidationResult Validate(
         LocalBoundary boundary,

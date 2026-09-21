@@ -1,5 +1,6 @@
 using SolidGround.Core.Exports;
 using SolidGround.Core.Geometry;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Tests;
 
@@ -62,6 +63,49 @@ public sealed class LocalBoundaryValidatorTests
         string problem = Assert.Single(outsideProblems);
         Assert.Contains("3", problem, StringComparison.Ordinal);
         Assert.Contains("5", problem, StringComparison.Ordinal);
+    }
+
+    // Regression coverage for SolidGround Issue #15's review fix: Validate's containmentToleranceMeters is
+    // compared with no unit conversion against boundary/sample coordinates, which a LocalCoordinateFrame
+    // expresses in its own OutputUnit (US survey foot by default), not always meters. A caller whose
+    // coordinates are in a non-meter unit (SolidGround.Revit's CreateToposolidCommand, in production) must
+    // convert DefaultContainmentToleranceMeters into that same unit -- exactly what these two tests simulate
+    // by treating the boundary/samples below as US-survey-foot-valued and pre-converting the tolerance the
+    // same way LengthConverter.Convert(LocalBoundaryValidator.DefaultContainmentToleranceMeters, ...) does.
+
+    [Fact]
+    public void ValidateAcceptsASampleWithinTheDefaultToleranceOnceItIsConvertedIntoTheCallersUnit()
+    {
+        LocalBoundary boundary = SquareBoundary();
+        double toleranceInCallersUnit = LengthConverter.Convert(
+            LocalBoundaryValidator.DefaultContainmentToleranceMeters, LengthUnit.Meter, LengthUnit.UsSurveyFoot);
+        // 5 mm outside the west edge (x = 0), expressed in US survey feet: well within the intended 1 cm
+        // (0.01 m) default tolerance, but outside the *raw* 0.01 literal a caller would wrongly compare
+        // against if it forgot to convert -- 5 mm in feet is larger than 0.01.
+        double offsetInFeet = LengthConverter.Convert(0.005d, LengthUnit.Meter, LengthUnit.UsSurveyFoot);
+        LocalTerrainSample[] samples = [Sample(-offsetInFeet, 5, 0)];
+
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100, toleranceInCallersUnit);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Problems);
+    }
+
+    [Fact]
+    public void ValidateRejectsASampleBeyondTheDefaultToleranceOnceItIsConvertedIntoTheCallersUnit()
+    {
+        LocalBoundary boundary = SquareBoundary();
+        double toleranceInCallersUnit = LengthConverter.Convert(
+            LocalBoundaryValidator.DefaultContainmentToleranceMeters, LengthUnit.Meter, LengthUnit.UsSurveyFoot);
+        // 15 mm outside the west edge: genuinely beyond the intended 1 cm default tolerance even after the
+        // correct unit conversion.
+        double offsetInFeet = LengthConverter.Convert(0.015d, LengthUnit.Meter, LengthUnit.UsSurveyFoot);
+        LocalTerrainSample[] samples = [Sample(-offsetInFeet, 5, 0)];
+
+        LocalBoundaryValidationResult result = LocalBoundaryValidator.Validate(boundary, samples, pointBudget: 100, toleranceInCallersUnit);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Problems, p => p.Contains("outside the boundary", StringComparison.Ordinal));
     }
 
     [Fact]

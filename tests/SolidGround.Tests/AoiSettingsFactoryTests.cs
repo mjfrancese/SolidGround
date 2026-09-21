@@ -100,6 +100,39 @@ public sealed class AoiSettingsFactoryTests
         Assert.Throws<FormatException>(() => AoiSettingsFactory.Build(settings, Wgs84Reference(), parcelGeometryText: "irrelevant"));
     }
 
+    [Theory]
+    [InlineData("parcel.geojson", ParcelGeometryFormat.GeoJson)]
+    [InlineData("parcel.json", ParcelGeometryFormat.GeoJson)]
+    [InlineData("parcel.wkt", ParcelGeometryFormat.Wkt)]
+    [InlineData(@"C:\SolidGround\PARCEL.WKT", ParcelGeometryFormat.Wkt)]
+    public void BuildInfersTheParcelFormatFromThePathsExtensionWhenFormatIsUnset(string path, ParcelGeometryFormat expectedFormat)
+    {
+        const string geometryText = "irrelevant";
+        AoiSettings settings = new()
+        {
+            Kind = AreaOfInterestKind.Parcel,
+            Parcel = new ParcelAoiSettings { Path = path, Format = null },
+        };
+
+        AreaOfInterest result = AoiSettingsFactory.Build(settings, Wgs84Reference(), geometryText);
+
+        ParcelGeometryAoi parcel = Assert.IsType<ParcelGeometryAoi>(result);
+        Assert.Equal(expectedFormat, parcel.Format);
+    }
+
+    [Fact]
+    public void BuildThrowsAFormatExceptionWhenFormatIsUnsetAndThePathsExtensionCannotBeInferred()
+    {
+        AoiSettings settings = new()
+        {
+            Kind = AreaOfInterestKind.Parcel,
+            Parcel = new ParcelAoiSettings { Path = "parcel.txt", Format = null },
+        };
+
+        FormatException ex = Assert.Throws<FormatException>(() => AoiSettingsFactory.Build(settings, Wgs84Reference(), parcelGeometryText: "irrelevant"));
+        Assert.Contains("cannot be inferred", ex.Message, StringComparison.Ordinal);
+    }
+
     private static HorizontalReference Wgs84Reference() => new(
         "WGS 84", "World Geodetic System 1984", HorizontalReferenceKind.Geographic, HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);
 }

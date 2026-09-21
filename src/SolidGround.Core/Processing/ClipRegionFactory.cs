@@ -32,10 +32,17 @@ public static class ClipRegionFactory
     /// <c>Parcel</c> branch calls <see cref="AoiNormalizer.Normalize"/> too, but explicitly disables the
     /// minimum-side expansion, since that guard exists only for the fetch request this method builds.
     /// </summary>
-    public static (Wgs84BoundingBoxAoi Envelope, FetchEnvelopeExpansion Expansion) BuildFetchEnvelope(AreaOfInterest aoi, HorizontalReference wgs84Reference)
+    /// <remarks>
+    /// Takes only <paramref name="aoi"/>: every concrete <see cref="AreaOfInterest"/> case already carries
+    /// whatever <see cref="HorizontalReference"/> its own construction needed (a parcel AOI's own
+    /// <c>HorizontalReference</c> property is set and validated by its constructor), so there is nothing left
+    /// for a separate WGS 84 reference parameter to do here. A caller building an <see cref="AreaOfInterest"/>
+    /// from a flattened selection (for example, the CLI's own <c>AoiSelection.ToAreaOfInterest</c>) still
+    /// needs a <see cref="HorizontalReference"/> for that step, just not for this one.
+    /// </remarks>
+    public static (Wgs84BoundingBoxAoi Envelope, FetchEnvelopeExpansion Expansion) BuildFetchEnvelope(AreaOfInterest aoi)
     {
         ArgumentNullException.ThrowIfNull(aoi);
-        ArgumentNullException.ThrowIfNull(wgs84Reference);
 
         NormalizedAoi normalized = aoi switch
         {

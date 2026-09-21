@@ -22,10 +22,9 @@ public sealed class ClipRegionFactoryTests
     [Fact]
     public void BuildFetchEnvelopeForABoundingBoxAreaOfInterestAppliesTheMinimumSideExpansion()
     {
-        HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
         Wgs84BoundingBoxAoi tinyBox = TinyBoxAround(Longitude, Latitude, halfSideMeters: 5d);
 
-        (Wgs84BoundingBoxAoi envelope, FetchEnvelopeExpansion expansion) = ClipRegionFactory.BuildFetchEnvelope(tinyBox, wgs84Reference);
+        (Wgs84BoundingBoxAoi envelope, FetchEnvelopeExpansion expansion) = ClipRegionFactory.BuildFetchEnvelope(tinyBox);
 
         Assert.True(expansion.Applied);
         Assert.Equal(LinearDistance.Meters(110d), expansion.MinimumSide);

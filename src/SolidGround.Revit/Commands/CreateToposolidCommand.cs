@@ -117,8 +117,14 @@ public sealed class CreateToposolidCommand : IExternalCommand
             ? LocalBoundaryFactory.FromPolygonalRegion(clipResult.EffectiveRegion, localFrame)
             : LocalBoundaryFactory.FromGridEnvelope(acquisition.Grid, localFrame);
 
+        // LocalBoundaryValidator.Validate's tolerance is compared directly against boundary/sample
+        // coordinates, which are expressed in the pipeline's own OutputUnit (US survey foot by default), not
+        // always meters -- DefaultContainmentToleranceMeters must be converted into that same unit before
+        // being passed, exactly as the Stage 5 tolerance below already is (SolidGround Issue #15 review fix).
+        double containmentTolerance = LengthConverter.Convert(
+            LocalBoundaryValidator.DefaultContainmentToleranceMeters, CoreLengthUnit.Meter, context.Settings.Request.OutputUnit);
         LocalBoundaryValidationResult boundaryValidation = LocalBoundaryValidator.Validate(
-            boundary, acquisition.Outcome.Payload.Samples, context.Settings.Request.Simplification.PointBudget, containmentToleranceMeters: null);
+            boundary, acquisition.Outcome.Payload.Samples, context.Settings.Request.Simplification.PointBudget, containmentTolerance);
         if (!boundaryValidation.IsValid)
         {
             ShowProblemList("SolidGround could not build a valid boundary.", "Nothing changed. Correct every problem below and run this command again.", boundaryValidation.Problems);
@@ -347,7 +353,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunFetchPipelineAsync(
         TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi, CancellationToken cancellationToken)
     {
-        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(aoi);
 
         using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
         OpenTopographyUsgs1mSource source = new(httpClient, new EnvironmentOpenTopographyApiKeyProvider());
@@ -574,7 +580,25 @@ public sealed class CreateToposolidCommand : IExternalCommand
             if (commitStatus != TransactionStatus.Committed)
             {
                 AddInLog.Error($"SolidGround's transaction ended with status {commitStatus}, not Committed.");
-                ShowSingleFailed("SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed.");
+                // Per Autodesk's own "Handling Failures" documentation, posted failures are processed "at the
+                // end of a transaction (specifically when Transaction.Commit() or Transaction.Rollback() are
+                // invoked)" -- so a blocking Revit failure can still be discovered only here, inside Commit()
+                // itself, even though failureLog.HasBlockingFailure was already checked once above, right
+                // after the explicit pre-Commit Regenerate() call. When that has happened, failureLog already
+                // holds the specific, accumulated Revit failure text (SolidGround Issue #15 review fix); show
+                // it alongside the generic headline instead of silently discarding it.
+                if (failureLog.HasBlockingFailure)
+                {
+                    ShowProblemList(
+                        "SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed.",
+                        "Revit reported the following while finishing the transaction:",
+                        failureLog.Messages);
+                }
+                else
+                {
+                    ShowSingleFailed("SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed.");
+                }
+
                 return Result.Failed;
             }
 

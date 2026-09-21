@@ -66,7 +66,7 @@ internal static class FetchCommand
         OpenTopographyUsgs1mSource source = new(httpClient, new StaticOpenTopographyApiKeyProvider(key));
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
-        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi.ToAreaOfInterest(wgs84Reference), wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi.ToAreaOfInterest(wgs84Reference));
 
         host.StandardOutput.WriteLine("fetch: requesting OpenTopography...");
         PrintFetchEnvelopeExpansion(host, "fetch", fetchEnvelopeExpansion);

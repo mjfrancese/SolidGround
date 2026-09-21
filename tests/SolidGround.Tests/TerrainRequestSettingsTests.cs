@@ -129,6 +129,64 @@ public sealed class TerrainRequestSettingsTests
     }
 
     [Fact]
+    public void ValidateReportsAStaleParcelSubObjectAlongsideABoundingBoxKind()
+    {
+        TerrainRequestSettings settings = MinimalFetch();
+        settings = settings with
+        {
+            AreaOfInterest = settings.AreaOfInterest with
+            {
+                Kind = AreaOfInterestKind.BoundingBox,
+                Parcel = new ParcelAoiSettings { Path = @"C:\SolidGround\parcel.geojson", Format = "geojson", BufferMeters = 0 },
+            },
+        };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("areaOfInterest.parcel must be null when areaOfInterest.kind is 'boundingBox'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsAStaleBoundingBoxSubObjectAlongsideARadiusKind()
+    {
+        TerrainRequestSettings settings = MinimalFetch();
+        settings = settings with
+        {
+            AreaOfInterest = new AoiSettings
+            {
+                Kind = AreaOfInterestKind.Radius,
+                BoundingBox = settings.AreaOfInterest.BoundingBox,
+                Radius = new RadiusAoiSettings { CenterLatitude = 38.7, CenterLongitude = [withheld], RadiusMeters = 50 },
+            },
+        };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("areaOfInterest.boundingBox must be null when areaOfInterest.kind is 'radius'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsStaleBoundingBoxAndRadiusSubObjectsAlongsideAParcelKind()
+    {
+        TerrainRequestSettings settings = MinimalFetch();
+        settings = settings with
+        {
+            AreaOfInterest = new AoiSettings
+            {
+                Kind = AreaOfInterestKind.Parcel,
+                BoundingBox = settings.AreaOfInterest.BoundingBox,
+                Radius = new RadiusAoiSettings { CenterLatitude = 38.7, CenterLongitude = [withheld], RadiusMeters = 50 },
+                Parcel = new ParcelAoiSettings { Path = @"C:\SolidGround\parcel.geojson", Format = "geojson", BufferMeters = 0 },
+            },
+        };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("areaOfInterest.boundingBox must be null when areaOfInterest.kind is 'parcel'", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("areaOfInterest.radius must be null when areaOfInterest.kind is 'parcel'", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ValidateReturnsEveryProblemNotJustTheFirst()
     {
         TerrainRequestSettings settings = MinimalFetch();
@@ -153,6 +211,108 @@ public sealed class TerrainRequestSettingsTests
         IReadOnlyList<string> problems = settings.Validate();
 
         Assert.Empty(problems);
+    }
+
+    [Fact]
+    public void ValidateReportsAProblemWhenOnlyCollectionStartIsGiven()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { CollectionStart = "2024-01-01", CollectionEnd = null } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("collectionStart", StringComparison.Ordinal) && p.Contains("both be given or both be omitted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsAProblemWhenOnlyCollectionEndIsGiven()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { CollectionStart = null, CollectionEnd = "2024-01-01" } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("collectionEnd", StringComparison.Ordinal) && p.Contains("both be given or both be omitted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsAProblemForAMalformedCollectionStartDate()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { CollectionStart = "01/01/2024", CollectionEnd = "2024-01-02" } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("collectionStart must be a yyyy-MM-dd date", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsAProblemForAMalformedCollectionEndDate()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { CollectionStart = "2024-01-01", CollectionEnd = "not-a-date" } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("collectionEnd must be a yyyy-MM-dd date", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsAProblemWhenCollectionStartIsAfterCollectionEnd()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { CollectionStart = "2024-06-01", CollectionEnd = "2024-01-01" } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("collectionStart must not be after process.collectionEnd", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateAcceptsAWellFormedCollectionPeriodWithStartOnOrBeforeEnd()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { CollectionStart = "2024-01-01", CollectionEnd = "2024-01-01" } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Empty(problems);
+    }
+
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    public void ValidateReportsAProblemForAWhitespaceOnlyProcessSourceName(string blank)
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with { Process = settings.Process! with { SourceName = blank } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("process.sourceName", StringComparison.Ordinal) && p.Contains("must not be blank when given", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateReportsAProblemForEachWhitespaceOnlyOptionalProcessField()
+    {
+        TerrainRequestSettings settings = MinimalProcess();
+        settings = settings with
+        {
+            Process = settings.Process! with
+            {
+                Dataset = "  ",
+                VerticalDatum = "  ",
+                Geoid = "  ",
+                QualityLevel = "  ",
+            },
+        };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains(problems, p => p.Contains("process.dataset", StringComparison.Ordinal) && p.Contains("must not be blank when given", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("process.verticalDatum", StringComparison.Ordinal) && p.Contains("must not be blank when given", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("process.geoid", StringComparison.Ordinal) && p.Contains("must not be blank when given", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("process.qualityLevel", StringComparison.Ordinal) && p.Contains("must not be blank when given", StringComparison.Ordinal));
     }
 
     [Fact]

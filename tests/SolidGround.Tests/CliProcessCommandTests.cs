@@ -284,6 +284,39 @@ public sealed class CliProcessCommandTests
     }
 
     [Fact]
+    public async Task ABlankParcelFileFailsAfterTheAscReadIsAlreadyReportedOnStdout()
+    {
+        // Regression test for the stdout-ordering fix in commit ef5aa53: AoiSelection.Bind/BindParcel applies
+        // zero content validation to a `--parcel` file's raw text (only ParcelGeometryAoi's constructor, built
+        // from ProcessCommand.RunAsync's `aoi?.ToAreaOfInterest(...)` call immediately before the pipeline
+        // call, rejects blank geometry). That construction must stay placed after the `--asc` file is read and
+        // reported on stdout, not hoisted back up next to where `aoi` is parsed -- otherwise this exact
+        // ordering silently regresses with no other test catching it.
+        DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            string ascPath = FixturePath("example-site-synthetic.asc");
+            string blankParcelPath = Path.Combine(tempDirectory.FullName, "blank-parcel.geojson");
+            File.WriteAllText(blankParcelPath, "   ");
+
+            (int exitCode, string stdout, string stderr) = await RunAsync(
+                [
+                    "process", "--asc", ascPath, "--prj", FixturePath("example-site-synthetic.prj"),
+                    "--parcel", blankParcelPath, "--output", tempDirectory.FullName,
+                ],
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(CliExitCodes.Usage, exitCode);
+            Assert.Contains("Parcel geometry is required", stderr, StringComparison.Ordinal);
+            Assert.Contains($"process: read '{ascPath}'.", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RejectsAnEmptyClipWithASourceQualityExitCode()
     {
         DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
