@@ -40,7 +40,7 @@ of the four duplicates domain logic Core already owns.
 | `verify` | Offline | Reads a written export bundle strictly, prints its provenance summary, and confirms that reconstructing every sample's source coordinate and converting it back is bit-exact. |
 | `help [verb]`, `--help`/`-h`, `--version` | Offline | Prints command help (the whole table, or one command's own options) or the CLI's version, and exits without touching any file. |
 
-`process` and `run` share one internal processing pipeline (`Processing/TerrainProcessingPipeline.cs`)
+`process` and `run` share one processing pipeline (`SolidGround.Core.Processing.TerrainProcessingPipeline`)
 rather than two independent implementations, so their clipping, local-origin, unit, and simplification
 behavior can never drift apart from each other: given an already-parsed grid and an already-built WGS
 84-to-grid transform, the pipeline (1) clips to the AOI when one was given, or processes the whole grid
@@ -53,6 +53,20 @@ calling the pipeline, that the WGS 84-to-grid transform it just built from the a
 reference agrees with the acquired grid's own horizontal reference; a mismatch is treated as a processing
 failure rather than silently proceeding, though it is not expected to occur in practice, since both are
 built from the identical coordinate-reference text the same acquisition returned.
+
+**Update, Issue #15 (2026-09-21):** `TerrainProcessingPipeline` and five collaborators it depends on —
+`ClipRegionFactory`, `LocalOriginFactory`, `LocalOriginRequest` (renamed from `LocalOriginSelection`),
+`VerticalReferenceResolution`, and the `RasterSourceSidecar`/`RasterSourceSidecarIo`/`LengthUnitTokens` types
+referenced elsewhere in this note — moved from `internal` types under `SolidGround.Cli` into `public` types
+under `SolidGround.Core`, so `SolidGround.Revit`'s own toposolid-creation command could reuse the identical
+pipeline without a back-reference to this CLI (`docs/architecture/revit-toposolid-creation.md` records the
+Revit side). Every moved type's body is unchanged; only `RasterSourceSidecarIo.Read` and `LengthUnitTokens.Parse`
+changed their thrown exception type, from the CLI-only `CliUsageException` to `FormatException` — this CLI's
+own call sites already wrap the new exception type back into `CliUsageException` (or, for
+`RasterSourceSidecarIo`, rely on `CliApplication.RunAsync`'s existing `catch (FormatException ex)`, which
+already produced byte-identical output to `catch (CliUsageException ex)`), so no CLI option, exit code, or
+stdout/stderr line changed. The rest of this note's own file-path citations for these types are corrected in
+place below to their new `SolidGround.Core` locations.
 
 `verify`'s own exit behavior is a closed set — `0`, `2`, `5`, or `130` — because it performs no network I/O
 and no simplification, but, like every command, can still be cancelled; see "Exit codes and error classes"
@@ -196,7 +210,7 @@ do not share.
 ## AOI and clip derivation
 
 All three AOI-accepting commands (`process`, `fetch`, `run`) turn whichever single AOI form the operator
-gave into a Core clip region through one shared factory (`Processing/ClipRegionFactory.cs`), so the
+gave into a Core clip region through one shared factory (`SolidGround.Core.Processing.ClipRegionFactory`), so the
 bounding-box, radius, and parcel paths can never diverge between commands. A parcel is always given in WGS
 84 — there is no option that accepts a projected parcel — so the CLI never needs a second, operator-supplied
 coordinate reference for the parcel itself; the only coordinate reference it ever has to build from scratch
@@ -238,7 +252,11 @@ processing error instead of clipping against the wrong reference silently.
 
 Core supplies a way to snap a candidate origin point to a whole source unit, but it never chooses one on its
 own; choosing the origin is entirely this CLI's own responsibility, through `--origin` (default
-`southwest`, `Processing/LocalOriginSelection.cs` and `Processing/LocalOriginFactory.cs`):
+`southwest`). `--origin`'s own text-token parsing stays CLI-side (`ProcessCommand.ParseOrigin`, parsing that
+flag's syntax is not a Core concern); the `LocalOriginRequest` it builds (renamed from `LocalOriginSelection`
+and, since SolidGround Issue #15, `public` under `SolidGround.Core.Processing`, alongside
+`SolidGround.Core.Processing.LocalOriginFactory`) is what both this CLI and `SolidGround.Revit`'s own
+settings-driven `localOrigin` now consume:
 
 ```text
 southwest (default): the lower-left corner of the clipped grid's envelope, snapped to a whole source unit.
@@ -287,8 +305,8 @@ meter: 1 metre; us-survey-foot (the default)
 ```
 
 **Update, Issue #25 (2026-09-20):** `--unit`'s syntax and help text are no longer two more hardcoded copies
-of `us-survey-foot`. `Options/LengthUnitTokens.cs` is now the CLI's single source of truth for the three
-tokens: `LengthUnitTokens.Syntax` (the `|`-joined token list) and `LengthUnitTokens.DefaultToken`
+of `us-survey-foot`. `LengthUnitTokens` is now the CLI's single source of truth for the three tokens:
+`LengthUnitTokens.Syntax` (the `|`-joined token list) and `LengthUnitTokens.DefaultToken`
 (`TokenOf(LengthConverter.DefaultOutputUnit)`) build the `Unit` `OptionSpec` in `OptionTable.cs`.
 `ProcessCommand` parses `--unit` and `--vertical-unit`, and `RunCommand` parses `--unit`, both through
 `LengthUnitTokens.Parse` (moved, unchanged in behavior, from the former `ProcessCommand.ParseLengthUnitValue`).
@@ -296,6 +314,12 @@ Both commands default `--unit` to `LengthUnitTokens.DefaultToken` rather than a 
 is `LengthConverter.DefaultOutputUnit` (`us-survey-foot` today); see
 docs/architecture/coordinate-transformation-and-units.md's "`LengthConverter.DefaultOutputUnit`" section for
 the Core side of this.
+
+**Update, Issue #15 (2026-09-21):** `LengthUnitTokens` moved from `Options/LengthUnitTokens.cs`, `internal` to
+`SolidGround.Cli`, to `SolidGround.Core.Units.LengthUnitTokens`, `public` — see the "Commands" section's own
+Issue #15 update above for why and for the one behavior change (`Parse` now throws `FormatException`, wrapped
+back into `CliUsageException` at this CLI's one call site so `--unit`/`--vertical-unit`'s own error text is
+unchanged). The CLI's `--unit`/`--vertical-unit` flags remain this type's only caller.
 
 `--vertical-unit` (on `process` only) is a different option for a different purpose: it names the unit the
 *source* vertical reference is already in — used only while resolving provenance metadata for an offline
@@ -373,11 +397,14 @@ reconstructs a north-to-south grid (the only row order `AaiGridParser` ever prod
 already north-to-south round-trips cell for cell, but a south-to-north grid's row order is not something
 this text format can carry through a write and a re-parse.
 
-`<name>.source.json` is a CLI-owned document — nothing in Core retains the raw acquisition response text —
-written by hand with `Utf8JsonWriter`, `Indented`, `IndentSize = 2`, and `NewLine` set to `"\n"` explicitly
-(the same options shape the provenance design note's own renderer uses), UTF-8 with no byte-order mark, and
-one trailing `\n` appended after the writer is disposed. Its properties are always written in this fixed
-order:
+`<name>.source.json` is written by `SolidGround.Core.Sources.RasterSourceSidecarIo.Write` (moved from a
+CLI-internal `SolidGround.Cli.Rasters.RasterSourceSidecarIo` for SolidGround Issue #15, `public` now; see the
+"Commands" section's own Issue #15 update above) — nothing in Core retains the raw acquisition response text
+— by hand with `Utf8JsonWriter`, `Indented`, `IndentSize = 2`, and `NewLine` set to `"\n"` explicitly (the
+same options shape the provenance design note's own renderer uses), UTF-8 with no byte-order mark, and one
+trailing `\n` appended after the writer is disposed. `fetch`/`run` remain this writer's only caller today;
+`SolidGround.Revit`'s own `process` mode only ever calls the matching `Read`, never `Write`. Its properties
+are always written in this fixed order:
 
 This is the version 1 shape, superseded below; it stays documented per the provenance design note's
 versioning convention (`docs/architecture/provenance-and-deterministic-exports.md`'s "Versioning and
@@ -406,8 +433,9 @@ acquisition                               object
 
 Every acquisition field in that document is already redacted by Core's own evidence type before the CLI ever
 sees it (see "Diagnostics and redaction"); the CLI adds no further redaction and never writes a timestamp or
-the key itself anywhere in this file. `process` reads the sidecar back (`Rasters/RasterSourceSidecarIo.cs`)
-with the same strict convention the provenance bundle reader already established: an unrecognized property,
+the key itself anywhere in this file. `process` reads the sidecar back
+(`SolidGround.Core.Sources.RasterSourceSidecarIo.Read`) with the same strict convention the provenance bundle
+reader already established: an unrecognized property,
 a missing expected property, a duplicate property, or the wrong `schema`/`schemaVersion` is a usage error
 naming the file path, never a best-effort guess at an unrecognized shape. When present, the sidecar supplies
 every source and vertical-reference field `process` needs by default; any of the corresponding CLI options
@@ -679,16 +707,20 @@ CLI tests live in the existing `SolidGround.Tests` project, reached through a ne
 `SolidGround.Cli`, rather than a second test project: the existing `dotnet test` step in continuous
 integration already runs that one project, so no workflow change is needed for these tests to run, and the
 existing architecture tests can inspect the CLI assembly from the same place they already inspect Core's.
-`src/SolidGround.Cli/InternalsVisibleTo.cs`'s `[assembly: InternalsVisibleTo("SolidGround.Tests")]` —
-the CLI's first use of this attribute — additionally grants `SolidGround.Tests` access to internal CLI
-members (for example `Options.LengthUnitTokens`), letting `LengthUnitTokensTests` exercise such CLI-only
-helpers directly instead of only indirectly through `CliApplication.RunAsync`'s stdout/stderr.
+`src/SolidGround.Cli/InternalsVisibleTo.cs`'s `[assembly: InternalsVisibleTo("SolidGround.Tests")]` — the
+CLI's first use of this attribute, originally added so `LengthUnitTokensTests` could exercise the CLI's own
+`Options.LengthUnitTokens` (`internal` at the time) directly rather than only indirectly through
+`CliApplication.RunAsync`'s stdout/stderr — grants `SolidGround.Tests` access to internal CLI members
+generally. **Update, Issue #15 (2026-09-21):** `LengthUnitTokens` itself moved to `SolidGround.Core.Units`,
+`public`, so that original reason no longer applies to this specific type; the grant is left in place as a
+general-purpose seam for any other `SolidGround.Cli`-internal member a future test needs to exercise
+directly, per the same reasoning.
 
 Every CLI test calls the public in-process entry point, `CliApplication.RunAsync(string[] args, CliHost
-host, CancellationToken cancellationToken)`, directly — no test shells out to a built executable. The one
-exception is `LengthUnitTokensTests`, which exercises the internal `SolidGround.Cli.Options.LengthUnitTokens`
-helper's `TokenOf`/`Parse`/`DefaultToken` directly, enabled by the `InternalsVisibleTo("SolidGround.Tests")`
-grant in `src/SolidGround.Cli/InternalsVisibleTo.cs`, rather than through `RunAsync`. `Program.cs`
+host, CancellationToken cancellationToken)`, directly — no test shells out to a built executable.
+`LengthUnitTokensTests` is the one exception in spirit rather than in mechanism now: it exercises
+`SolidGround.Core.Units.LengthUnitTokens`'s public `TokenOf`/`Parse`/`DefaultToken` directly (a Core, not a
+CLI, type since Issue #15), rather than through `RunAsync`. `Program.cs`
 is the only caller that builds a real `CliHost` from the actual process environment, the actual network, and
 `Console.Out`/`Console.Error`; every test builds its own `CliHost` from an in-memory environment lookup (a
 plain `Dictionary<string, string?>`, never `Environment.SetEnvironmentVariable`), `FakeHttpMessageHandler`
