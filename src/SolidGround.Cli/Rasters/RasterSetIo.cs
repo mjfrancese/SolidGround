@@ -1,5 +1,6 @@
 using System.Text;
 using SolidGround.Core.Rasters;
+using SolidGround.Core.Sources;
 using SolidGround.Core.Terrain;
 
 namespace SolidGround.Cli.Rasters;

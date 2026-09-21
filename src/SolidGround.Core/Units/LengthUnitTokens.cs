@@ -1,14 +1,18 @@
-using SolidGround.Core.Units;
-
-namespace SolidGround.Cli.Options;
+namespace SolidGround.Core.Units;
 
 /// <summary>
 /// The CLI's single source of truth for the three <c>--unit</c>/<c>--vertical-unit</c> tokens and their
 /// mapping to <see cref="LengthUnit"/>, so the option parser, the CLI's own default fallback, and
-/// <see cref="OptionTable"/>'s help text can never independently restate -- and drift from -- one another.
-/// See docs/architecture/cli-workflow.md's "Units" section.
+/// <c>OptionTable</c>'s help text can never independently restate -- and drift from -- one another. See
+/// docs/architecture/cli-workflow.md's "Units" section. Lifted into <c>SolidGround.Core</c> for SolidGround
+/// Issue #15 alongside <see cref="Sources.RasterSourceSidecarIo"/> for the identical structural reason (§0.2
+/// of the design record): <see cref="Parse"/> now throws <see cref="FormatException"/> instead of the
+/// CLI-only <c>CliUsageException</c>, with its message text unchanged. The CLI's own <c>--unit</c>/
+/// <c>--vertical-unit</c> flags remain this type's only caller today, wrapping the new
+/// <see cref="FormatException"/> back into <c>CliUsageException</c> at their one call site so CLI-facing
+/// output text does not change.
 /// </summary>
-internal static class LengthUnitTokens
+public static class LengthUnitTokens
 {
     // The one place a LengthUnit member maps to its own CLI token; every other member below is derived
     // from this fixed order rather than restating the three strings a second time.
@@ -22,10 +26,10 @@ internal static class LengthUnitTokens
     private static readonly string[] Tokens = Array.ConvertAll(OrderedUnits, TokenOf);
 
     /// <summary>The three accepted tokens joined with <c>'|'</c>, in the fixed order us-survey-foot, international-foot, meter.</summary>
-    internal static string Syntax { get; } = string.Join('|', Tokens);
+    public static string Syntax { get; } = string.Join('|', Tokens);
 
     /// <summary>The token for <see cref="LengthConverter.DefaultOutputUnit"/>, the CLI's own default when <c>--unit</c> is omitted.</summary>
-    internal static string DefaultToken => TokenOf(LengthConverter.DefaultOutputUnit);
+    public static string DefaultToken => TokenOf(LengthConverter.DefaultOutputUnit);
 
     /// <summary>
     /// Parses one of the three accepted tokens into a <see cref="LengthUnit"/>. Moved here, unchanged in
@@ -35,8 +39,8 @@ internal static class LengthUnitTokens
     /// "Diagnostics and redaction" section -- and is built from the same token list <see cref="Syntax"/>
     /// uses, so the two can never disagree.
     /// </summary>
-    /// <exception cref="CliUsageException"><paramref name="text"/> is not one of the three accepted tokens.</exception>
-    internal static LengthUnit Parse(string optionName, string text)
+    /// <exception cref="FormatException"><paramref name="text"/> is not one of the three accepted tokens.</exception>
+    public static LengthUnit Parse(string optionName, string text)
     {
         for (int index = 0; index < Tokens.Length; index++)
         {
@@ -46,12 +50,12 @@ internal static class LengthUnitTokens
             }
         }
 
-        throw new CliUsageException($"--{optionName} must be one of: {string.Join(", ", Tokens)}.");
+        throw new FormatException($"--{optionName} must be one of: {string.Join(", ", Tokens)}.");
     }
 
     /// <summary>Returns <paramref name="unit"/>'s own CLI token.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="unit"/> is not a defined <see cref="LengthUnit"/> member.</exception>
-    internal static string TokenOf(LengthUnit unit) => unit switch
+    public static string TokenOf(LengthUnit unit) => unit switch
     {
         LengthUnit.UsSurveyFoot => "us-survey-foot",
         LengthUnit.InternationalFoot => "international-foot",

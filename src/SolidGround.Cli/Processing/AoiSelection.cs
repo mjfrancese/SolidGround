@@ -1,6 +1,8 @@
 using System.Globalization;
 using SolidGround.Cli.Options;
 using SolidGround.Core.Aois;
+using SolidGround.Core.Metadata;
+using SolidGround.Core.Processing;
 using SolidGround.Core.Units;
 
 namespace SolidGround.Cli.Processing;
@@ -17,9 +19,10 @@ internal enum AoiKind
 /// The CLI-only value describing whichever single AOI form the operator gave; <see langword="null"/> on
 /// <see cref="TerrainProcessingPipeline.RunAsync"/>'s own signature means "no AOI". See
 /// docs/architecture/cli-workflow.md's "AOI and clip derivation" section for how <see cref="ClipRegionFactory"/>
-/// consumes this value, and its "Options and defaults" section for the option table this type is bound from.
-/// Every distance-bearing member is <see cref="LinearDistance"/>, matching the Core signatures these values
-/// ultimately reach (<c>Wgs84RadiusAoi</c>, <c>ParcelGeometryAoi</c>, <c>ClipRegion.Circle</c>).
+/// consumes the <see cref="AreaOfInterest"/> <see cref="ToAreaOfInterest"/> builds from this value, and its
+/// "Options and defaults" section for the option table this type is bound from. Every distance-bearing member
+/// is <see cref="LinearDistance"/>, matching the Core signatures these values ultimately reach
+/// (<c>Wgs84RadiusAoi</c>, <c>ParcelGeometryAoi</c>, <c>ClipRegion.Circle</c>).
 /// </summary>
 internal sealed record AoiSelection
 {
@@ -42,6 +45,28 @@ internal sealed record AoiSelection
 
     // AoiKind.Parcel only; LinearDistance.Zero when --buffer was not given.
     internal LinearDistance Buffer { get; init; }
+
+    /// <summary>
+    /// Builds the equivalent <see cref="AreaOfInterest"/> for whichever single AOI form this selection holds,
+    /// performing exactly the same constructions <see cref="ClipRegionFactory"/> used to perform inline before
+    /// SolidGround Issue #15's Core lift moved it (and <see cref="TerrainProcessingPipeline"/>) into
+    /// <c>SolidGround.Core</c>. <paramref name="wgs84Reference"/> is used only for <see cref="AoiKind.Parcel"/>,
+    /// since a parcel's own <see cref="ParcelGeometryAoi.HorizontalReference"/> is always WGS 84 (see
+    /// docs/architecture/cli-workflow.md's "AOI and clip derivation" section for why); it is unused for the
+    /// other two kinds. A caller should build one <see cref="AreaOfInterest"/> instance and reuse it for every
+    /// purpose (a fetch envelope and a clip region alike), never call this method twice for the same AOI --
+    /// see <see cref="ClipRegionFactory.Build"/>'s own doc comment for why reconstruction is no longer needed.
+    /// </summary>
+    internal AreaOfInterest ToAreaOfInterest(HorizontalReference wgs84Reference) => Kind switch
+    {
+        AoiKind.BoundingBox => new Wgs84BoundingBoxAoi(West, South, East, North),
+        AoiKind.Radius => new Wgs84RadiusAoi(CenterLatitude, CenterLongitude, Radius),
+        AoiKind.Parcel => new ParcelGeometryAoi(ParcelFormat, ParcelText!, wgs84Reference, Buffer),
+        // Kind is this record's own property, not a method parameter, so ArgumentOutOfRangeException's
+        // paramName convention (CA2208) does not apply here; Kind is set only by Bind's three private
+        // builders below, each of which always sets exactly one of the three defined AoiKind members.
+        _ => throw new InvalidOperationException($"Unsupported AOI kind '{Kind}'."),
+    };
 
     /// <summary>
     /// Binds whichever single AOI form <paramref name="invocation"/> gave into an <see cref="AoiSelection"/>,

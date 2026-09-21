@@ -6,6 +6,7 @@ using SolidGround.Cli.Secrets;
 using SolidGround.Core.Aois;
 using SolidGround.Core.Exports;
 using SolidGround.Core.Metadata;
+using SolidGround.Core.Processing;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
@@ -34,8 +35,8 @@ internal static class RunCommand
         ProcessCommand.ValidateOutputDirectory(outputDirectory);
 
         AoiSelection aoi = AoiSelection.Bind(invocation, OptionTable.Run, required: true)!;
-        LocalOriginSelection origin = ProcessCommand.ParseOrigin(invocation);
-        LengthUnit outputUnit = LengthUnitTokens.Parse("unit", invocation.GetValue("unit") ?? LengthUnitTokens.DefaultToken);
+        LocalOriginRequest origin = ProcessCommand.ParseOrigin(invocation);
+        LengthUnit outputUnit = ProcessCommand.ParseLengthUnit("unit", invocation.GetValue("unit") ?? LengthUnitTokens.DefaultToken);
         SimplificationMethod method = ProcessCommand.ParseMethod(invocation);
         int budget = ProcessCommand.ParseBudget(invocation);
         double coverageFloor = ProcessCommand.ParseCoverageFloor(invocation);
@@ -74,7 +75,12 @@ internal static class RunCommand
         OpenTopographyUsgs1mSource source = new(httpClient, new StaticOpenTopographyApiKeyProvider(key));
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
-        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
+
+        // Built once, reused for both the fetch envelope below and the pipeline's own clip below, per
+        // SolidGround Issue #15's Core lift: ClipRegionFactory.Build no longer reconstructs an AreaOfInterest
+        // from flattened fields, so the caller must hand it the exact same instance used here.
+        AreaOfInterest areaOfInterest = aoi.ToAreaOfInterest(wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(areaOfInterest, wgs84Reference);
 
         host.StandardOutput.WriteLine("run: requesting OpenTopography...");
         FetchCommand.PrintFetchEnvelopeExpansion(host, "run", fetchEnvelopeExpansion);
@@ -115,7 +121,7 @@ internal static class RunCommand
 
         ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
-                grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, aoi, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
+                grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, areaOfInterest, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
             .ConfigureAwait(false);
 
         ProcessCommand.PrintClipStage(host, "run", verbose, aoi, grid, outcome.ClipResult);

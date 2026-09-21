@@ -2,9 +2,11 @@ using System.Globalization;
 using SolidGround.Cli.Options;
 using SolidGround.Cli.Processing;
 using SolidGround.Cli.Rasters;
+using SolidGround.Core.Aois;
 using SolidGround.Core.Clipping;
 using SolidGround.Core.Exports;
 using SolidGround.Core.Metadata;
+using SolidGround.Core.Processing;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Rasters;
 using SolidGround.Core.Simplification;
@@ -43,8 +45,8 @@ internal static class ProcessCommand
         string sourceJsonPath = explicitSourceJsonPath ?? defaultSourceJsonPath;
 
         AoiSelection? aoi = AoiSelection.Bind(invocation, OptionTable.Process, required: false);
-        LocalOriginSelection origin = ParseOrigin(invocation);
-        LengthUnit outputUnit = LengthUnitTokens.Parse("unit", invocation.GetValue("unit") ?? LengthUnitTokens.DefaultToken);
+        LocalOriginRequest origin = ParseOrigin(invocation);
+        LengthUnit outputUnit = ParseLengthUnit("unit", invocation.GetValue("unit") ?? LengthUnitTokens.DefaultToken);
         SimplificationMethod method = ParseMethod(invocation);
         int budget = ParseBudget(invocation);
         double coverageFloor = ParseCoverageFloor(invocation);
@@ -89,7 +91,7 @@ internal static class ProcessCommand
 
         string? cliVerticalDatum = invocation.GetValue("vertical-datum");
         LengthUnit? cliVerticalUnit = invocation.HasOption("vertical-unit")
-            ? LengthUnitTokens.Parse("vertical-unit", invocation.GetValue("vertical-unit")!)
+            ? ParseLengthUnit("vertical-unit", invocation.GetValue("vertical-unit")!)
             : null;
         string? cliGeoid = invocation.GetValue("geoid");
         VerticalReferenceResolution.ResolvedVerticalReference resolvedVertical = VerticalReferenceResolution.Resolve(
@@ -120,8 +122,17 @@ internal static class ProcessCommand
         cancellationToken.ThrowIfCancellationRequested();
 
         ReferenceOrigins referenceOrigins = new(ReferenceOrigin.Operator, resolvedVertical.Origin);
+
+        // Built once, here -- immediately before the one call site that consumes it -- from the exact wgs84
+        // reference ClipRegionFactory.Build's own parcel branch used to reconstruct internally before
+        // SolidGround Issue #15's Core lift (transform.Definition.SourceReference). Deliberately built this
+        // late, not right after `transform`, so a parcel AOI's own validation failure (for example, blank
+        // geometry) is reached only after the same stdout writes and grid parsing the pre-#15 code path
+        // always reached first -- keeping stdout/stderr byte-identical to before that lift, per Issue #15's
+        // own "no CLI option, exit code, stdout line, or golden fixture changes" rule.
+        AreaOfInterest? areaOfInterest = aoi?.ToAreaOfInterest(transform.Definition.SourceReference);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
-                grid, transform, verticalReference, referenceOrigins, sourceMetadata, aoi, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
+                grid, transform, verticalReference, referenceOrigins, sourceMetadata, areaOfInterest, origin, outputUnit, method, budget, coverageFloor, cancellationToken)
             .ConfigureAwait(false);
 
         PrintClipStage(host, "process", verbose, aoi, grid, outcome.ClipResult);
@@ -162,8 +173,59 @@ internal static class ProcessCommand
 
     // ---- shared by RunCommand (identical processing options and diagnostics) --------------------------
 
-    internal static LocalOriginSelection ParseOrigin(ParsedInvocation invocation) =>
-        LocalOriginSelection.Parse(invocation.GetValue("origin") ?? "southwest");
+    /// <summary>
+    /// Parses <c>--origin</c> directly into a <see cref="LocalOriginRequest"/>. Inlined here (rather than a
+    /// separate CLI-side selection type's own <c>Parse(string)</c> method) since SolidGround Issue #15 moved
+    /// <see cref="LocalOriginRequest"/>/<see cref="LocalOriginKind"/> into <c>SolidGround.Core</c>: parsing
+    /// this flag's text syntax is a CLI concern, not a Core one, so it stays here unchanged in behavior.
+    /// </summary>
+    /// <exception cref="CliUsageException">The text is not "southwest", "centroid", or 2-3 comma-separated finite invariant-culture doubles.</exception>
+    internal static LocalOriginRequest ParseOrigin(ParsedInvocation invocation)
+    {
+        string text = invocation.GetValue("origin") ?? "southwest";
+
+        if (text == "southwest")
+        {
+            return new LocalOriginRequest(LocalOriginKind.Southwest, 0, 0, 0);
+        }
+
+        if (text == "centroid")
+        {
+            return new LocalOriginRequest(LocalOriginKind.Centroid, 0, 0, 0);
+        }
+
+        string[] parts = text.Split(',');
+        double z = 0d;
+        if (parts.Length is 2 or 3
+            && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double x)
+            && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double y)
+            && (parts.Length == 2 || double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out z))
+            && double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(z))
+        {
+            return new LocalOriginRequest(LocalOriginKind.Explicit, x, y, z);
+        }
+
+        throw new CliUsageException("--origin must be 'southwest', 'centroid', or an <x>,<y>[,<z>] coordinate.");
+    }
+
+    /// <summary>
+    /// Parses one of <see cref="LengthUnitTokens"/>'s three accepted tokens, wrapping the Core parser's new
+    /// <see cref="FormatException"/> (SolidGround Issue #15) back into <see cref="CliUsageException"/> so this
+    /// is the CLI's one place that translation happens, and CLI-facing output text does not change. Shared by
+    /// every <c>--unit</c>/<c>--vertical-unit</c> call site in <c>ProcessCommand</c> and <c>RunCommand</c>.
+    /// </summary>
+    /// <exception cref="CliUsageException"><paramref name="text"/> is not one of the three accepted tokens.</exception>
+    internal static LengthUnit ParseLengthUnit(string optionName, string text)
+    {
+        try
+        {
+            return LengthUnitTokens.Parse(optionName, text);
+        }
+        catch (FormatException ex)
+        {
+            throw new CliUsageException(ex.Message, ex);
+        }
+    }
 
     internal static SimplificationMethod ParseMethod(ParsedInvocation invocation)
     {

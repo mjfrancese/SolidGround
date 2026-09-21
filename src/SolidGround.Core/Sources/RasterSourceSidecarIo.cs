@@ -1,20 +1,25 @@
 using System.Globalization;
 using System.Text.Json;
 using SolidGround.Core.Metadata;
-using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Units;
 
-namespace SolidGround.Cli.Rasters;
+namespace SolidGround.Core.Sources;
 
 /// <summary>
 /// Writes and strictly reads the <see cref="RasterSourceSidecar"/> <c>.source.json</c> document. See
 /// docs/architecture/cli-workflow.md's "Raster set persistence" section for the fixed property order
 /// <see cref="Write"/> emits and <see cref="Read"/> enforces, and its "Determinism" section for why the
 /// writer uses <see cref="Utf8JsonWriter"/> with an explicit <c>"\n"</c> newline instead of a reflection-based
-/// serializer.
+/// serializer. Lifted into <c>SolidGround.Core</c> for SolidGround Issue #15 (§0.2 of the design record,
+/// "fourth structural gap"): every internal validation-failure throw site below changed from the CLI-only
+/// <c>CliUsageException</c> (unreachable once this file's namespace left <c>SolidGround.Cli</c>) to
+/// <see cref="FormatException"/>, with every message's text unchanged. <c>CliApplication.RunAsync</c>'s
+/// existing <c>catch (FormatException ex)</c> already produces byte-identical CLI output to its former
+/// <c>catch (CliUsageException ex)</c>, so no CLI call site needed to change for this move to be
+/// CLI-observably silent.
 /// </summary>
-internal static class RasterSourceSidecarIo
+public static class RasterSourceSidecarIo
 {
     internal const string Schema = "solidground.raster-source";
     internal const int CurrentSchemaVersion = 3;
@@ -29,7 +34,7 @@ internal static class RasterSourceSidecarIo
     /// Writes <paramref name="sidecar"/> to <paramref name="destination"/> as indented, UTF-8, no-BOM JSON
     /// with a trailing <c>"\n"</c>. Does not close or dispose <paramref name="destination"/>.
     /// </summary>
-    internal static void Write(RasterSourceSidecar sidecar, Stream destination)
+    public static void Write(RasterSourceSidecar sidecar, Stream destination)
     {
         ArgumentNullException.ThrowIfNull(sidecar);
         ArgumentNullException.ThrowIfNull(destination);
@@ -213,69 +218,68 @@ internal static class RasterSourceSidecarIo
         writer.WriteEndObject();
     }
 
-    /// <exception cref="CliUsageException">
+    /// <exception cref="FormatException">
     /// The JSON is malformed, or any property is missing, unrecognized, duplicated, or wrongly typed, or
-    /// <c>schema</c>/<c>schemaVersion</c> do not match the constants above. <paramref name="sourcePath"/> is
-    /// named in the message; the raw bytes never are.
+    /// <c>schema</c>/<c>schemaVersion</c> do not match the constants above. <paramref name="sourcePathForErrors"/>
+    /// is named in the message; the raw bytes never are.
     /// </exception>
-    internal static RasterSourceSidecar Read(ReadOnlySpan<byte> json, string sourcePath)
+    public static RasterSourceSidecar Read(byte[] bytes, string sourcePathForErrors)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePathForErrors);
+        ArgumentNullException.ThrowIfNull(bytes);
 
         JsonDocument document;
         try
         {
-            // JsonDocument.Parse has no ReadOnlySpan<byte> overload (only ReadOnlyMemory<byte>,
-            // ReadOnlySequence<byte>, Stream, and string), so the span is copied once here into an array.
-            document = JsonDocument.Parse(json.ToArray(), DocumentOptions);
+            document = JsonDocument.Parse(bytes, DocumentOptions);
         }
         catch (JsonException ex)
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' is not well-formed JSON.", ex);
+            throw new FormatException($"The raster source sidecar '{sourcePathForErrors}' is not well-formed JSON.", ex);
         }
 
         using (document)
         {
             JsonElement root = document.RootElement;
-            RequireObject(root, sourcePath, "$");
+            RequireObject(root, sourcePathForErrors, "$");
 
-            Dictionary<string, JsonElement> top = ReadObjectProperties(root, sourcePath, "$",
+            Dictionary<string, JsonElement> top = ReadObjectProperties(root, sourcePathForErrors, "$",
                 [
                     "schema", "schemaVersion", "sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel",
                     "vertical", "horizontalReferenceOrigin", "verticalReferenceOrigin", "acquisition",
                 ]);
 
-            string schema = RequireString(top["schema"], sourcePath, "$.schema");
+            string schema = RequireString(top["schema"], sourcePathForErrors, "$.schema");
             if (!string.Equals(schema, Schema, StringComparison.Ordinal))
             {
                 // Never echo the sidecar's actual value here -- see docs/architecture/cli-workflow.md's
                 // "Diagnostics and redaction" section.
-                throw new CliUsageException(
-                    $"'{sourcePath}': property 'schema' must be \"{Schema}\".");
+                throw new FormatException(
+                    $"'{sourcePathForErrors}': property 'schema' must be \"{Schema}\".");
             }
 
-            int schemaVersion = RequireInt(top["schemaVersion"], sourcePath, "$.schemaVersion");
+            int schemaVersion = RequireInt(top["schemaVersion"], sourcePathForErrors, "$.schemaVersion");
             if (schemaVersion != CurrentSchemaVersion)
             {
                 // Never echo the sidecar's actual value here -- see docs/architecture/cli-workflow.md's
                 // "Diagnostics and redaction" section.
-                throw new CliUsageException(
-                    $"'{sourcePath}': property 'schemaVersion' must be {CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}.");
+                throw new FormatException(
+                    $"'{sourcePathForErrors}': property 'schemaVersion' must be {CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}.");
             }
 
-            string sourceName = RequireString(top["sourceName"], sourcePath, "$.sourceName");
-            string datasetIdentifier = RequireString(top["datasetIdentifier"], sourcePath, "$.datasetIdentifier");
+            string sourceName = RequireString(top["sourceName"], sourcePathForErrors, "$.sourceName");
+            string datasetIdentifier = RequireString(top["datasetIdentifier"], sourcePathForErrors, "$.datasetIdentifier");
 
             JsonElement collectionPeriodElement = top["collectionPeriod"];
             CollectionPeriod? collectionPeriod = collectionPeriodElement.ValueKind == JsonValueKind.Null
                 ? null
-                : ParseCollectionPeriod(collectionPeriodElement, sourcePath, "$.collectionPeriod");
+                : ParseCollectionPeriod(collectionPeriodElement, sourcePathForErrors, "$.collectionPeriod");
 
-            string? qualityLevel = RequireStringOrNull(top["qualityLevel"], sourcePath, "$.qualityLevel");
-            RasterSourceVertical vertical = ParseVertical(top["vertical"], sourcePath, "$.vertical");
-            ReferenceOrigin horizontalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["horizontalReferenceOrigin"], sourcePath, "$.horizontalReferenceOrigin");
-            ReferenceOrigin verticalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["verticalReferenceOrigin"], sourcePath, "$.verticalReferenceOrigin");
-            RasterSourceAcquisition acquisition = ParseAcquisition(top["acquisition"], sourcePath, "$.acquisition");
+            string? qualityLevel = RequireStringOrNull(top["qualityLevel"], sourcePathForErrors, "$.qualityLevel");
+            RasterSourceVertical vertical = ParseVertical(top["vertical"], sourcePathForErrors, "$.vertical");
+            ReferenceOrigin horizontalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["horizontalReferenceOrigin"], sourcePathForErrors, "$.horizontalReferenceOrigin");
+            ReferenceOrigin verticalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["verticalReferenceOrigin"], sourcePathForErrors, "$.verticalReferenceOrigin");
+            RasterSourceAcquisition acquisition = ParseAcquisition(top["acquisition"], sourcePathForErrors, "$.acquisition");
 
             return new RasterSourceSidecar(
                 sourceName, datasetIdentifier, collectionPeriod, qualityLevel, vertical,
@@ -297,7 +301,7 @@ internal static class RasterSourceSidecarIo
         }
         catch (ArgumentException ex)
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}'.", ex);
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}'.", ex);
         }
     }
 
@@ -394,14 +398,14 @@ internal static class RasterSourceSidecarIo
     //
     // Duplicated in shape from TerrainExportBundleReader's own private ReadObjectProperties/Require* helpers
     // (that type is internal to a different assembly, so it cannot be referenced directly) but reporting
-    // CliUsageException and always naming sourcePath rather than only the in-document JSON path, per
+    // FormatException and always naming sourcePath rather than only the in-document JSON path, per
     // docs/architecture/cli-workflow.md's "Raster set persistence" section.
 
     private static void RequireObject(JsonElement value, string sourcePath, string jsonPath)
     {
         if (value.ValueKind != JsonValueKind.Object)
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an object.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an object.");
         }
     }
 
@@ -413,7 +417,7 @@ internal static class RasterSourceSidecarIo
         {
             if (!properties.TryAdd(property.Name, property.Value))
             {
-                throw new CliUsageException(
+                throw new FormatException(
                     $"The raster source sidecar '{sourcePath}' has a duplicate property '{jsonPath}.{property.Name}'.");
             }
         }
@@ -422,7 +426,7 @@ internal static class RasterSourceSidecarIo
         {
             if (!expectedNames.Contains(name, StringComparer.Ordinal))
             {
-                throw new CliUsageException(
+                throw new FormatException(
                     $"The raster source sidecar '{sourcePath}' has an unrecognized property '{jsonPath}.{name}'.");
             }
         }
@@ -431,7 +435,7 @@ internal static class RasterSourceSidecarIo
         {
             if (!properties.ContainsKey(name))
             {
-                throw new CliUsageException(
+                throw new FormatException(
                     $"The raster source sidecar '{sourcePath}' is missing required property '{jsonPath}.{name}'.");
             }
         }
@@ -443,7 +447,7 @@ internal static class RasterSourceSidecarIo
     {
         if (value.ValueKind != JsonValueKind.String)
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a string.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a string.");
         }
 
         return value.GetString()!;
@@ -456,7 +460,7 @@ internal static class RasterSourceSidecarIo
     {
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out int result))
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an integer.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an integer.");
         }
 
         return result;
@@ -466,7 +470,7 @@ internal static class RasterSourceSidecarIo
     {
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out long result))
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an integer.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an integer.");
         }
 
         return result;
@@ -476,7 +480,7 @@ internal static class RasterSourceSidecarIo
     {
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out double result) || !double.IsFinite(result))
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a finite number.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a finite number.");
         }
 
         return result;
@@ -486,7 +490,7 @@ internal static class RasterSourceSidecarIo
     {
         if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a boolean.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a boolean.");
         }
 
         return value.GetBoolean();
@@ -497,7 +501,7 @@ internal static class RasterSourceSidecarIo
         string text = RequireString(value, sourcePath, jsonPath);
         if (!DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly result))
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a yyyy-MM-dd date.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected a yyyy-MM-dd date.");
         }
 
         return result;
@@ -517,7 +521,7 @@ internal static class RasterSourceSidecarIo
         {
             // Never echo the sidecar's actual value here -- see docs/architecture/cli-workflow.md's
             // "Diagnostics and redaction" section.
-            throw new CliUsageException($"'{sourcePath}': property '{jsonPath}' is not a recognized value.");
+            throw new FormatException($"'{sourcePath}': property '{jsonPath}' is not a recognized value.");
         }
 
         return Enum.Parse<TEnum>(text, ignoreCase: false);
@@ -530,7 +534,7 @@ internal static class RasterSourceSidecarIo
     {
         if (value.ValueKind != JsonValueKind.Array)
         {
-            throw new CliUsageException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an array.");
+            throw new FormatException($"The raster source sidecar '{sourcePath}' has an invalid '{jsonPath}': expected an array.");
         }
 
         JsonElement[] items = [.. value.EnumerateArray()];

@@ -1,5 +1,3 @@
-using SolidGround.Cli;
-using SolidGround.Cli.Options;
 using SolidGround.Core.Units;
 
 namespace SolidGround.Tests;
@@ -10,7 +8,11 @@ namespace SolidGround.Tests;
 /// <see cref="LengthUnitTokens.DefaultToken"/> matches <see cref="LengthConverter.DefaultOutputUnit"/>, and
 /// that an unknown token is rejected without being echoed. See docs/architecture/cli-workflow.md's "Units"
 /// section and docs/architecture/coordinate-transformation-and-units.md's "`LengthConverter.DefaultOutputUnit`"
-/// section.
+/// section. Moved from `SolidGround.Cli.Options` to `SolidGround.Core.Units` for SolidGround Issue #15 (the
+/// Core lift, §0.2/§0.4 item 4 of the design record); the round-trip/default-token assertions carry over
+/// unchanged, but the rejection test's exception type changed from the CLI-only <c>CliUsageException</c> to
+/// <see cref="FormatException"/>, since <see cref="LengthUnitTokens.Parse"/> itself changed to throw that
+/// type once it left <c>SolidGround.Cli</c>.
 /// </summary>
 public sealed class LengthUnitTokensTests
 {
@@ -31,11 +33,11 @@ public sealed class LengthUnitTokensTests
     }
 
     [Fact]
-    public void ParseRejectsAnUnknownTokenWithACliUsageExceptionThatNeverEchoesIt()
+    public void ParseRejectsAnUnknownTokenWithAFormatExceptionThatNeverEchoesIt()
     {
         const string unknownToken = "furlong";
 
-        CliUsageException exception = Assert.Throws<CliUsageException>(() => LengthUnitTokens.Parse("unit", unknownToken));
+        FormatException exception = Assert.Throws<FormatException>(() => LengthUnitTokens.Parse("unit", unknownToken));
 
         Assert.DoesNotContain(unknownToken, exception.Message, StringComparison.Ordinal);
     }

@@ -5,6 +5,7 @@ using SolidGround.Cli.Rasters;
 using SolidGround.Cli.Secrets;
 using SolidGround.Core.Aois;
 using SolidGround.Core.Metadata;
+using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Terrain;
@@ -65,7 +66,7 @@ internal static class FetchCommand
         OpenTopographyUsgs1mSource source = new(httpClient, new StaticOpenTopographyApiKeyProvider(key));
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
-        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi, wgs84Reference);
+        (Wgs84BoundingBoxAoi fetchEnvelope, FetchEnvelopeExpansion fetchEnvelopeExpansion) = ClipRegionFactory.BuildFetchEnvelope(aoi.ToAreaOfInterest(wgs84Reference), wgs84Reference);
 
         host.StandardOutput.WriteLine("fetch: requesting OpenTopography...");
         PrintFetchEnvelopeExpansion(host, "fetch", fetchEnvelopeExpansion);

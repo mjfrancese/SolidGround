@@ -6,17 +6,21 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
-namespace SolidGround.Cli.Processing;
+namespace SolidGround.Core.Processing;
 
 /// <summary>
-/// Turns an <see cref="AoiSelection"/> into either a WGS 84 fetch envelope or a projected clip region. One
+/// Turns an <see cref="AreaOfInterest"/> into either a WGS 84 fetch envelope or a projected clip region. One
 /// shared function for `process`, `fetch`, and `run`, so the bounding-box, radius, and parcel paths can
 /// never diverge between commands. See docs/architecture/cli-workflow.md's "AOI and clip derivation"
 /// section for the per-form algorithm this implements and the resolved ambiguities it documents (why a
 /// parcel is always WGS 84, and why re-parsing an acquisition's own well-known text for a second
-/// <see cref="HorizontalReference"/> is safe).
+/// <see cref="HorizontalReference"/> is safe). Lifted into <c>SolidGround.Core</c> for SolidGround Issue #15:
+/// both methods now take the caller's own already-built <see cref="AreaOfInterest"/> directly and dispatch on
+/// its concrete type, rather than a CLI-only flattened selection -- the caller already holds one of
+/// <see cref="Wgs84BoundingBoxAoi"/>, <see cref="Wgs84RadiusAoi"/>, or <see cref="ParcelGeometryAoi"/>, so
+/// neither method ever reconstructs one from flattened fields.
 /// </summary>
-internal static class ClipRegionFactory
+public static class ClipRegionFactory
 {
     /// <summary>
     /// Builds the WGS 84 bounding box `fetch`/`run` request with, together with whether/how
@@ -28,16 +32,16 @@ internal static class ClipRegionFactory
     /// <c>Parcel</c> branch calls <see cref="AoiNormalizer.Normalize"/> too, but explicitly disables the
     /// minimum-side expansion, since that guard exists only for the fetch request this method builds.
     /// </summary>
-    internal static (Wgs84BoundingBoxAoi Envelope, FetchEnvelopeExpansion Expansion) BuildFetchEnvelope(AoiSelection aoi, HorizontalReference wgs84Reference)
+    public static (Wgs84BoundingBoxAoi Envelope, FetchEnvelopeExpansion Expansion) BuildFetchEnvelope(AreaOfInterest aoi, HorizontalReference wgs84Reference)
     {
         ArgumentNullException.ThrowIfNull(aoi);
         ArgumentNullException.ThrowIfNull(wgs84Reference);
 
-        NormalizedAoi normalized = aoi.Kind switch
+        NormalizedAoi normalized = aoi switch
         {
-            AoiKind.BoundingBox => AoiNormalizer.Normalize(new Wgs84BoundingBoxAoi(aoi.West, aoi.South, aoi.East, aoi.North)),
-            AoiKind.Radius => AoiNormalizer.Normalize(new Wgs84RadiusAoi(aoi.CenterLatitude, aoi.CenterLongitude, aoi.Radius)),
-            AoiKind.Parcel => AoiNormalizer.Normalize(new ParcelGeometryAoi(aoi.ParcelFormat, aoi.ParcelText!, wgs84Reference, aoi.Buffer)),
+            Wgs84BoundingBoxAoi bbox => AoiNormalizer.Normalize(bbox),
+            Wgs84RadiusAoi radius => AoiNormalizer.Normalize(radius),
+            ParcelGeometryAoi parcel => AoiNormalizer.Normalize(parcel),
             _ => throw new ArgumentOutOfRangeException(nameof(aoi)),
         };
 
@@ -45,41 +49,39 @@ internal static class ClipRegionFactory
     }
 
     /// <summary>Builds the clip region in the grid's own (projected) reference. Never called with a null AOI: step 1 of the processing pipeline skips clipping entirely for that case.</summary>
-    internal static ClipRegion Build(AoiSelection aoi, IHorizontalCoordinateTransform wgs84ToGridTransform)
+    public static ClipRegion Build(AreaOfInterest aoi, IHorizontalCoordinateTransform wgs84ToGridTransform)
     {
         ArgumentNullException.ThrowIfNull(aoi);
         ArgumentNullException.ThrowIfNull(wgs84ToGridTransform);
 
         HorizontalReference gridReference = wgs84ToGridTransform.Definition.TargetReference;
-        switch (aoi.Kind)
+        switch (aoi)
         {
-            case AoiKind.BoundingBox:
+            case Wgs84BoundingBoxAoi bbox:
             {
-                Coordinate2D sw = wgs84ToGridTransform.Forward(new Coordinate2D(aoi.West, aoi.South));
-                Coordinate2D se = wgs84ToGridTransform.Forward(new Coordinate2D(aoi.East, aoi.South));
-                Coordinate2D ne = wgs84ToGridTransform.Forward(new Coordinate2D(aoi.East, aoi.North));
-                Coordinate2D nw = wgs84ToGridTransform.Forward(new Coordinate2D(aoi.West, aoi.North));
+                Coordinate2D sw = wgs84ToGridTransform.Forward(new Coordinate2D(bbox.WestLongitude, bbox.SouthLatitude));
+                Coordinate2D se = wgs84ToGridTransform.Forward(new Coordinate2D(bbox.EastLongitude, bbox.SouthLatitude));
+                Coordinate2D ne = wgs84ToGridTransform.Forward(new Coordinate2D(bbox.EastLongitude, bbox.NorthLatitude));
+                Coordinate2D nw = wgs84ToGridTransform.Forward(new Coordinate2D(bbox.WestLongitude, bbox.NorthLatitude));
                 string wkt = BuildPolygonWkt(sw, se, ne, nw);
                 PolygonalRegion region = ParcelGeometryParser.Parse(ParcelGeometryFormat.Wkt, wkt, gridReference);
                 return ClipRegion.FromRegion(region, LinearDistance.Zero);
             }
 
-            case AoiKind.Radius:
+            case Wgs84RadiusAoi radius:
             {
-                Coordinate2D center = wgs84ToGridTransform.Forward(new Coordinate2D(aoi.CenterLongitude, aoi.CenterLatitude));
-                return ClipRegion.Circle(center, aoi.Radius, gridReference);
+                Coordinate2D center = wgs84ToGridTransform.Forward(new Coordinate2D(radius.Longitude, radius.Latitude));
+                return ClipRegion.Circle(center, radius.Radius, gridReference);
             }
 
-            case AoiKind.Parcel:
+            case ParcelGeometryAoi parcel:
             {
-                HorizontalReference wgs84 = wgs84ToGridTransform.Definition.SourceReference;
-                ParcelGeometryAoi parcelAoi = new(aoi.ParcelFormat, aoi.ParcelText!, wgs84, aoi.Buffer);
                 // Only NormalizedAoi.Parcel and NormalizedAoi.Buffer are read below: the fetch envelope and its
                 // minimum-side expansion exist solely to satisfy OpenTopography's request-area minimum and are
                 // irrelevant to a clip that never calls BuildFetchEnvelope. Disabling the expansion here keeps a
                 // parcel near a pole or the antimeridian from failing this offline clip over a fetch-only guard
                 // it does not need (SolidGround Issue #23).
-                NormalizedAoi normalized = AoiNormalizer.Normalize(parcelAoi, new AoiNormalizationOptions { MinimumFetchEnvelopeSide = LinearDistance.Zero });
+                NormalizedAoi normalized = AoiNormalizer.Normalize(parcel, new AoiNormalizationOptions { MinimumFetchEnvelopeSide = LinearDistance.Zero });
                 PolygonalRegion projected = PolygonalRegionReprojection.Reproject(normalized.Parcel!, wgs84ToGridTransform, HorizontalTransformDirection.Forward);
                 return ClipRegion.FromRegion(projected, normalized.Buffer);
             }

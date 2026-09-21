@@ -1,17 +1,19 @@
 using SolidGround.Core.Metadata;
-using SolidGround.Core.Sources;
 using SolidGround.Core.Units;
 
-namespace SolidGround.Cli.Rasters;
+namespace SolidGround.Core.Sources;
 
 /// <summary>
-/// The CLI-owned <c>.source.json</c> sidecar written beside a fetched raster's <c>.asc</c>/<c>.prj</c> pair,
-/// and read back by <c>process</c> when it is present. See docs/architecture/cli-workflow.md's "Raster set
-/// persistence" section for this document's fixed property order, and its "Secrets and key resolution" and
-/// "Diagnostics and redaction" sections for why no field here ever carries a timestamp or a key: every value
-/// is already redacted by the source that produced it.
+/// The <c>.source.json</c> sidecar written beside a fetched raster's <c>.asc</c>/<c>.prj</c> pair, and read
+/// back by `process` (CLI) or the Revit add-in's own `process` mode when it is present. See
+/// docs/architecture/cli-workflow.md's "Raster set persistence" section for this document's fixed property
+/// order, and its "Secrets and key resolution" and "Diagnostics and redaction" sections for why no field here
+/// ever carries a timestamp or a key: every value is already redacted by the source that produced it. Lifted
+/// into <c>SolidGround.Core</c> for SolidGround Issue #15 (orchestrator decision 3's full-lift resolution,
+/// §0.2 of the design record): the CLI's `process` command and `SolidGround.Revit`'s own process-mode input
+/// share this exact type, and its move here made no CLI-observable change (all fields unchanged).
 /// </summary>
-internal sealed record RasterSourceSidecar(
+public sealed record RasterSourceSidecar(
     string SourceName,
     string DatasetIdentifier,
     CollectionPeriod? CollectionPeriod,
@@ -22,7 +24,7 @@ internal sealed record RasterSourceSidecar(
     RasterSourceAcquisition Acquisition);
 
 /// <summary>The vertical reference recorded for a fetched raster.</summary>
-internal sealed record RasterSourceVertical(string Datum, LengthUnit Unit, string? GeoidModel);
+public sealed record RasterSourceVertical(string Datum, LengthUnit Unit, string? GeoidModel);
 
 /// <summary>
 /// Redacted evidence about how a fetched raster's response was interpreted, carried through unchanged from
@@ -30,7 +32,7 @@ internal sealed record RasterSourceVertical(string Datum, LengthUnit Unit, strin
 /// actually requested and whether/how it was widened past OpenTopography's own undocumented minimum request
 /// area.
 /// </summary>
-internal sealed record RasterSourceAcquisition(
+public sealed record RasterSourceAcquisition(
     string RedactedRequestUri,
     int StatusCode,
     string? ContentType,
@@ -46,7 +48,7 @@ internal sealed record RasterSourceAcquisition(
 /// <c>OpenTopographyMetadataRequestEvidence</c>; present only when <see cref="RasterSourceAcquisition.ReferenceSource"/>
 /// is <c>"GeoTiffGeoKeys"</c>.
 /// </summary>
-internal sealed record RasterSourceMetadataRequest(
+public sealed record RasterSourceMetadataRequest(
     string RedactedRequestUri,
     int StatusCode,
     string? ContentType,
@@ -66,7 +68,7 @@ internal sealed record RasterSourceMetadataRequest(
 /// section: this is the only structured record of the padded envelope — the design deliberately does not add
 /// a general AOI-provenance field, since the redacted request URI already carries the identical box verbatim.
 /// </summary>
-internal sealed record RasterSourceFetchEnvelope(
+public sealed record RasterSourceFetchEnvelope(
     double West,
     double South,
     double East,

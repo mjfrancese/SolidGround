@@ -1,8 +1,9 @@
 using System.Runtime.CompilerServices;
 
-// Issue #25 (see docs/architecture/cli-workflow.md's "Units" section): SolidGround.Tests.LengthUnitTokensTests
-// exercises `Options.LengthUnitTokens` -- internal, per AGENTS.md's Phase-1 scope, because it is a CLI-only
-// helper with no reason to be part of the CLI's public surface -- directly rather than only indirectly
-// through `CliApplication.RunAsync`'s stdout/stderr, so its round-trip and rejection behavior can be asserted
-// without depending on any one command's option wiring.
+// Originally added for Issue #25 so SolidGround.Tests.LengthUnitTokensTests could exercise the CLI's own
+// `Options.LengthUnitTokens` -- internal at the time -- directly rather than only indirectly through
+// CliApplication.RunAsync's stdout/stderr. SolidGround Issue #15's Core lift moved LengthUnitTokens (and
+// several sibling types) into SolidGround.Core, public, so that original reason no longer applies; this grant
+// is left in place as a general-purpose seam for any other SolidGround.Cli-internal member a future test
+// needs to exercise directly, per the same reasoning.
 [assembly: InternalsVisibleTo("SolidGround.Tests")]

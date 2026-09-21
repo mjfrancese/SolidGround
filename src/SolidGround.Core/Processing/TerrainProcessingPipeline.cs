@@ -1,3 +1,4 @@
+using SolidGround.Core.Aois;
 using SolidGround.Core.Clipping;
 using SolidGround.Core.Exports;
 using SolidGround.Core.Geometry;
@@ -9,7 +10,7 @@ using SolidGround.Core.Terrain;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
-namespace SolidGround.Cli.Processing;
+namespace SolidGround.Core.Processing;
 
 /// <summary>
 /// <see cref="TerrainProcessingPipeline.RunAsync"/>'s result: the assembled export payload plus the
@@ -19,7 +20,7 @@ namespace SolidGround.Cli.Processing;
 /// do not themselves retain. <see cref="ClipResult"/> is <see langword="null"/> exactly when no AOI was
 /// given (the whole grid was processed).
 /// </summary>
-internal sealed record TerrainProcessingOutcome(
+public sealed record TerrainProcessingOutcome(
     TerrainExportPayload Payload,
     GridClipResult? ClipResult,
     SimplificationDiagnostics? SimplificationDiagnostics);
@@ -29,22 +30,24 @@ internal sealed record TerrainProcessingOutcome(
 /// an already-parsed grid and an already-built WGS84-to-grid transform. Shared verbatim by `process` and
 /// `run` -- see docs/architecture/cli-workflow.md's "Commands" section: "share one internal processing
 /// pipeline... so their clipping, local-origin, unit, and simplification behavior can never drift apart from
-/// each other". Callers are responsible for building <paramref name="grid"/>/<paramref name="wgs84ToGridTransform"/>
+/// each other". Lifted into <c>SolidGround.Core</c> for SolidGround Issue #15 so <c>SolidGround.Revit</c> can
+/// reuse it without a back-reference to <c>SolidGround.Cli</c>; the CLI's `process` and `run` commands call
+/// this same type unchanged. Callers are responsible for building <paramref name="grid"/>/<paramref name="wgs84ToGridTransform"/>
 /// such that <c>wgs84ToGridTransform.Definition.TargetReference == grid.HorizontalReference</c> already holds
 /// (true by construction for `process`; explicitly checked by `RunCommand` before calling this) and that
 /// <paramref name="verticalReference"/> is the exact same value used to parse <paramref name="grid"/>, so
 /// `TerrainExportPayloadAssembler.Assemble`'s own equality checks hold trivially.
 /// </summary>
-internal static class TerrainProcessingPipeline
+public static class TerrainProcessingPipeline
 {
-    internal static async Task<TerrainProcessingOutcome> RunAsync(
+    public static async Task<TerrainProcessingOutcome> RunAsync(
         ElevationGrid grid,
         IHorizontalCoordinateTransform wgs84ToGridTransform,
         VerticalReference verticalReference,
         ReferenceOrigins referenceOrigins,
         ElevationSourceMetadata sourceMetadata,
-        AoiSelection? aoi,
-        LocalOriginSelection origin,
+        AreaOfInterest? aoi,
+        LocalOriginRequest origin,
         LengthUnit outputUnit,
         SimplificationMethod method,
         int pointBudget,
