@@ -1,3 +1,6 @@
+using System.Text.Json;
+using SolidGround.Core.Processing;
+
 namespace SolidGround.Core.Units;
 
 /// <summary>
@@ -62,4 +65,25 @@ public static class LengthUnitTokens
         LengthUnit.Meter => "meter",
         _ => throw new ArgumentOutOfRangeException(nameof(unit), unit, "Unsupported length unit."),
     };
+
+    /// <summary>
+    /// The exact camelCase token <see cref="TerrainRequestSettings.JsonOptions"/>'s <c>JsonStringEnumConverter</c>
+    /// produces for <paramref name="unit"/> (for example <c>"usSurveyFoot"</c>) -- deliberately different from
+    /// <see cref="TokenOf"/>'s kebab-case CLI flag tokens. SolidGround Issue #16's design record §2 lifted
+    /// this out of what was previously <c>CreateToposolidCommand.LengthUnitToken</c>, a private Revit-side
+    /// helper with the identical one-line body, so the placement record's <c>unitConversion.outputUnit</c>
+    /// field and the Extensible Storage entity's <c>outputUnitToken</c> field can share one call site and
+    /// never drift from each other or from <see cref="TerrainRequestSettings.JsonOptions"/>'s own decode
+    /// convention.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="unit"/> is not a defined <see cref="LengthUnit"/> member.</exception>
+    public static string SettingsToken(LengthUnit unit)
+    {
+        if (!Enum.IsDefined(unit))
+        {
+            throw new ArgumentOutOfRangeException(nameof(unit), unit, "Unsupported length unit.");
+        }
+
+        return JsonSerializer.Serialize(unit, TerrainRequestSettings.JsonOptions).Trim('"');
+    }
 }
