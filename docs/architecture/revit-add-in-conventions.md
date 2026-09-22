@@ -151,6 +151,17 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 - Field list: source dataset, collection date, quality level, horizontal datum, vertical datum, original and retained point counts, elevation minimum and maximum, output unit and foot definition, the complete local-origin offset, plus the build-identity fields the owner added (owner decision 7): the `SolidGround.Revit` assembly's informational version, MVID, and SHA-256.
 - The exact `SchemaBuilder`/`Element.GetEntity()`/`DeleteEntity()`/`AccessLevel` API shape was verified for Revit 2027 on 2026-09-20; see `revit-2027-verification-and-host-design.md`, item 8.
 
+**Update, Issue #16 (2026-09-21):** this field list is now the real schema
+`SolidGround_Provenance_Toposolid` (GUID `bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e`, `CurrentVersion = 1`, 36
+fields), defined in `SolidGround.Core.Provenance.ExtensibleStorageProvenanceSchema`/
+`ExtensibleStorageProvenanceValues` and consumed by a `SchemaBuilder` call in
+`SolidGround.Revit.Provenance.ProvenanceSchemaAdapter`, attached by
+`SolidGround.Revit.Provenance.ProvenanceEntityWriter`, exactly matching the Core/Addin split, the
+freshly-minted-GUID-plus-explicit-`schemaVersion`-field mechanism, and the `AccessLevel.Public`
+read/`AccessLevel.Vendor` write pair adopted above. See
+`docs/architecture/revit-extensible-storage-provenance.md` for the full field table, the Revit-side
+write/read-back design, and the manual evidence plan.
+
 ## Items that need Revit 2027 verification before implementation
 
 These 14 items are the work of Issue #13. Issue #13 verified all 14 of them on 2026-09-20; the results, the locked thin-host design, and the manual integration test plan are recorded in `revit-2027-verification-and-host-design.md`. Item 2's specific `Result.Failed`/`Result.Cancelled` Undo-stack side effect remains a runtime-only open question deferred to that plan's manual test step 5, matching several other items' residual runtime-only gaps. `SolidGround.Revit` must not be scaffolded against an assumption these items leave open.

@@ -332,6 +332,13 @@ that never touches `Create`/`Verify`). Autodesk's `Transaction` class-page docum
 path above calls `RollBack()` explicitly and reads the returned status, and the `using` statement around
 `Transaction` is a safety net only.
 
+**Update, Issue #16 (2026-09-21):** rows 21a–21c (see "Error catalogue" below) are new failure scenarios, not a
+new `Result`-code branch. Every one of them throws from inside the Issue #16 hook, which sits inside the same
+widened `try` this table's last row already covers ("any exception after `Start()` not covered above ... the
+Issue #16 hook throwing, or `Commit()` itself throwing"); `Result` is still derived only from the observed
+`TransactionStatus` (`Cancelled` if `RolledBack`, else `Failed`), and only `ex.Message` differs per sub-case.
+No new catch clause and no new dialog were added for Issue #16.
+
 ### Level and ToposolidType selection
 
 `LevelAndTypeResolver` never calls `Level.Create`, never creates or duplicates a `ToposolidType`. It projects
@@ -407,6 +414,16 @@ and failure handling" above), any exception it raises is caught by the same gene
 when (...)` that rolls back (or reads the already-ended status) and derives `Result` from `TransactionStatus`
 exactly like every other post-`Start()` failure — Issue #16 does not need its own exception-handling path at
 this call site.
+
+**Update, Issue #16 (2026-09-21):** the hook is now supplied. `CreateToposolidCommand.cs`'s line-669/670
+assignment reads `ToposolidCreatedHook? postCreationHook = ProvenanceEntityWriter.Attach; // Issue #16.` — a
+bare method-group reference, matching the delegate's signature exactly, with no lambda and no change to the
+delegate declaration itself (see "Transaction status and the Result-code policy" above and "Error catalogue"
+below for the exact failure rows this adds). `SolidGround.Revit.Provenance.ProvenanceEntityWriter.Attach`
+builds the Extensible Storage entity from `payload.Provenance`, publishes or verifies the schema, writes all
+36 fields, then immediately reads them back and reconstructs the source coordinate before the transaction can
+commit, throwing on any drift. See `docs/architecture/revit-extensible-storage-provenance.md` for the full
+schema, field list, Revit-side write/read-back design, and manual evidence plan.
 
 ## Settings file reference
 
@@ -706,7 +723,7 @@ serializer.
 ```jsonc
 {
   "schema": "solidground.revit-placement",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "createdUtc": "2026-09-21T04:00:00Z",
   "exportDocument": "terrain.solidground.json",
   "exportPoints": "terrain.points.csv",
@@ -740,7 +757,8 @@ serializer.
     "activeProjectLocationName": "Internal"
   },
   "sharedCoordinatesStatement": "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
-  "pointCounts": { "original": 48213, "retained": 14998, "budget": 15000 }
+  "pointCounts": { "original": 48213, "retained": 14998, "budget": 15000 },
+  "extensibleStorage": { "schemaGuid": "bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e", "schemaVersion": 1 }
 }
 ```
 
@@ -762,6 +780,26 @@ against the same `.asc`, only approximately true for `fetch` mode (OpenTopograph
 slightly after minimum-envelope padding). For a placement meant to be reproduced identically later,
 `localOrigin.kind: "explicit"` with a prior run's own recorded `localOrigin.sourceX`/`sourceY`/`sourceElevation`
 pasted back into settings.json is the only guaranteed-stable choice.
+
+**Update, Issue #16 (2026-09-21):** `PlacementRecordDraft.SchemaVersion`/`PlacementRecord`'s schema-version
+constant bumps **1 → 2**: this record's own required top-level shape changed, distinct from
+`TerrainProvenance.CurrentSchemaVersion` (2) and distinct from the new Extensible Storage schema's own
+`CurrentVersion` (1, see below) — three separate version counters that happen to share a field name. A new
+nested record, `PlacementExtensibleStorageRecord(string SchemaGuid, int SchemaVersion)`, is added to
+`PlacementRecordDraft`/`PlacementRecord` and rendered as a new top-level object, `extensibleStorage`, appended
+immediately after `pointCounts`:
+
+```jsonc
+"extensibleStorage": { "schemaGuid": "bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e", "schemaVersion": 1 }
+```
+
+There is no boolean "attached" field: a placement-record JSON file can exist on disk only once Extensible
+Storage attachment has already succeeded (row 21a below is fatal, like every other row 21 sub-case), so the
+`schemaGuid`/`schemaVersion` pair alone already tells a reader that provenance was attached. Both values are
+Core compile-time constants (`SolidGround.Core.Provenance.ExtensibleStorageProvenanceSchema.SchemaGuidText`/
+`.CurrentVersion`), so `BuildPlacementDraft` — which still runs before the Issue #16 hook, with no reordering
+— can reference them directly. See `docs/architecture/revit-extensible-storage-provenance.md` for the full
+36-field Extensible Storage schema this cross-reference points at.
 
 ## Error catalogue
 
@@ -796,11 +834,22 @@ shows its own distinct headline.
 | 19 | `IFailuresPreprocessor` observed a blocking (`Error`/`DocumentCorruption`) failure | Transaction | Cancelled if `RolledBack`, else Failed | "Revit reported a problem while creating the toposolid." + joined failure messages |
 | 20 | `Toposolid.Create`/`AddPoints` throws (`ToposolidCreationException`) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the generated toposolid boundary or points." + inner exception message |
 | 21 | `Regenerate()`, the Issue #16 hook, or `Commit()` itself throwing | Transaction | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + `ex.Message` |
+| 21a | Attaching Extensible Storage provenance fails before or during the write: `ProvenanceSchemaAdapter.EnsurePublishedSchema` fails (`Finish()` throws, or an already-registered schema fails its own `RequireExactSchema` check), **or** the four-part read discipline run immediately after `SetEntity` finds the entity missing from `GetEntitySchemaGuids()`, invalid, unreadable, or `schemaVersion`-mismatched — this row covers the read discipline's own post-write throw sites, not only pre-write schema drift | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + one of several `ProvenanceAttachmentException` messages depending on which check failed — for example "The Extensible Storage schema already registered under GUID '\<guid\>' has SchemaName '\<name\>', expected '\<name\>'." (schema drift) or "SolidGround attached its Extensible Storage entity to element \<id\>, but its schemaVersion read back as \<n\>, expected \<n\>." (the read discipline's own post-write check) |
+| 21b | A length field's computed value is not finite (`ProvenanceFieldValueException`, including a record `with`-expression bypassing validation), detected in Core before the `Entity` is built | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + "field '\<name\>' is not a finite number." (verbatim, from `ExtensibleStorageProvenanceValues`'s `RequireFinite`) |
+| 21c | The entity attached, but the read-back field compare or the source-coordinate reconstruction compare fails `ExtensibleStorageRoundTripTolerance` | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + "the immediate read-back did not match what was written: \<mismatches\> (deltas: \<deltas\>)." or "...reconstructing the first retained sample's source coordinate from the read-back entity produced a delta of (\<dx\>, \<dy\>, \<dz\>) meters against a \<tolerance\> m tolerance (deltas: \<deltas\>)." — both verbatim from `ProvenanceEntityWriter.Attach`, `CultureInfo.InvariantCulture`-formatted, matching this table's existing `"R"`-format convention |
 | 22 | `Commit()` returns anything but `Committed` | Transaction | Failed | "SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed." (no further `RollBack()` attempted) |
 | 23 | Placement-record write fails post-commit | Post-commit | **Succeeded** | logged only; success dialog's own line says "could not be written (see log)" |
 | 24 | Orphan check detects an unexpected shared-coordinate change post-commit | Post-commit | **Succeeded** | logged only (info if unchanged, warning if not); never shown in any dialog |
 | 25 | Unhandled exception anywhere before Stage 5 opens a transaction, or any other bug the code above cannot name | any | Cancelled | `Execute`'s own outer catch: "SolidGround hit an unexpected problem and stopped. Nothing in the model changed." + `ex.Message` |
 | 26 | Success | Post-commit | Succeeded | element id, Level/Type, point counts, bundle/placement-record/log paths, disclaimer |
+
+**Update, Issue #16 (2026-09-21):** this table's own row numbers are authoritative for every citation
+elsewhere in this repository, including AGENTS.md. `CreateToposolidCommand.cs:657`'s inline comment used to
+read "Error catalogue rows 19 and 20" for the post-create verification-failed/blocking-failure branch, one
+off from this table's own rows **18 and 19** for that same branch — the comment was stale, not this table; it
+predated a since-renumbered version of this catalogue. The comment was corrected to "rows 18 and 19" as part
+of this same Issue #16 commit, alongside the hook-wiring edit in the same file
+(`CreateToposolidCommand.cs:669-670`).
 
 ## Manual evidence plan
 
