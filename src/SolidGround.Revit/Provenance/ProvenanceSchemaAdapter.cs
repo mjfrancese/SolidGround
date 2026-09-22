@@ -10,7 +10,7 @@ namespace SolidGround.Revit.Provenance;
 /// <see cref="ExtensibleStorageProvenanceSchema"/> (SolidGround Issue #16 design record §3). The field-list
 /// contract itself lives in <c>SolidGround.Core</c> (AGENTS.md "Provenance decision"); this is the only place
 /// that turns it into a real <c>SchemaBuilder</c> call. Every member used here is verified against
-/// <c>revit-es-api.md</c> (reflected against the installed Revit 2027 <c>RevitAPI.dll</c> 27.0.10.13).
+/// the "Revit 2027 API surface" table of <c>docs/architecture/revit-extensible-storage-provenance.md</c> (reflected against the installed Revit 2027 <c>RevitAPI.dll</c> 27.0.10.13).
 /// </summary>
 internal static class ProvenanceSchemaAdapter
 {
