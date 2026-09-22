@@ -200,6 +200,80 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void CoreProvenanceContractNeverReferencesAnyAutodeskOrRevitType()
+    {
+        // SolidGround Issue #16: guards SolidGround.Core.Provenance's own public surface (the Extensible
+        // Storage field-list contract, ExtensibleStorageProvenanceValues, and every existing sibling record)
+        // the same way NetTopologySuiteTypesNeverAppearInAnyNewPublicCoreSignature/
+        // ProjNetTypesNeverAppearInAnyPublicCoreSignature above already guard their own packages. Even though
+        // CoreDoesNotReferenceTheRevitApi below already asserts the whole assembly carries no RevitAPI/
+        // RevitAPIUI reference at all (making this structurally impossible today), this is a second,
+        // signature-level guard scoped to exactly the namespace Issue #16 added to, so a future dependency
+        // change cannot silently let an Autodesk/Revit type leak through this specific contract's own public
+        // surface (AGENTS.md "Provenance decision": "the field-list contract must live in SolidGround.Core").
+        Assembly assembly = typeof(Core.AssemblyMarker).Assembly;
+
+        foreach (Type type in assembly.GetExportedTypes())
+        {
+            if (type.Namespace is null || !string.Equals(type.Namespace, "SolidGround.Core.Provenance", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (ConstructorInfo constructor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+            {
+                foreach (ParameterInfo parameter in constructor.GetParameters())
+                {
+                    AssertNotAutodeskOrRevitType(parameter.ParameterType, $"{type.FullName}..ctor(...) parameter '{parameter.Name}'");
+                }
+            }
+
+            const BindingFlags MemberFlags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (MethodInfo method in type.GetMethods(MemberFlags))
+            {
+                AssertNotAutodeskOrRevitType(method.ReturnType, $"{type.FullName}.{method.Name}(...) return type");
+                foreach (ParameterInfo parameter in method.GetParameters())
+                {
+                    AssertNotAutodeskOrRevitType(parameter.ParameterType, $"{type.FullName}.{method.Name}(...) parameter '{parameter.Name}'");
+                }
+            }
+
+            foreach (PropertyInfo property in type.GetProperties(MemberFlags))
+            {
+                AssertNotAutodeskOrRevitType(property.PropertyType, $"{type.FullName}.{property.Name}");
+            }
+
+            foreach (FieldInfo field in type.GetFields(MemberFlags))
+            {
+                AssertNotAutodeskOrRevitType(field.FieldType, $"{type.FullName}.{field.Name}");
+            }
+        }
+    }
+
+    private static void AssertNotAutodeskOrRevitType(Type type, string location)
+    {
+        Type effectiveType = type.IsByRef || type.IsPointer ? type.GetElementType()! : type;
+
+        if (effectiveType.IsArray)
+        {
+            AssertNotAutodeskOrRevitType(effectiveType.GetElementType()!, location);
+            return;
+        }
+
+        string? ns = effectiveType.Namespace;
+        bool isAutodeskOrRevitType = ns is not null && (ns == "Autodesk" || ns.StartsWith("Autodesk.", StringComparison.Ordinal));
+        Assert.False(isAutodeskOrRevitType, $"{location} exposes Autodesk/Revit type '{effectiveType.FullName}'.");
+
+        if (effectiveType.IsGenericType)
+        {
+            foreach (Type typeArgument in effectiveType.GetGenericArguments())
+            {
+                AssertNotAutodeskOrRevitType(typeArgument, location);
+            }
+        }
+    }
+
+    [Fact]
     public void CoreDoesNotReferenceTheRevitApi()
     {
         AssemblyName[] references = typeof(Core.AssemblyMarker)

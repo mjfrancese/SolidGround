@@ -76,6 +76,7 @@ public sealed class PlacementRecordRendererTests
             [
                 "schema", "schemaVersion", "createdUtc", "exportDocument", "exportPoints", "toposolid", "unitConversion",
                 "localOrigin", "boundaryPlaneElevation", "revitCoordinates", "sharedCoordinatesStatement", "pointCounts",
+                "extensibleStorage",
             ],
             PropertyNames(root));
 
@@ -105,6 +106,41 @@ public sealed class PlacementRecordRendererTests
         Assert.Equal(["x", "y", "z"], PropertyNames(revitCoordinates.GetProperty("basePointPosition")));
 
         Assert.Equal(["original", "retained", "budget"], PropertyNames(root.GetProperty("pointCounts")));
+
+        Assert.Equal(["schemaGuid", "schemaVersion"], PropertyNames(root.GetProperty("extensibleStorage")));
+    }
+
+    [Fact]
+    public void WritesTheExtensibleStorageCrossReferenceAfterPointCounts()
+    {
+        PlacementRecord record = CreateRecord();
+
+        byte[] bytes = PlacementRecordRenderer.Render(record);
+
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        JsonElement root = document.RootElement;
+        List<string> topLevelNames = PropertyNames(root);
+
+        Assert.Equal(topLevelNames.IndexOf("pointCounts") + 1, topLevelNames.IndexOf("extensibleStorage"));
+
+        JsonElement extensibleStorage = root.GetProperty("extensibleStorage");
+        Assert.Equal(JsonValueKind.String, extensibleStorage.GetProperty("schemaGuid").ValueKind);
+        Assert.Equal(record.ExtensibleStorage.SchemaGuid, extensibleStorage.GetProperty("schemaGuid").GetString());
+        Assert.Equal(JsonValueKind.Number, extensibleStorage.GetProperty("schemaVersion").ValueKind);
+        Assert.Equal(record.ExtensibleStorage.SchemaVersion, extensibleStorage.GetProperty("schemaVersion").GetInt32());
+    }
+
+    [Fact]
+    public void SchemaVersionIsNowTwo()
+    {
+        // SolidGround Issue #16 design record §5: the placement record's own required shape changed with the
+        // addition of PlacementExtensibleStorageRecord, so PlacementRecordDraft.SchemaVersion (and therefore
+        // every rendered record's own "schemaVersion" property) bumps 1 -> 2.
+        Assert.Equal(2, PlacementRecordDraft.SchemaVersion);
+
+        byte[] bytes = PlacementRecordRenderer.Render(CreateRecord());
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        Assert.Equal(2, document.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -185,7 +221,10 @@ public sealed class PlacementRecordRendererTests
             SurveyPointSharedPosition: new PlacementPointRecord(1d, 2d, 0d),
             ActiveProjectLocationName: "Internal"),
         SharedCoordinatesStatement: "SolidGround did not move or modify the shared coordinate system.",
-        PointCounts: new PlacementPointCountsRecord(Original: 9, Retained: 5, Budget: 15000));
+        PointCounts: new PlacementPointCountsRecord(Original: 9, Retained: 5, Budget: 15000),
+        ExtensibleStorage: new PlacementExtensibleStorageRecord(
+            SchemaGuid: ExtensibleStorageProvenanceSchema.SchemaGuidText,
+            SchemaVersion: ExtensibleStorageProvenanceSchema.CurrentVersion));
 
     private static List<string> PropertyNames(JsonElement obj) => [.. obj.EnumerateObject().Select(property => property.Name)];
 }

@@ -67,6 +67,18 @@ public sealed record PlacementRevitCoordinatesRecord(
 public sealed record PlacementPointCountsRecord(int Original, int Retained, int Budget);
 
 /// <summary>
+/// The Extensible Storage cross-reference (SolidGround Issue #16 design record §5): the schema GUID and
+/// schema version SolidGround attached to the created toposolid, so an operator reading only the placement
+/// record JSON can tell whether/which Extensible Storage entity is attached, with no separate "attached"
+/// boolean and no digest (design record D8). Both values are Core compile-time constants
+/// (<see cref="ExtensibleStorageProvenanceSchema.SchemaGuidText"/>/<see cref="ExtensibleStorageProvenanceSchema.CurrentVersion"/>),
+/// so <c>CreateToposolidCommand.BuildPlacementDraft</c> -- which runs before the Extensible Storage attach
+/// hook -- can reference them directly. A placement JSON file can only exist once attachment has succeeded
+/// (attachment is fatal, design record D1), so this pair alone tells a reader "provenance was attached."
+/// </summary>
+public sealed record PlacementExtensibleStorageRecord(string SchemaGuid, int SchemaVersion);
+
+/// <summary>
 /// The full, final placement record written next to the export bundle only after a confirmed
 /// <c>Autodesk.Revit.DB.TransactionStatus.Committed</c> status (design record §9). Assembled from a
 /// <see cref="PlacementRecordDraft"/> plus the confirmed element id (§6.6 step 1). Revit-free: kept in
@@ -86,7 +98,8 @@ public sealed record PlacementRecord(
     PlacementBoundaryPlaneElevationRecord BoundaryPlaneElevation,
     PlacementRevitCoordinatesRecord RevitCoordinates,
     string SharedCoordinatesStatement,
-    PlacementPointCountsRecord PointCounts);
+    PlacementPointCountsRecord PointCounts,
+    PlacementExtensibleStorageRecord ExtensibleStorage);
 
 /// <summary>
 /// Every placement-record value computed before <c>transaction.Commit()</c> (design record §5): the created
@@ -109,10 +122,16 @@ public sealed record PlacementRecordDraft(
     PlacementBoundaryPlaneElevationRecord BoundaryPlaneElevation,
     PlacementRevitCoordinatesRecord RevitCoordinates,
     string SharedCoordinatesStatement,
-    PlacementPointCountsRecord PointCounts)
+    PlacementPointCountsRecord PointCounts,
+    PlacementExtensibleStorageRecord ExtensibleStorage)
 {
     public const string Schema = "solidground.revit-placement";
-    public const int SchemaVersion = 1;
+
+    /// <summary>
+    /// Bumped 1 -> 2 for SolidGround Issue #16: the record's required shape changed with the addition of
+    /// <see cref="PlacementExtensibleStorageRecord"/> (design record §5).
+    /// </summary>
+    public const int SchemaVersion = 2;
 
     public PlacementRecord ToRecord(long confirmedElementId, DateTime createdUtc) => new(
         Schema,
@@ -126,5 +145,6 @@ public sealed record PlacementRecordDraft(
         BoundaryPlaneElevation,
         RevitCoordinates,
         SharedCoordinatesStatement,
-        PointCounts);
+        PointCounts,
+        ExtensibleStorage);
 }

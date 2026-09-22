@@ -60,6 +60,9 @@ public static class PlacementRecordRenderer
             writer.WritePropertyName("pointCounts");
             WritePointCounts(writer, record.PointCounts);
 
+            writer.WritePropertyName("extensibleStorage");
+            WriteExtensibleStorage(writer, record.ExtensibleStorage);
+
             writer.WriteEndObject();
         }
 
@@ -158,6 +161,14 @@ public static class PlacementRecordRenderer
         writer.WriteNumber("original", pointCounts.Original);
         writer.WriteNumber("retained", pointCounts.Retained);
         writer.WriteNumber("budget", pointCounts.Budget);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteExtensibleStorage(Utf8JsonWriter writer, PlacementExtensibleStorageRecord extensibleStorage)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("schemaGuid", extensibleStorage.SchemaGuid);
+        writer.WriteNumber("schemaVersion", extensibleStorage.SchemaVersion);
         writer.WriteEndObject();
     }
 }

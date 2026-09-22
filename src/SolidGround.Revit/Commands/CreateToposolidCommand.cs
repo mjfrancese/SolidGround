@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -655,7 +654,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
             if (!verification.Passed || failureLog.HasBlockingFailure)
             {
-                // Error catalogue rows 19 and 20: a failed geometry verification and a blocking Revit
+                // Error catalogue rows 18 and 19: a failed geometry verification and a blocking Revit
                 // failure message get distinct headlines; verification takes priority when both occur.
                 (string headline, string detail) = !verification.Passed
                     ? ("The created toposolid's geometry did not match the source data; the change was undone.", verification.Detail)
@@ -667,7 +666,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
             draft = BuildPlacementDraft(
                 context, outcome, revitUnit, constantZInternal, toposolid, exportDocumentFileName, exportPointsFileName);
 
-            ToposolidCreatedHook? postCreationHook = null; // Issue #16 supplies a non-null value here.
+            ToposolidCreatedHook? postCreationHook = ProvenanceEntityWriter.Attach; // Issue #16.
             postCreationHook?.Invoke(document, toposolid, outcome.Payload, draft);
 
             TransactionStatus commitStatus = transaction.Commit();
@@ -733,7 +732,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         double roundTrip = UnitUtils.ConvertFromInternalUnits(UnitUtils.ConvertToInternalUnits(1.0, revitUnit), revitUnit) - 1.0;
 
         PlacementUnitConversionRecord unitConversion = new(
-            LengthUnitToken(context.Settings.Request.OutputUnit),
+            LengthUnitTokens.SettingsToken(context.Settings.Request.OutputUnit),
             revitUnit.TypeId,
             LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit),
             roundTrip);
@@ -745,7 +744,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
             provenance.HorizontalTransformation.TargetReference.CoordinateReferenceSystem,
             new PlacementVerticalReferenceRecord(
                 provenance.SourceVerticalReference.Datum,
-                LengthUnitToken(provenance.SourceVerticalReference.Unit),
+                LengthUnitTokens.SettingsToken(provenance.SourceVerticalReference.Unit),
                 provenance.SourceVerticalReference.GeoidModel));
 
         PlacementBoundaryPlaneElevationRecord boundaryPlaneElevation = new(
@@ -768,6 +767,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
         PlacementPointCountsRecord pointCounts = new(
             provenance.OriginalPointCount, provenance.RetainedPointCount, context.Settings.Request.Simplification.PointBudget);
 
+        PlacementExtensibleStorageRecord extensibleStorage = new(
+            ExtensibleStorageProvenanceSchema.SchemaGuidText, ExtensibleStorageProvenanceSchema.CurrentVersion);
+
         return new PlacementRecordDraft(
             exportDocumentFileName,
             exportPointsFileName,
@@ -781,20 +783,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
             boundaryPlaneElevation,
             revitCoordinates,
             "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
-            pointCounts);
+            pointCounts,
+            extensibleStorage);
     }
 
     private static PlacementPointRecord ToPointRecord(XYZ point) => new(point.X, point.Y, point.Z);
-
-    /// <summary>
-    /// The exact camelCase token <see cref="TerrainRequestSettings.JsonOptions"/>'s <c>JsonStringEnumConverter</c>
-    /// would produce for <paramref name="unit"/> (for example <c>"usSurveyFoot"</c>) -- reused here so the
-    /// placement record's own unit fields match settings.json's convention exactly, never
-    /// <c>LengthUnitTokens</c>'s deliberately different kebab-case CLI flag tokens (design record §0.2's
-    /// "two casing conventions" note).
-    /// </summary>
-    private static string LengthUnitToken(CoreLengthUnit unit) =>
-        JsonSerializer.Serialize(unit, TerrainRequestSettings.JsonOptions).Trim('"');
 
     /// <summary>The camelCase token for <paramref name="strategy"/> (design record §9's example: <c>"combinedOverload"</c>), matching this record's other camelCase-token fields.</summary>
     private static string CreationStrategyToken(ToposolidCreationStrategy strategy) => strategy switch

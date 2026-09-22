@@ -327,37 +327,11 @@ public sealed class RevitHostFilesTests
     // ------------------------------------------------------------------------------------------------
     // (h) SolidGround Issue #15
     // ------------------------------------------------------------------------------------------------
-
-    [Fact]
-    public void NoRevitSourceFileReferencesExtensibleStorageTypesYet()
-    {
-        // SolidGround Issue #15's design record §1.2/§10.3: #15 ships zero Extensible Storage code (Issue
-        // #16 owns that). A CI-checked, falsifiable backstop -- deliberately removed when #16 lands -- for
-        // "no Autodesk.Revit.DB.ExtensibleStorage.* type is referenced anywhere in SolidGround.Revit".
-        string[] forbiddenTokens = ["ExtensibleStorage", "SchemaBuilder", "GetEntity", "SetEntity"];
-
-        List<string> offenders = [];
-        foreach (string file in Directory.EnumerateFiles(RevitProjectDirectory, "*.cs", SearchOption.AllDirectories))
-        {
-            if (IsUnderBuildOutputDirectory(file, RevitProjectDirectory))
-            {
-                continue;
-            }
-
-            string content = File.ReadAllText(file);
-            foreach (string token in forbiddenTokens)
-            {
-                if (content.Contains(token, StringComparison.Ordinal))
-                {
-                    offenders.Add($"{file}: matched '{token}'");
-                }
-            }
-        }
-
-        Assert.True(
-            offenders.Count == 0,
-            "Extensible Storage token(s) found (Issue #16 territory, not #15):" + Environment.NewLine + string.Join(Environment.NewLine, offenders));
-    }
+    //
+    // NoRevitSourceFileReferencesExtensibleStorageTypesYet (Issue #15's design record §1.2/§10.3 backstop for
+    // "#15 ships zero Extensible Storage code") stood here until SolidGround Issue #16 Stage 2 attached real
+    // Extensible Storage code to SolidGround.Revit; its own doc comment called it "deliberately removed when
+    // #16 lands," so it is removed rather than updated.
 
     [Fact]
     public void ButtonLongDescriptionKeepsTheSiteFormNotASurveyInstrumentDisclaimer()
