@@ -19,7 +19,7 @@ Filed on GitHub 2026-09-21: milestone "Phase 3: Interactive add-in" (#3), the ep
 
 Format follows Issues #15 and #16. This revision applies the owner's decisions below — decisions, not options — to the prior draft: every item they settle is now fact in the affected issue, and each issue keeps an "Owner decisions depended on" heading only where a genuinely open item remains. Content is drawn from `docs/architecture/phase-3-interactive-add-in-research.md` (the committed research note) and the vendor-licensing pass behind decision 3; this file's Sources section cites only public URLs with retrieval dates, never a local evidence-file path.
 
-Per decision 13, the "Proposed AGENTS.md amendment" section below is a proposal only, not applied by this file or by filing any child issue (including the epic and PH3-0 through PH3-8 above); PH3-7 (#34) carries it forward for the owner's own later accept/edit/reject decision. Phase 3 implementation still needs its own explicit task regardless; filing these issues is not that task selection — every issue above is labeled `status: blocked` until the AGENTS.md amendment is accepted.
+Per decision 13, the "Proposed AGENTS.md amendment" section below was a proposal when these issues were filed; the owner accepted it as written on 2026-09-21 and it was applied to `AGENTS.md` in the same commit as this paragraph. PH3-7 (#34) now covers only the conventions-note amendments. Phase 3 implementation still needs its own explicit task regardless; filing these issues is not that task selection — every issue above stays `status: blocked` until the owner explicitly selects it.
 
 ## Owner decisions (2026-09-21, final)
 
@@ -39,9 +39,9 @@ Per decision 13, the "Proposed AGENTS.md amendment" section below is a proposal 
 
 ---
 
-## Proposed AGENTS.md amendment — PROPOSED, NOT APPLIED
+## Proposed AGENTS.md amendment — ACCEPTED 2026-09-21, APPLIED
 
-Wording proposed for `AGENTS.md`'s "Mission and current boundary" paragraph, appended after its Phase 2 sentences. Not applied here or by any issue below; returned to the orchestrator as the exact proposal, for the owner's own future decision.
+Wording proposed for `AGENTS.md`'s "Mission and current boundary" paragraph, appended after its Phase 2 sentences. Accepted by the owner on 2026-09-21 without changes and applied to `AGENTS.md` in the same commit as this line; kept here verbatim as the record of what was proposed.
 
 > Phase 3 adds an interactive Revit 2027 add-in workflow that turns a street address into geocoded coordinates, resolves a matching parcel boundary, and lets the operator confirm both — together with an optional shared-coordinates write and a native property line — before today's terrain pipeline runs, as researched in `docs/architecture/phase-3-interactive-add-in-research.md` (2026-09-21). The agent must not begin Phase 3 without an explicit implementation task.
 
