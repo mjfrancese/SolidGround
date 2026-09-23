@@ -12,14 +12,41 @@ namespace SolidGround.Core.Provenance;
 /// </summary>
 /// <param name="Name">The exact field name passed to <c>SchemaBuilder.AddSimpleField</c>/read back via <c>Entity.Get</c>/<c>Set</c>.</param>
 /// <param name="ClrType">The field's simple Extensible Storage value type: <see cref="int"/>, <see cref="string"/>, <see cref="bool"/>, or <see cref="double"/>.</param>
-/// <param name="IsLengthSpec">
-/// <see langword="true"/> for the five fields that need <c>FieldBuilder.SetSpec(SpecTypeId.Length)</c> plus
-/// the three-argument <c>Entity.Set</c>/<c>Get</c> overload with an explicit <c>UnitTypeId.Meters</c>; every
-/// other field gets no spec at all, per <c>SchemaBuilder.Finish()</c>'s documented rule that only a
-/// spec-carrying field can have an "invalid units" problem (design record §2).
+/// <param name="Spec">
+/// Which <c>FieldBuilder.SetSpec</c> call, if any, this field needs. Revit 2027's <c>SchemaBuilder</c>
+/// requires every floating-point field to carry a spec (<c>FieldBuilder.AddSimpleField</c>'s own documented
+/// remark: "Make sure to set the unit type if the field contains floating-point values"; <c>SchemaBuilder.Finish()</c>
+/// throws "At least one field has invalid units" otherwise) -- <see cref="ProvenanceFieldSpec.None"/> is
+/// therefore only ever correct for a non-<see cref="double"/> field. This three-state descriptor replaced a
+/// bool-only <c>IsLengthSpec</c> flag after a 2026-09-23 live-Revit failure: <c>metersPerOutputUnit</c> is a
+/// unitless ratio, not a length, but still a <see cref="double"/> and so still needed a spec
+/// (<see cref="ProvenanceFieldSpec.Number"/>) -- it cannot be represented by "no spec" (design record §2).
 /// </param>
 /// <param name="Documentation">One sentence describing the field, passed to <c>FieldBuilder.SetDocumentation</c>.</param>
-public readonly record struct ProvenanceFieldDefinition(string Name, Type ClrType, bool IsLengthSpec, string Documentation);
+public readonly record struct ProvenanceFieldDefinition(string Name, Type ClrType, ProvenanceFieldSpec Spec, string Documentation);
+
+/// <summary>
+/// The <c>FieldBuilder.SetSpec</c> call, if any, a <see cref="ProvenanceFieldDefinition"/> needs. Every
+/// <see cref="double"/> field must be <see cref="Length"/> or <see cref="Number"/>, never <see cref="None"/>
+/// (<see cref="ProvenanceFieldDefinition.Spec"/>'s own remarks; enforced by
+/// <c>SolidGround.Tests.ExtensibleStorageProvenanceSchemaTests.EveryDoubleFieldCarriesALengthOrNumberSpec</c>
+/// and, at publish time, by <c>SolidGround.Revit.Provenance.ProvenanceSchemaAdapter</c>'s
+/// <c>FieldBuilder.NeedsUnits()</c> assertion).
+/// </summary>
+public enum ProvenanceFieldSpec
+{
+    /// <summary>No <c>FieldBuilder.SetSpec</c> call; valid only for a non-<see cref="double"/> field.</summary>
+    None,
+
+    /// <summary><c>FieldBuilder.SetSpec(SpecTypeId.Length)</c>, read/written with <c>UnitTypeId.Meters</c>.</summary>
+    Length,
+
+    /// <summary>
+    /// <c>FieldBuilder.SetSpec(SpecTypeId.Number)</c>, read/written with <c>UnitTypeId.General</c>: a
+    /// dimensionless ratio that is still, per Revit 2027, a spec-requiring floating-point field.
+    /// </summary>
+    Number,
+}
 
 /// <summary>
 /// The field-list contract for the Extensible Storage schema SolidGround attaches to a created toposolid
@@ -85,41 +112,41 @@ public static class ExtensibleStorageProvenanceSchema
     /// </summary>
     public static IReadOnlyList<ProvenanceFieldDefinition> Fields { get; } =
     [
-        new("schemaVersion", typeof(int), false, "The Extensible Storage schema version this entity was written under."),
-        new("sourceDatasetName", typeof(string), false, "The elevation source's display name."),
-        new("sourceDatasetIdentifier", typeof(string), false, "The source's own dataset identifier."),
-        new("hasCollectionPeriod", typeof(bool), false, "Whether the source reported a collection period."),
-        new("collectionPeriodStartIso", typeof(string), false, "The collection period's start date, ISO 8601 (yyyy-MM-dd), or empty when absent."),
-        new("collectionPeriodEndIso", typeof(string), false, "The collection period's end date, ISO 8601 (yyyy-MM-dd), or empty when absent."),
-        new("hasQualityLevel", typeof(bool), false, "Whether the source reported a catalog quality level."),
-        new("qualityLevel", typeof(string), false, "The source's catalog quality level, or empty when absent."),
-        new("horizontalDatum", typeof(string), false, "The datum of the projected coordinate reference system named by horizontalCrsIdentifier."),
-        new("horizontalCrsIdentifier", typeof(string), false, "The projected horizontal coordinate reference system identifier (for example \"EPSG:26915\")."),
-        new("sourceHorizontalReferenceOrigin", typeof(string), false, "Where the source horizontal reference actually came from (SolidGround.Core.Metadata.ReferenceOrigin)."),
-        new("verticalDatum", typeof(string), false, "The source vertical reference's datum."),
-        new("hasVerticalGeoidModel", typeof(bool), false, "Whether the source vertical reference names a geoid model."),
-        new("verticalGeoidModel", typeof(string), false, "The source vertical reference's geoid model, or empty when absent."),
-        new("sourceVerticalReferenceOrigin", typeof(string), false, "Where the source vertical reference actually came from (SolidGround.Core.Metadata.ReferenceOrigin)."),
-        new("originalPointCount", typeof(int), false, "The number of valid source samples before simplification."),
-        new("retainedPointCount", typeof(int), false, "The number of samples retained after simplification."),
-        new("simplificationMethod", typeof(string), false, "The simplification algorithm requested (SolidGround.Core.Simplification.SimplificationMethod)."),
-        new("simplificationPointBudget", typeof(int), false, "The requested point budget the simplifier targeted."),
-        new("hasElevationRange", typeof(bool), false, "Whether an elevation range was computed (false only when the original data was empty)."),
-        new("elevationMinimumMeters", typeof(double), true, "The minimum retained elevation, in meters, or zero when hasElevationRange is false."),
-        new("elevationMaximumMeters", typeof(double), true, "The maximum retained elevation, in meters, or zero when hasElevationRange is false."),
-        new("outputUnitToken", typeof(string), false, "The local coordinate frame's output unit, tokenized identically to the placement record's own unit field."),
-        new("metersPerOutputUnit", typeof(double), false, "The exact number of meters represented by one output unit. A ratio, not a length: carries no length spec."),
-        new("localOriginXMeters", typeof(double), true, "The local frame origin's source X ordinate, in meters."),
-        new("localOriginYMeters", typeof(double), true, "The local frame origin's source Y ordinate, in meters."),
-        new("localOriginElevationMeters", typeof(double), true, "The local frame origin's source elevation, in meters."),
-        new("horizontalForwardOperationFormat", typeof(string), false, "The geographic-to-projected coordinate operation definition's format (for example \"WKT1\")."),
-        new("horizontalForwardOperationDefinition", typeof(string), false, "The geographic-to-projected coordinate operation's own definition text."),
-        new("horizontalInverseOperationFormat", typeof(string), false, "The projected-to-geographic coordinate operation definition's format."),
-        new("horizontalInverseOperationDefinition", typeof(string), false, "The projected-to-geographic coordinate operation's own definition text."),
-        new("horizontalTransformEngineName", typeof(string), false, "The named engine that performed the horizontal coordinate transformation (for example \"ProjNET\")."),
-        new("horizontalTransformEngineVersion", typeof(string), false, "The named engine's version, needed to reproduce its exact numeric result."),
-        new("buildInformationalVersion", typeof(string), false, "The SolidGround.Revit assembly's informational version at the time this element was created."),
-        new("buildModuleVersionId", typeof(string), false, "The SolidGround.Revit assembly's module version ID (MVID) at the time this element was created."),
-        new("buildSha256", typeof(string), false, "The SolidGround.Revit assembly file's SHA-256 hash at the time this element was created."),
+        new("schemaVersion", typeof(int), ProvenanceFieldSpec.None, "The Extensible Storage schema version this entity was written under."),
+        new("sourceDatasetName", typeof(string), ProvenanceFieldSpec.None, "The elevation source's display name."),
+        new("sourceDatasetIdentifier", typeof(string), ProvenanceFieldSpec.None, "The source's own dataset identifier."),
+        new("hasCollectionPeriod", typeof(bool), ProvenanceFieldSpec.None, "Whether the source reported a collection period."),
+        new("collectionPeriodStartIso", typeof(string), ProvenanceFieldSpec.None, "The collection period's start date, ISO 8601 (yyyy-MM-dd), or empty when absent."),
+        new("collectionPeriodEndIso", typeof(string), ProvenanceFieldSpec.None, "The collection period's end date, ISO 8601 (yyyy-MM-dd), or empty when absent."),
+        new("hasQualityLevel", typeof(bool), ProvenanceFieldSpec.None, "Whether the source reported a catalog quality level."),
+        new("qualityLevel", typeof(string), ProvenanceFieldSpec.None, "The source's catalog quality level, or empty when absent."),
+        new("horizontalDatum", typeof(string), ProvenanceFieldSpec.None, "The datum of the projected coordinate reference system named by horizontalCrsIdentifier."),
+        new("horizontalCrsIdentifier", typeof(string), ProvenanceFieldSpec.None, "The projected horizontal coordinate reference system identifier (for example \"EPSG:26915\")."),
+        new("sourceHorizontalReferenceOrigin", typeof(string), ProvenanceFieldSpec.None, "Where the source horizontal reference actually came from (SolidGround.Core.Metadata.ReferenceOrigin)."),
+        new("verticalDatum", typeof(string), ProvenanceFieldSpec.None, "The source vertical reference's datum."),
+        new("hasVerticalGeoidModel", typeof(bool), ProvenanceFieldSpec.None, "Whether the source vertical reference names a geoid model."),
+        new("verticalGeoidModel", typeof(string), ProvenanceFieldSpec.None, "The source vertical reference's geoid model, or empty when absent."),
+        new("sourceVerticalReferenceOrigin", typeof(string), ProvenanceFieldSpec.None, "Where the source vertical reference actually came from (SolidGround.Core.Metadata.ReferenceOrigin)."),
+        new("originalPointCount", typeof(int), ProvenanceFieldSpec.None, "The number of valid source samples before simplification."),
+        new("retainedPointCount", typeof(int), ProvenanceFieldSpec.None, "The number of samples retained after simplification."),
+        new("simplificationMethod", typeof(string), ProvenanceFieldSpec.None, "The simplification algorithm requested (SolidGround.Core.Simplification.SimplificationMethod)."),
+        new("simplificationPointBudget", typeof(int), ProvenanceFieldSpec.None, "The requested point budget the simplifier targeted."),
+        new("hasElevationRange", typeof(bool), ProvenanceFieldSpec.None, "Whether an elevation range was computed (false only when the original data was empty)."),
+        new("elevationMinimumMeters", typeof(double), ProvenanceFieldSpec.Length, "The minimum retained elevation, in meters, or zero when hasElevationRange is false."),
+        new("elevationMaximumMeters", typeof(double), ProvenanceFieldSpec.Length, "The maximum retained elevation, in meters, or zero when hasElevationRange is false."),
+        new("outputUnitToken", typeof(string), ProvenanceFieldSpec.None, "The local coordinate frame's output unit, tokenized identically to the placement record's own unit field."),
+        new("metersPerOutputUnit", typeof(double), ProvenanceFieldSpec.Number, "The exact number of meters represented by one output unit. A unitless ratio, not a length, stored with the Number spec (SpecTypeId.Number, read/written with UnitTypeId.General) rather than a length spec."),
+        new("localOriginXMeters", typeof(double), ProvenanceFieldSpec.Length, "The local frame origin's source X ordinate, in meters."),
+        new("localOriginYMeters", typeof(double), ProvenanceFieldSpec.Length, "The local frame origin's source Y ordinate, in meters."),
+        new("localOriginElevationMeters", typeof(double), ProvenanceFieldSpec.Length, "The local frame origin's source elevation, in meters."),
+        new("horizontalForwardOperationFormat", typeof(string), ProvenanceFieldSpec.None, "The geographic-to-projected coordinate operation definition's format (for example \"WKT1\")."),
+        new("horizontalForwardOperationDefinition", typeof(string), ProvenanceFieldSpec.None, "The geographic-to-projected coordinate operation's own definition text."),
+        new("horizontalInverseOperationFormat", typeof(string), ProvenanceFieldSpec.None, "The projected-to-geographic coordinate operation definition's format."),
+        new("horizontalInverseOperationDefinition", typeof(string), ProvenanceFieldSpec.None, "The projected-to-geographic coordinate operation's own definition text."),
+        new("horizontalTransformEngineName", typeof(string), ProvenanceFieldSpec.None, "The named engine that performed the horizontal coordinate transformation (for example \"ProjNET\")."),
+        new("horizontalTransformEngineVersion", typeof(string), ProvenanceFieldSpec.None, "The named engine's version, needed to reproduce its exact numeric result."),
+        new("buildInformationalVersion", typeof(string), ProvenanceFieldSpec.None, "The SolidGround.Revit assembly's informational version at the time this element was created."),
+        new("buildModuleVersionId", typeof(string), ProvenanceFieldSpec.None, "The SolidGround.Revit assembly's module version ID (MVID) at the time this element was created."),
+        new("buildSha256", typeof(string), ProvenanceFieldSpec.None, "The SolidGround.Revit assembly file's SHA-256 hash at the time this element was created."),
     ];
 }

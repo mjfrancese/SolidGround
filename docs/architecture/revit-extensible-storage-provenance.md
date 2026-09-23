@@ -11,6 +11,22 @@ per-decision rationale — into this Status paragraph and into bolded inline asi
 (for example "Schema-name rationale," "VendorId comparison," "Per-axis meter normalization," "Tolerance,
 provisional"); this is a deliberate word-budget choice, not an omitted section.
 
+**Correction, 2026-09-23 (Issue #16 round 1 fix).** The first real Revit 2027 run of the shipped build (deployed
+from commit `9622ac8`) failed at Step 9.1 below: `SchemaBuilder.Finish()` rejected the schema with "Units are
+required for field metersPerOutputUnit," because this note's original design — `metersPerOutputUnit` and every
+non-Length double getting no spec at all — was wrong: Revit 2027 requires **every** floating-point field to
+carry a spec, not only the five Length fields. No schema was ever published under this GUID (`Finish()` threw
+before any document registered it), so this is a correction of an unpublished, never-shipped definition, not a
+schema evolution; the GUID and `CurrentVersion` are unchanged. `metersPerOutputUnit` now carries
+`ProvenanceFieldSpec.Number` (`SpecTypeId.Number`, read/written with `UnitTypeId.General`), a new
+`FieldBuilder.NeedsUnits()`/`UnitUtils.IsValidUnit` publish-time assertion catches a bad spec/unit pairing
+before `Finish()` would, and `Diff`'s `metersPerOutputUnit` comparison changed from bit-exact to
+tolerance-bounded (the same `ExtensibleStorageRoundTripTolerance` the five Length fields use) because the
+bit-exact treatment's own stated premise — "no spec, so no internal-unit round trip to absorb" — no longer
+holds. This note's "Field table," "Core contract," "Revit side," and "Tests" sections below are updated in
+place to describe the corrected, three-state (`None`/`Length`/`Number`) model directly, rather than being left
+to describe the disproven two-state model with only this paragraph noting the difference.
+
 Issue #16 attaches SolidGround-owned provenance to the `Toposolid` `CreateToposolidCommand` creates, via one
 Revit 2027 Extensible Storage schema: a fixed-GUID, versioned, flat `Entity` carrying 36 fields drawn from
 `TerrainExportPayload.Provenance` and `SolidGround.Revit`'s own build identity, written and read back inside
@@ -135,9 +151,13 @@ Namespace `SolidGround.Core.Provenance`, static class `ExtensibleStorageProvenan
 | `ExtensibleStorageRoundTripTolerance` (`static readonly LinearDistance`) | `LinearDistance.Meters(1e-6)` — provisional, see "Core contract" |
 | `Fields` (`static IReadOnlyList<ProvenanceFieldDefinition>`) | documentation-only order; every consumer looks fields up **by name** |
 
-Sibling type `ProvenanceFieldDefinition` is a `readonly record struct(string Name, Type ClrType, bool
-IsLengthSpec, string Documentation)`. Access levels are `AccessLevel.Public` read / `AccessLevel.Vendor` write,
-restating the Provenance decision above.
+Sibling type `ProvenanceFieldDefinition` is a `readonly record struct(string Name, Type ClrType,
+ProvenanceFieldSpec Spec, string Documentation)` (2026-09-23: replaced a bool-only `IsLengthSpec` flag — see
+"Correction" above). `ProvenanceFieldSpec` is a three-member enum: `None` (valid only for a non-`double`
+field), `Length` (`SpecTypeId.Length`, `UnitTypeId.Meters`), and `Number` (`SpecTypeId.Number`,
+`UnitTypeId.General` — a dimensionless ratio that Revit 2027 still requires a spec for, being a `double`).
+Access levels are `AccessLevel.Public` read / `AccessLevel.Vendor` write, restating the Provenance decision
+above.
 
 **Schema-name rationale.** the owner's other add-in's own `SchemaBuilder.SetSchemaName` call sites never pass a dotted name
 (`CenteredModelIdentityContract.cs:110-131` keeps a dotted, Core-only display name distinct from the
@@ -155,8 +175,14 @@ not similarly normalize the schema name.
 36 fields, canonical order (documentation order only; every consumer keys by name). All are simple fields
 (`ContainerType.Simple`; no array or map field is used). Fields 21, 22, 25, 26, and 27 carry
 `FieldBuilder.SetSpec(SpecTypeId.Length)` and use the three-argument `Entity.Set<double>`/`Get<double>`
-overload with `UnitTypeId.Meters`; every other field carries no spec, matching `SchemaBuilder.Finish()`'s rule
-that only a spec-carrying field can have an "invalid units" problem. Field 9 (`horizontalDatum`) sources from
+overload with `UnitTypeId.Meters`; field 24 (`metersPerOutputUnit`) carries `FieldBuilder.SetSpec(SpecTypeId.Number)`
+and uses the same three-argument overload with `UnitTypeId.General`; every other field is a non-`double` type
+and carries no spec at all. **The rule is the opposite of what this note originally said** (see "Correction,
+2026-09-23" above): `SchemaBuilder.Finish()` requires **every floating-point field** to carry a spec and throws
+"At least one field has invalid units" (RevitAPI.xml) when one does not — it is a spec-less `double` field that
+is the "invalid units" problem, not a spec-carrying one. `ProvenanceSchemaAdapter.PublishSchema()`'s
+`FieldBuilder.NeedsUnits()` assertion (see "Revit side" below) now enforces this directly for every `None`-spec
+field, not only for the six spec-carrying ones. Field 9 (`horizontalDatum`) sources from
 the **projected/target** datum, not the source geographic datum — a synthesizer correction the design record
 originally flagged for owner review (design record §12 item 6); the orchestrator has since confirmed this
 reading as final: `horizontalDatum` is the projected CRS datum paired with field 10's `horizontalCrsIdentifier`,
@@ -187,7 +213,7 @@ both from the same `TargetReference`.
 | 21 | `elevationMinimumMeters` | double | Simple double | Length | meters | `0.0` | `ElevationRange.Minimum × LengthConverter.MetersPerUnit(SourceVerticalReference.Unit)` |
 | 22 | `elevationMaximumMeters` | double | Simple double | Length | meters | `0.0` | `ElevationRange.Maximum × LengthConverter.MetersPerUnit(SourceVerticalReference.Unit)` |
 | 23 | `outputUnitToken` | string | Simple string | — | — | never absent | `LengthUnitTokens.SettingsToken(LocalFrame.OutputUnit)` |
-| 24 | `metersPerOutputUnit` | double | Simple double | — | — (ratio) | never absent | `LengthConverter.MetersPerUnit(LocalFrame.OutputUnit)` |
+| 24 | `metersPerOutputUnit` | double | Simple double | Number | General (dimensionless ratio) | never absent | `LengthConverter.MetersPerUnit(LocalFrame.OutputUnit)` |
 | 25 | `localOriginXMeters` | double | Simple double | Length | meters | never absent | `Origin.X × LengthConverter.MetersPerUnit(ProjectedHorizontalReference.Unit.LinearUnit!.Value)` |
 | 26 | `localOriginYMeters` | double | Simple double | Length | meters | never absent | `Origin.Y ×` same horizontal factor |
 | 27 | `localOriginElevationMeters` | double | Simple double | Length | meters | never absent | `Origin.Elevation × LengthConverter.MetersPerUnit(SourceVerticalReference.Unit)` |
@@ -236,12 +262,17 @@ Three new files in `SolidGround.Core.Provenance`:
   - a plain public constructor for the read-back path — `SolidGround.Revit` calls `Entity.Get<T>` 36 times and
     builds this shape directly, never through `From`.
   - `static IReadOnlyList<string> Diff(ExtensibleStorageProvenanceValues expected, actual)` — exact compare
-    for string/int/bool, `ExtensibleStorageRoundTripTolerance`-bounded for the five Length doubles, bit-exact
-    for `metersPerOutputUnit`, collecting every mismatch and never short-circuiting, every numeric value
-    `CultureInfo.InvariantCulture`-formatted matching `CreateToposolidCommand.cs`'s `"R"`-format convention.
+    for string/int/bool, `ExtensibleStorageRoundTripTolerance`-bounded for the five Length doubles **and**
+    `metersPerOutputUnit` (six doubles total; changed from a bit-exact `CompareExactDouble` call, now removed,
+    2026-09-23 — see "Correction" above), collecting every mismatch and never short-circuiting, every numeric
+    value `CultureInfo.InvariantCulture`-formatted matching `CreateToposolidCommand.cs`'s `"R"`-format
+    convention.
   - `static IReadOnlyList<(string Field, double Delta)> ComputeDeltas(expected, actual)` — unconditionally
-    reports every Length field's and the reconstruction check's actual delta, pass or fail, so a thrown
-    exception always has a number to cite and Step 9 below always has a number to read.
+    reports all six tolerance-bounded doubles' actual delta (the five Length fields' plus
+    `metersPerOutputUnit`'s, added 2026-09-23 by a round 2 review finding — see "Correction" above; the prior
+    five-field-only version left `metersPerOutputUnit`'s own delta unlogged even though `Diff` had already
+    started tolerance-comparing it), pass or fail, so a thrown exception always has a number to cite and Step 9
+    below always has a number to read.
   - `static Coordinate3D ReconstructSourceCoordinate(ExtensibleStorageProvenanceValues values, LocalCoordinate
     local)` — reimplements `LocalCoordinateFrame.ToSource`'s componentwise arithmetic from the flattened
     primitive fields. It deliberately never builds a real `HorizontalReference`/`LocalCoordinateFrame` (that
@@ -270,6 +301,14 @@ check never invokes). **This value is a placeholder, not a shipped constant**: S
 from more than one observed delta across at least two sessions, shipping an explicit 10x-100x multiple of the
 largest delta actually observed.
 
+**2026-09-23 addition.** This same tolerance now also bounds `metersPerOutputUnit` (see "Correction" above),
+reusing the identical unconfirmed-round-trip reasoning by analogy: whether `SpecTypeId.Number`/
+`UnitTypeId.General` round-trips losslessly through `Entity.Set`/`Get<double>` is **its own separate open
+question**, confirmed absent from every installed Revit 2027 doc source checked (no Number/General pairing
+table anywhere in `RevitAPI.xml`). Step 9 below must therefore calibrate against an observed
+`metersPerOutputUnit` delta too, not only the five Length fields' deltas, before this tolerance can be called
+anything but a placeholder for that field as well.
+
 **Canonical order.** `Fields`'s declared order is documentation-only. Both the schema build and every
 compare — `RequireExactSchema`, the four-part read discipline, `Diff` — key every field **by name**, since
 `Schema.ListFields()`'s return order is not documented to match insertion order.
@@ -284,16 +323,24 @@ Namespace `SolidGround.Revit.Provenance`, two classes plus one exception type:
     `VendorId` (`OrdinalIgnoreCase`, see "Schema" above), `ReadAccessLevel`, `WriteAccessLevel`, and the full
     field set — **by name**, via `ListFields()`, never by position — checking each field's `ValueType` and its
     spec via `GetSpecTypeId().Empty()` for "no spec" (a confirmed sentinel) and `.TypeId` string equality
-    (`GetSpecTypeId().TypeId == SpecTypeId.Length.TypeId`) for "has spec X" (matching this codebase's only
-    other `ForgeTypeId`-identity precedent, `RevitUnitConversion.cs`/`CreateToposolidCommand.cs:164`); throws
-    `ProvenanceAttachmentException` naming the first drift.
+    against **either** `SpecTypeId.Length.TypeId` **or** `SpecTypeId.Number.TypeId` (a three-way `None`/
+    `Length`/`Number` compare since 2026-09-23, matching this codebase's only other `ForgeTypeId`-identity
+    precedent, `RevitUnitConversion.cs`/`CreateToposolidCommand.cs:164`); throws `ProvenanceAttachmentException`
+    naming the first drift.
   - If null: the two static checks `SchemaBuilder.GUIDIsValid(guid)`/`.VendorIdIsValid("SolidGround")`;
     construct `new SchemaBuilder(guid)`; call `.AcceptableName(schemaName)`; chain
     `.SetSchemaName(...)`/`.SetVendorId("SolidGround")`/`.SetReadAccessLevel(AccessLevel.Public)`/
     `.SetWriteAccessLevel(AccessLevel.Vendor)`/`.SetDocumentation(...)` on that retained `SchemaBuilder`; per
-    field, `.AddSimpleField(field.Name, field.ClrType)` returns a `FieldBuilder`, calling
-    `.SetSpec(SpecTypeId.Length)` only where `IsLengthSpec`; finally `.Finish()` runs on the retained
-    `SchemaBuilder`, never a per-field `FieldBuilder`.
+    field, `.AddSimpleField(field.Name, field.ClrType)` returns a `FieldBuilder`, dispatching on
+    `field.Spec`: `.SetSpec(SpecTypeId.Length)` for `Length`, `.SetSpec(SpecTypeId.Number)` for `Number`
+    (2026-09-23 addition — see "Correction" above), or no `SetSpec` call at all for `None`. Two defensive
+    assertions, both added 2026-09-23: for a `None`-spec field, `fieldBuilder.NeedsUnits()` must be `false`,
+    throwing a field-named `ProvenanceAttachmentException` otherwise (this is the exact check that would have
+    caught the original bug at the offending field instead of only at `Finish()`); for a `Number`-spec field,
+    `UnitUtils.IsValidUnit(SpecTypeId.Number, UnitTypeId.General)` must be `true`, throwing otherwise (no
+    installed Revit 2027 source documents this specific pairing, so this turns an unconfirmed assumption into
+    a fail-loud, attributable diagnostic instead of a later raw exception out of `Entity.Set`/`Get`). Finally
+    `.Finish()` runs on the retained `SchemaBuilder`, never a per-field `FieldBuilder`.
 - **`ProvenanceEntityWriter.cs`** (`internal static class`) — `internal static void Attach(Document document,
   Toposolid toposolid, TerrainExportPayload payload, PlacementRecordDraft placementDraft)`, matching
   `ToposolidCreatedHook` exactly (a bare method group, no lambda, no signature change):
@@ -301,9 +348,11 @@ Namespace `SolidGround.Revit.Provenance`, two classes plus one exception type:
      .InformationalVersion, .ModuleVersionId, .Sha256)` — may throw `ProvenanceFieldValueException`.
   2. `schema = ProvenanceSchemaAdapter.EnsurePublishedSchema()`.
   3. Build `new Entity(schema)`; write all 36 fields via 36 explicit, individually statically-typed
-     `Set<T>(name, value[, UnitTypeId.Meters])` call sites — not a reflective loop, since `Entity.Set`/`Get`
-     are compile-time generic with no `Type`-parameterized overload, so `Fields`/`ClrType` drives only
-     `AddSimpleField`/`RequireExactSchema`, never write or read; then `toposolid.SetEntity(entity)`.
+     `Set<T>(name, value[, unitTypeId])` call sites — not a reflective loop, since `Entity.Set`/`Get` are
+     compile-time generic with no `Type`-parameterized overload, so `Fields`/`ClrType` drives only
+     `AddSimpleField`/`RequireExactSchema`, never write or read. The five Length fields pass `UnitTypeId.Meters`;
+     field 24 (`metersPerOutputUnit`) passes `UnitTypeId.General` (2026-09-23 — see "Correction" above); the
+     remaining 30 fields use the two-argument no-unit overload. Then `toposolid.SetEntity(entity)`.
   4. The **four-part read discipline**, applied to `toposolid` itself, immediately after `SetEntity`, still
      pre-commit: (a) `toposolid.GetEntitySchemaGuids()` contains `schema.GUID` — checked before trusting
      absence, since `Schema.Lookup(guid) == null` only proves the schema is unregistered in *this* session;
@@ -438,19 +487,27 @@ issue's scope.
 
 ## Tests
 
-All 26 tests are offline, Linux-CI-runnable, `sealed <Subject>Tests` in `tests/SolidGround.Tests/`, plain
+All 29 tests are offline, Linux-CI-runnable, `sealed <Subject>Tests` in `tests/SolidGround.Tests/`, plain
 `Assert.*`; the full offline suite (`SolidGround.Tests`) stood at 939 tests once Stage 2 landed (938 passed, 1
 skipped by design — the live OpenTopography test). Six of the rows below have no counterpart in the design
 record or this note's original draft — Stage 1's own review rounds added them, and the shipped code is
-authoritative here. Revit-side code (`ProvenanceSchemaAdapter`, `ProvenanceEntityWriter`) has zero automated
-tests — `SolidGround.Tests` is architecturally barred from referencing `RevitAPI`, matching
-`ToposolidCreationService`/`PostCreationVerification` precedent; it is compile-checked only by the Nice3point
-CI gate, with all real behavior deferred to the manual evidence plan below.
+authoritative here. Three further rows (`EveryDoubleFieldCarriesALengthOrNumberSpec`,
+`MetersPerOutputUnitCarriesTheNumberSpec`, `MetersPerOutputUnitIsToleranceBoundedNotExact`) were added
+2026-09-23 by the Issue #16 round 1 fix (see "Correction" above) and likewise have no design-record
+counterpart, for the same reason: they lock the Number-spec correction and its defensive tolerance change so
+neither can silently regress. That fix brought the full offline suite to 942 tests (941 passed, 1 skipped by
+design), still just the live OpenTopography test. Revit-side code (`ProvenanceSchemaAdapter`,
+`ProvenanceEntityWriter`) has zero automated tests — `SolidGround.Tests` is architecturally barred from
+referencing `RevitAPI`, matching `ToposolidCreationService`/`PostCreationVerification` precedent; it is
+compile-checked only by the Nice3point CI gate, with all real behavior deferred to the manual evidence plan
+below.
 
 | Test | Proves |
 | --- | --- |
 | `ExtensibleStorageProvenanceSchemaTests.FieldListHasNoDuplicateNamesOrTypes` | the 36-entry `Fields` list has no name collision `AddSimpleField` would reject, and every field's CLR type is one of the four supported simple types |
-| `...EveryLengthSpecFieldIsADoubleField` | only `double` fields carry `IsLengthSpec`, and exactly 5 fields do |
+| `...EveryLengthSpecFieldIsADoubleField` | only `double` fields carry `ProvenanceFieldSpec.Length`, and exactly 5 fields do |
+| `...EveryDoubleFieldCarriesALengthOrNumberSpec` | *(2026-09-23)* every `double` field's `Spec` is `Length` or `Number`, never `None` — locks the fix so no double field can regress to spec-less again |
+| `...MetersPerOutputUnitCarriesTheNumberSpec` | *(2026-09-23)* the exact field named in the "Units are required for field metersPerOutputUnit" failure carries `ProvenanceFieldSpec.Number` specifically |
 | `...FieldCountStaysUnderRevitsTwoHundredAndFiftySixFieldLimit` | 36 stays far under `Finish()`'s 256-field exception |
 | `...SchemaNameContainsNoPunctuationRevitMightReject` | regression-locks the owner's other add-in dotted-name lesson via an exact-literal assertion plus a per-character check (a bare per-character loop alone would still pass an accidentally-emptied constant) |
 | `ExtensibleStorageProvenanceValuesTests.FromProducesExpectedValuesForAExampleSiteLikeProvenance` | `From` against the real pipeline and the committed `example-site-synthetic.*` fixture, not a hand-built object |
@@ -465,9 +522,10 @@ CI gate, with all real behavior deferred to the manual evidence plan below.
 | `...OutputUnitTokenMatchesThePlacementRecordsOwnTokenForEveryLengthUnit` | field 23 and the placement record share one spelling |
 | `...HorizontalDatumIsTheProjectedTargetDatumNotTheSourceGeographicDatum` | field 9's corrected source expression |
 | `...DiffReportsMismatchesAtAndJustPastTheRoundTripTolerance` | the tolerance boundary itself, inclusive at exactly the tolerance |
-| `...DiffDetectsMismatchesFromStringIntBoolAndExactDoubleComparators` | one mismatch case each for `CompareString`/`CompareInt`/`CompareBool`/`CompareExactDouble` (a broken comparator for any of the other 31 fields would previously go undetected) |
+| `...DiffDetectsMismatchesFromStringIntAndBoolComparators` | one mismatch case each for `CompareString`/`CompareInt`/`CompareBool` (a broken comparator for any of the other 30 such fields would previously go undetected); renamed 2026-09-23 after `CompareExactDouble` was removed (see next row) |
+| `...MetersPerOutputUnitIsToleranceBoundedNotExact` | *(2026-09-23)* `metersPerOutputUnit`'s `Diff` comparison is tolerance-bounded like the five Length fields, not bit-exact — locks the fix that replaced the now-removed `CompareExactDouble` call for this field; also locks a round 2 fix that its mismatch message says "unitless ratio," not the generic Length-field " m" suffix `CompareLength`'s other five call sites use |
 | `...DiffAndComputeDeltasMessagesAreCultureInvariant` | mirrors the date test for `Diff`/row 21c's delta text |
-| `...ComputeDeltasReportsEveryLengthFieldRegardlessOfTolerance` | `ComputeDeltas` never short-circuits |
+| `...ComputeDeltasReportsEveryToleranceBoundedFieldRegardlessOfTolerance` | *(renamed and extended 2026-09-23 by a round 2 review finding)* `ComputeDeltas` never short-circuits, across all six tolerance-bounded doubles including `metersPerOutputUnit`, not only the five Length fields |
 | `...ReconstructSourceCoordinateMatchesLocalCoordinateFrameToSourceForARetainedExampleSiteSample` | the flattened reconstruction matches real `ToSource`, fixture-anchored (all-meters case) |
 | `...ReconstructSourceCoordinateMatchesToSourceMetersForSyntheticNonMeterUnits` | a synthetic non-fixture US-survey-foot/international-foot case proving `ToSourceMeters` still matches when the per-axis conversion factors are not 1.0, and separately checks the two elevation Length fields the reconstruction path itself never reads |
 | `...RawConstructorMatchesFromForAnEquivalentInstance` | the read-back-only raw constructor agrees with `From` (`Diff` is empty) |
@@ -494,8 +552,14 @@ SolidGround.slnx --configuration Release --no-restore -p:UseRevitReferenceAssemb
 `.github/workflows/ci.yml` — was also run and passes with 0 warnings, and `src/SolidGround.Revit/obj/project.assets.json`
 confirms the resulting build actually resolved the CI-only, exact-pinned `Nice3point.Revit.Api.RevitAPI`/
 `RevitAPIUI` packages rather than the local `RevitInstallDir` HintPath references, with no change to the gate
-mechanism itself. None of this is a substitute for the manual evidence plan below: every check here is
-offline and Revit-free by construction (`SolidGround.Tests` never launches Revit, and neither compile gate
+mechanism itself. **2026-09-23 addendum (Issue #16 round 1 fix):** the three supported commands (`restore
+--locked-mode`, `build --configuration Release --no-restore`, `test ... --configuration Release --no-build`)
+were re-run against the corrected code and passed: 0 warnings, 0 errors, 942 tests (941 passed, 1 skipped by
+design, same live OpenTopography test). The CI-shaped `-p:UseRevitReferenceAssemblies=true` gate variant was
+not re-run in this round; it is unaffected by this fix (no package, TFM, or gate-mechanism change) but has not
+been independently re-confirmed since. None of this is a substitute for the manual evidence plan below: every
+check here is offline and Revit-free by construction (`SolidGround.Tests` never launches Revit, and neither
+compile gate
 exercises runtime behavior), which is exactly why the manual plan exists as a separate, later step.
 
 ## Sources
@@ -579,7 +643,15 @@ two independent sessions' deltas with a 10x-100x margin over the largest one obs
 2. Run `EsSpotCheck`, which presents the `EsDump` output side by side with Step 9's known inputs: exact match
    for string/int/bool fields, same order of magnitude by eye for the five Length doubles, not
    tolerance-precise, since the probe is deliberately Core-free and cannot call `Diff`/`ComputeDeltas`; only
-   Step 9 stays tolerance-precise.
+   Step 9 stays tolerance-precise. **Round 2 review finding, 2026-09-23:** `EsDump`'s field-capture helper
+   (`ProbeEsEntityDump.CaptureField`, kept outside this repository with the rest of `SolidGroundProbe`) reads
+   every non-empty-spec field with the hardcoded `UnitTypeId.Meters`, a choice its own code comment already
+   flagged as dormant for "non-Length spec" fields because none existed in this schema before this issue's
+   round 1 fix gave `metersPerOutputUnit` `SpecTypeId.Number`. That dormant path is no longer dormant: reading
+   a `SpecTypeId.Number` field with `UnitTypeId.Meters` does not pair with the `UnitTypeId.General` this note's
+   own schema now requires for that spec (see "Correction" and "Revit side" above), so `EsDump` must be updated
+   to read `metersPerOutputUnit` with `UnitTypeId.General` before this step next runs, or its dump will show
+   `metersPerOutputUnit` as `(error)` instead of a real value (see "Known limitations").
 3. Run `EsForeignWrite`: in a trivial transaction, always rolled back, never committed, construct
    `new Entity(schema)` from `SolidGroundProbe`'s own, different `VendorId`, to observe `AccessLevel.Vendor`
    enforcement. Expect the documented `Autodesk.Revit.Exceptions.InvalidOperationException` ("Writing of
@@ -698,6 +770,17 @@ section exactly in shape.
 - **`ExtensibleStorageRoundTripTolerance` mechanics are unconfirmed.** No 2027 API source states whether
   `Entity.Set`/`Get<double>(..., UnitTypeId.Meters)` round-trips through an internal-unit conversion at all;
   the 1e-6 m value is a first-principles estimate pending Step 9's multi-sample calibration.
+- **The out-of-repo probe's `metersPerOutputUnit` read path is broken until it is updated (round 2 review
+  finding, 2026-09-23).** `SolidGroundProbe`'s `ProbeEsEntityDump.CaptureField` (see Step 10 above) reads every
+  non-empty-spec field with a hardcoded `UnitTypeId.Meters`; that branch was harmless and dormant while this
+  schema had no non-Length spec'd field at all (before this issue's round 1 fix, `metersPerOutputUnit` carried
+  no spec, which was the original production bug). Round 1 gave that field `SpecTypeId.Number`/
+  `UnitTypeId.General` instead (see "Correction" above), so the probe's blanket `Meters` fallback is now
+  exercised for the first time and no longer matches this schema's own field. Left unfixed, Step 10's `EsDump`
+  will report `metersPerOutputUnit` as `(error)` (caught gracefully by the probe's own try/catch, not a crash,
+  but unreadable) instead of the real value `EsSpotCheck` needs to compare against Step 9's known inputs. This
+  note does not itself change the probe, which lives entirely outside this repository; whoever next runs Step
+  10 must special-case `SpecTypeId.Number` fields in `CaptureField` to read with `UnitTypeId.General` first.
 - **The array-field container type remains unresolved** (inherited from
   `revit-2027-verification-and-host-design.md` item 8), irrelevant here since every field is
   `AddSimpleField`, but still open for any future schema that needs one.

@@ -65,7 +65,7 @@ internal static class ProvenanceEntityWriter
         entity.Set<double>("elevationMinimumMeters", expected.ElevationMinimumMeters, UnitTypeId.Meters);
         entity.Set<double>("elevationMaximumMeters", expected.ElevationMaximumMeters, UnitTypeId.Meters);
         entity.Set<string>("outputUnitToken", expected.OutputUnitToken);
-        entity.Set<double>("metersPerOutputUnit", expected.MetersPerOutputUnit);
+        entity.Set<double>("metersPerOutputUnit", expected.MetersPerOutputUnit, UnitTypeId.General);
         entity.Set<double>("localOriginXMeters", expected.LocalOriginXMeters, UnitTypeId.Meters);
         entity.Set<double>("localOriginYMeters", expected.LocalOriginYMeters, UnitTypeId.Meters);
         entity.Set<double>("localOriginElevationMeters", expected.LocalOriginElevationMeters, UnitTypeId.Meters);
@@ -143,7 +143,7 @@ internal static class ProvenanceEntityWriter
             ElevationMinimumMeters: readBack.Get<double>("elevationMinimumMeters", UnitTypeId.Meters),
             ElevationMaximumMeters: readBack.Get<double>("elevationMaximumMeters", UnitTypeId.Meters),
             OutputUnitToken: readBack.Get<string>("outputUnitToken"),
-            MetersPerOutputUnit: readBack.Get<double>("metersPerOutputUnit"),
+            MetersPerOutputUnit: readBack.Get<double>("metersPerOutputUnit", UnitTypeId.General),
             LocalOriginXMeters: readBack.Get<double>("localOriginXMeters", UnitTypeId.Meters),
             LocalOriginYMeters: readBack.Get<double>("localOriginYMeters", UnitTypeId.Meters),
             LocalOriginElevationMeters: readBack.Get<double>("localOriginElevationMeters", UnitTypeId.Meters),

@@ -29,14 +29,46 @@ public sealed class ExtensibleStorageProvenanceSchemaTests
     {
         foreach (ProvenanceFieldDefinition field in ExtensibleStorageProvenanceSchema.Fields)
         {
-            if (field.IsLengthSpec)
+            if (field.Spec == ProvenanceFieldSpec.Length)
             {
                 Assert.Equal(typeof(double), field.ClrType);
             }
         }
 
-        int lengthSpecCount = ExtensibleStorageProvenanceSchema.Fields.Count(field => field.IsLengthSpec);
+        int lengthSpecCount = ExtensibleStorageProvenanceSchema.Fields.Count(field => field.Spec == ProvenanceFieldSpec.Length);
         Assert.Equal(5, lengthSpecCount);
+    }
+
+    [Fact]
+    public void EveryDoubleFieldCarriesALengthOrNumberSpec()
+    {
+        // Revit 2027's SchemaBuilder.Finish() requires every floating-point field to carry a spec
+        // (FieldBuilder.AddSimpleField's own documented remark: "Make sure to set the unit type if the field
+        // contains floating-point values"). A 2026-09-23 live-Revit failure showed metersPerOutputUnit had
+        // been left with no spec at all -- this test locks the fix so no double field can regress to
+        // ProvenanceFieldSpec.None again, whatever new fields are added later.
+        foreach (ProvenanceFieldDefinition field in ExtensibleStorageProvenanceSchema.Fields)
+        {
+            if (field.ClrType == typeof(double))
+            {
+                Assert.True(
+                    field.Spec is ProvenanceFieldSpec.Length or ProvenanceFieldSpec.Number,
+                    $"Field '{field.Name}' is a double field but carries spec {field.Spec}; " +
+                    $"it must be {ProvenanceFieldSpec.Length} or {ProvenanceFieldSpec.Number}.");
+            }
+        }
+    }
+
+    [Fact]
+    public void MetersPerOutputUnitCarriesTheNumberSpec()
+    {
+        // The exact field named in the 2026-09-23 SchemaBuilder.Finish() failure ("Units are required for
+        // field metersPerOutputUnit"): a unitless ratio, not a length, so it must use ProvenanceFieldSpec.Number
+        // rather than ProvenanceFieldSpec.Length or ProvenanceFieldSpec.None.
+        ProvenanceFieldDefinition field = ExtensibleStorageProvenanceSchema.Fields.Single(candidate => candidate.Name == "metersPerOutputUnit");
+
+        Assert.Equal(typeof(double), field.ClrType);
+        Assert.Equal(ProvenanceFieldSpec.Number, field.Spec);
     }
 
     [Fact]

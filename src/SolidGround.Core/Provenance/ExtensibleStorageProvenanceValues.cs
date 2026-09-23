@@ -159,12 +159,22 @@ public sealed record ExtensibleStorageProvenanceValues(
 
     /// <summary>
     /// Compares every field of <paramref name="expected"/> against <paramref name="actual"/>, never
-    /// short-circuiting: string/int/bool fields must match exactly (ordinal for strings), the five
-    /// Length-spec fields must match within <see cref="ExtensibleStorageProvenanceSchema.ExtensibleStorageRoundTripTolerance"/>,
-    /// and <see cref="MetersPerOutputUnit"/> must match bit-for-bit (it is a fixed ratio, never a measured
-    /// length). Every numeric value in a returned message is formatted with <see cref="CultureInfo.InvariantCulture"/>,
-    /// matching <c>CreateToposolidCommand.cs</c>'s own <c>"R"</c>-format convention.
+    /// short-circuiting: string/int/bool fields must match exactly (ordinal for strings), and the five
+    /// Length-spec fields plus <see cref="MetersPerOutputUnit"/> must each match within
+    /// <see cref="ExtensibleStorageProvenanceSchema.ExtensibleStorageRoundTripTolerance"/>. Every numeric value
+    /// in a returned message is formatted with <see cref="CultureInfo.InvariantCulture"/>, matching
+    /// <c>CreateToposolidCommand.cs</c>'s own <c>"R"</c>-format convention.
     /// </summary>
+    /// <remarks>
+    /// <see cref="MetersPerOutputUnit"/> was compared bit-for-bit until a 2026-09-23 round-1 review finding:
+    /// that treatment was premised on the field carrying no Extensible Storage spec at all (so no internal-unit
+    /// round trip could touch it), but the same 2026-09-23 fix gave it <c>SpecTypeId.Number</c> (Revit 2027
+    /// requires every floating-point field to carry one) -- and no Revit 2027 source confirms whether
+    /// <c>SpecTypeId.Number</c>/<c>UnitTypeId.General</c> round-trips losslessly through <c>Entity.Set</c>/
+    /// <c>Get&lt;double&gt;</c>. Comparing it with the same tolerance as the Length fields is the defensive
+    /// choice until a live Revit 2027 session either confirms a lossless round trip (letting this revert to an
+    /// exact compare) or measures a real delta to calibrate against.
+    /// </remarks>
     /// <returns>One message per mismatched field, in canonical field order; empty when every field matches.</returns>
     public static IReadOnlyList<string> Diff(ExtensibleStorageProvenanceValues expected, ExtensibleStorageProvenanceValues actual)
     {
@@ -197,7 +207,13 @@ public sealed record ExtensibleStorageProvenanceValues(
         CompareLength(mismatches, "elevationMinimumMeters", expected.ElevationMinimumMeters, actual.ElevationMinimumMeters, toleranceMeters);
         CompareLength(mismatches, "elevationMaximumMeters", expected.ElevationMaximumMeters, actual.ElevationMaximumMeters, toleranceMeters);
         CompareString(mismatches, "outputUnitToken", expected.OutputUnitToken, actual.OutputUnitToken);
-        CompareExactDouble(mismatches, "metersPerOutputUnit", expected.MetersPerOutputUnit, actual.MetersPerOutputUnit);
+        // Tolerance-bounded, not bit-exact, since 2026-09-23 (round 1 review finding) -- see the Diff doc
+        // comment's <remarks> for why: metersPerOutputUnit now carries SpecTypeId.Number, so a bit-exact
+        // compare could no longer be justified by "this field has no spec to round-trip." Round 2 review
+        // finding: this field is a unitless ratio, not a length (schema table row 24; the <remarks> above), so
+        // its mismatch message must not claim the generic " m" suffix CompareLength's other five call sites
+        // use -- passed explicitly below.
+        CompareLength(mismatches, "metersPerOutputUnit", expected.MetersPerOutputUnit, actual.MetersPerOutputUnit, toleranceMeters, toleranceUnitSuffix: ", a unitless ratio");
         CompareLength(mismatches, "localOriginXMeters", expected.LocalOriginXMeters, actual.LocalOriginXMeters, toleranceMeters);
         CompareLength(mismatches, "localOriginYMeters", expected.LocalOriginYMeters, actual.LocalOriginYMeters, toleranceMeters);
         CompareLength(mismatches, "localOriginElevationMeters", expected.LocalOriginElevationMeters, actual.LocalOriginElevationMeters, toleranceMeters);
@@ -215,7 +231,9 @@ public sealed record ExtensibleStorageProvenanceValues(
     }
 
     /// <summary>
-    /// Reports the five Length-spec fields' actual delta (<c>actual - expected</c>, in meters),
+    /// Reports the six tolerance-bounded doubles' actual delta (<c>actual - expected</c>, in meters for the
+    /// five Length-spec fields; a unitless ratio for <see cref="MetersPerOutputUnit"/>, 2026-09-23 -- see
+    /// <see cref="Diff"/>'s <c>&lt;remarks&gt;</c> for why that field joined this comparison class),
     /// unconditionally -- whether or not each is within
     /// <see cref="ExtensibleStorageProvenanceSchema.ExtensibleStorageRoundTripTolerance"/> -- so a caller
     /// always has a number to log, matching the field order those fields appear in within
@@ -227,10 +245,14 @@ public sealed record ExtensibleStorageProvenanceValues(
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(actual);
 
+        // metersPerOutputUnit (field 24) sits between elevationMaximumMeters (22) and localOriginXMeters (25)
+        // here, matching this method's own doc comment's claim to follow Fields's canonical order -- added
+        // 2026-09-23 by a round 2 review finding; see the doc comment above.
         return
         [
             ("elevationMinimumMeters", actual.ElevationMinimumMeters - expected.ElevationMinimumMeters),
             ("elevationMaximumMeters", actual.ElevationMaximumMeters - expected.ElevationMaximumMeters),
+            ("metersPerOutputUnit", actual.MetersPerOutputUnit - expected.MetersPerOutputUnit),
             ("localOriginXMeters", actual.LocalOriginXMeters - expected.LocalOriginXMeters),
             ("localOriginYMeters", actual.LocalOriginYMeters - expected.LocalOriginYMeters),
             ("localOriginElevationMeters", actual.LocalOriginElevationMeters - expected.LocalOriginElevationMeters),
@@ -318,21 +340,16 @@ public sealed record ExtensibleStorageProvenanceValues(
         }
     }
 
-    private static void CompareExactDouble(List<string> mismatches, string field, double expected, double actual)
-    {
-        if (!expected.Equals(actual))
-        {
-            mismatches.Add($"{field}: expected '{FormatDouble(expected)}', actual '{FormatDouble(actual)}'.");
-        }
-    }
-
-    private static void CompareLength(List<string> mismatches, string field, double expected, double actual, double toleranceMeters)
+    // toleranceUnitSuffix defaults to " m" so the five real Length-spec call sites are unaffected; the
+    // metersPerOutputUnit call site (round 2 review finding: that field is a unitless ratio, not a length)
+    // passes its own suffix instead of inheriting a misleading meters label.
+    private static void CompareLength(List<string> mismatches, string field, double expected, double actual, double toleranceMeters, string toleranceUnitSuffix = " m")
     {
         bool exactMatch = expected.Equals(actual);
         bool withinTolerance = double.IsFinite(expected) && double.IsFinite(actual) && Math.Abs(expected - actual) <= toleranceMeters;
         if (!exactMatch && !withinTolerance)
         {
-            mismatches.Add($"{field}: expected '{FormatDouble(expected)}', actual '{FormatDouble(actual)}' (tolerance {FormatDouble(toleranceMeters)} m).");
+            mismatches.Add($"{field}: expected '{FormatDouble(expected)}', actual '{FormatDouble(actual)}' (tolerance {FormatDouble(toleranceMeters)}{toleranceUnitSuffix}).");
         }
     }
 

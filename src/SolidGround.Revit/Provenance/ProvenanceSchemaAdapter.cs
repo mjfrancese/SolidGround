@@ -76,9 +76,71 @@ internal static class ProvenanceSchemaAdapter
         {
             FieldBuilder fieldBuilder = builder.AddSimpleField(field.Name, field.ClrType);
             fieldBuilder.SetDocumentation(field.Documentation);
-            if (field.IsLengthSpec)
+
+            ForgeTypeId? spec = field.Spec switch
             {
-                fieldBuilder.SetSpec(SpecTypeId.Length);
+                ProvenanceFieldSpec.Length => SpecTypeId.Length,
+                ProvenanceFieldSpec.Number => SpecTypeId.Number,
+                ProvenanceFieldSpec.None => null,
+                _ => throw new ProvenanceAttachmentException(
+                    $"SolidGround's Extensible Storage field '{field.Name}' has an unrecognized spec " +
+                    $"'{field.Spec}'; the schema could not be published."),
+            };
+
+            if (spec is not null)
+            {
+                fieldBuilder.SetSpec(spec);
+
+                // Round 1 review finding: SchemaBuilder.SetSpec(SpecTypeId.Number) succeeding does not by
+                // itself confirm UnitTypeId.General is a valid unit for that spec -- RevitAPI.xml documents
+                // no Number/General pairing table (docs checked 2026-09-23), so this asserts it explicitly,
+                // once per Number-spec field, turning a bad pairing into a named, fail-loud
+                // ProvenanceAttachmentException here instead of a later raw ArgumentException out of
+                // Entity.Set/Get in ProvenanceEntityWriter. UnitUtils.IsValidUnit is a static, Document-free
+                // Revit API call (RevitAPI.xml:215844-215866), so this needs no live Revit session to add.
+                //
+                // Round 2 review finding: UnitUtils.IsValidUnit(ForgeTypeId, ForgeTypeId) itself throws
+                // Autodesk.Revit.Exceptions.ArgumentException when its first argument is not a measurable spec
+                // (RevitAPI.xml:215844-215866, "specTypeId is not a measurable spec identifier") -- a different
+                // failure mode than the false return value this check exists to handle, and one that would
+                // otherwise reach EnsurePublishedSchema's caller unwrapped, before the try/catch around
+                // builder.Finish() below ever runs. UnitUtils.IsMeasurableSpec(ForgeTypeId) only documents an
+                // ArgumentNullException (never reachable here: SpecTypeId.Number is a non-null static member),
+                // so checking it first turns an unmeasurable spec into the same named, fail-loud
+                // ProvenanceAttachmentException as an invalid pairing, instead of letting IsValidUnit itself
+                // throw one call earlier.
+                if (field.Spec == ProvenanceFieldSpec.Number)
+                {
+                    if (!UnitUtils.IsMeasurableSpec(SpecTypeId.Number))
+                    {
+                        throw new ProvenanceAttachmentException(
+                            $"SolidGround's Extensible Storage field '{field.Name}' uses SpecTypeId.Number, but " +
+                            "Revit reports that spec is not measurable (UnitUtils.IsMeasurableSpec returned " +
+                            "false); the schema could not be published.");
+                    }
+
+                    if (!UnitUtils.IsValidUnit(SpecTypeId.Number, UnitTypeId.General))
+                    {
+                        throw new ProvenanceAttachmentException(
+                            $"SolidGround's Extensible Storage field '{field.Name}' pairs SpecTypeId.Number with " +
+                            "UnitTypeId.General, but Revit reports that unit invalid for that spec; the schema " +
+                            "could not be published.");
+                    }
+                }
+            }
+            else if (fieldBuilder.NeedsUnits())
+            {
+                // FieldBuilder.NeedsUnits() ("Checks whether the field type requires explicit unit
+                // conversions", RevitAPI.xml) reflects field.ClrType's own requirement directly, independent
+                // of whether SetSpec was ever called, so a no-spec field in the field-list contract is
+                // asserted against it here rather than trusted. This is the exact 2026-09-23 regression:
+                // metersPerOutputUnit was silently spec-less until SchemaBuilder.Finish() rejected the whole
+                // schema with "Units are required for field metersPerOutputUnit" -- a real failure, but one
+                // this per-field check now catches earlier, still naming the same field.
+                throw new ProvenanceAttachmentException(
+                    $"SolidGround's Extensible Storage field '{field.Name}' has no spec in the field-list " +
+                    "contract, but FieldBuilder.NeedsUnits() reports that its value type requires one; the " +
+                    "schema could not be published.");
             }
         }
 
@@ -169,20 +231,35 @@ internal static class ProvenanceSchemaAdapter
 
             ForgeTypeId actualSpec = actualField.GetSpecTypeId();
             bool actualHasNoSpec = actualSpec.Empty();
-            bool actualIsLengthSpec = !actualHasNoSpec && string.Equals(actualSpec.TypeId, SpecTypeId.Length.TypeId, StringComparison.Ordinal);
+            string actualSpecDescription = actualHasNoSpec ? "(none)" : actualSpec.TypeId;
 
-            if (expectedField.IsLengthSpec && !actualIsLengthSpec)
+            // Compares the Number spec exactly the same way as the Length spec (both are a
+            // string.Equals(...TypeId, StringComparison.Ordinal) match against a non-empty actual spec); only
+            // the expected TypeId differs (design record §2/§3, extended 2026-09-23 for ProvenanceFieldSpec.Number).
+            string? expectedSpecTypeId = expectedField.Spec switch
             {
-                throw new ProvenanceAttachmentException(
-                    $"The Extensible Storage schema already registered under GUID '{guidText}' has field " +
-                    $"'{expectedField.Name}' with spec '{actualSpec.TypeId}', expected '{SpecTypeId.Length.TypeId}'.");
+                ProvenanceFieldSpec.Length => SpecTypeId.Length.TypeId,
+                ProvenanceFieldSpec.Number => SpecTypeId.Number.TypeId,
+                ProvenanceFieldSpec.None => null,
+                _ => throw new ProvenanceAttachmentException(
+                    $"SolidGround's own field-list contract has field '{expectedField.Name}' with an " +
+                    $"unrecognized spec '{expectedField.Spec}'."),
+            };
+
+            if (expectedSpecTypeId is null)
+            {
+                if (!actualHasNoSpec)
+                {
+                    throw new ProvenanceAttachmentException(
+                        $"The Extensible Storage schema already registered under GUID '{guidText}' has field " +
+                        $"'{expectedField.Name}' with spec '{actualSpecDescription}', expected no spec.");
+                }
             }
-
-            if (!expectedField.IsLengthSpec && !actualHasNoSpec)
+            else if (actualHasNoSpec || !string.Equals(actualSpec.TypeId, expectedSpecTypeId, StringComparison.Ordinal))
             {
                 throw new ProvenanceAttachmentException(
                     $"The Extensible Storage schema already registered under GUID '{guidText}' has field " +
-                    $"'{expectedField.Name}' with spec '{actualSpec.TypeId}', expected no spec.");
+                    $"'{expectedField.Name}' with spec '{actualSpecDescription}', expected '{expectedSpecTypeId}'.");
             }
         }
     }

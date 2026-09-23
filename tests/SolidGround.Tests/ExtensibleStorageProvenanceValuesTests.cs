@@ -291,27 +291,54 @@ public sealed class ExtensibleStorageProvenanceValuesTests
     }
 
     [Fact]
-    public void DiffDetectsMismatchesFromStringIntBoolAndExactDoubleComparators()
+    public void DiffDetectsMismatchesFromStringIntAndBoolComparators()
     {
-        // DiffReportsMismatchesAtAndJustPastTheRoundTripTolerance above exercises CompareLength; every other
-        // field goes through CompareString, CompareInt, CompareBool, or CompareExactDouble, none of which was
+        // DiffReportsMismatchesAtAndJustPastTheRoundTripTolerance above exercises CompareLength (including,
+        // since 2026-09-23, for metersPerOutputUnit -- see MetersPerOutputUnitIsToleranceBoundedNotExact
+        // below); every other field goes through CompareString, CompareInt, or CompareBool, none of which was
         // ever driven with unequal inputs anywhere in this suite before this test (round 1 finding: a broken
-        // comparator for any of the other 31 fields -- an inverted condition, a copy-pasted wrong property, or
-        // a bad field-name literal -- would previously go undetected). One case per comparator kind is enough
-        // to exercise each helper's "found a mismatch" branch and its field-name literal; it is not a
-        // per-field oracle for every one of the 31 call sites, an explicitly accepted, narrower scope.
+        // comparator for any of the other 30 such fields -- an inverted condition, a copy-pasted wrong
+        // property, or a bad field-name literal -- would previously go undetected). One case per comparator
+        // kind is enough to exercise each helper's "found a mismatch" branch and its field-name literal; it is
+        // not a per-field oracle for every one of the 30 call sites, an explicitly accepted, narrower scope.
         TerrainProvenance provenance = CreateProvenance();
         ExtensibleStorageProvenanceValues expected = ExtensibleStorageProvenanceValues.From(provenance, BuildInformationalVersion, BuildModuleVersionId, BuildSha256);
 
         ExtensibleStorageProvenanceValues stringMismatch = expected with { SourceDatasetName = "wrong" };
         ExtensibleStorageProvenanceValues intMismatch = expected with { SchemaVersion = expected.SchemaVersion + 1 };
         ExtensibleStorageProvenanceValues boolMismatch = expected with { HasCollectionPeriod = !expected.HasCollectionPeriod };
-        ExtensibleStorageProvenanceValues exactDoubleMismatch = expected with { MetersPerOutputUnit = expected.MetersPerOutputUnit + 1e-12 };
 
         AssertSingleMismatchNames(ExtensibleStorageProvenanceValues.Diff(expected, stringMismatch), "sourceDatasetName");
         AssertSingleMismatchNames(ExtensibleStorageProvenanceValues.Diff(expected, intMismatch), "schemaVersion");
         AssertSingleMismatchNames(ExtensibleStorageProvenanceValues.Diff(expected, boolMismatch), "hasCollectionPeriod");
-        AssertSingleMismatchNames(ExtensibleStorageProvenanceValues.Diff(expected, exactDoubleMismatch), "metersPerOutputUnit");
+    }
+
+    [Fact]
+    public void MetersPerOutputUnitIsToleranceBoundedNotExact()
+    {
+        // Round 1 review finding (2026-09-23): metersPerOutputUnit was compared bit-for-bit
+        // (CompareExactDouble) until this same fix gave the field a real Extensible Storage spec
+        // (SpecTypeId.Number), which broke the "no spec, so no internal-unit round trip to absorb" premise
+        // the bit-exact comparison relied on. This locks the replacement behavior: a delta within
+        // ExtensibleStorageRoundTripTolerance must not be flagged (so a harmless internal-unit round trip
+        // cannot roll back a valid toposolid creation), but a delta safely past it still must be.
+        TerrainProvenance provenance = CreateProvenance();
+        ExtensibleStorageProvenanceValues expected = ExtensibleStorageProvenanceValues.From(provenance, BuildInformationalVersion, BuildModuleVersionId, BuildSha256);
+        double toleranceMeters = ExtensibleStorageProvenanceSchema.ExtensibleStorageRoundTripTolerance.ToMeters();
+
+        ExtensibleStorageProvenanceValues withinTolerance = expected with { MetersPerOutputUnit = expected.MetersPerOutputUnit + (toleranceMeters * 0.5d) };
+        ExtensibleStorageProvenanceValues pastTolerance = expected with { MetersPerOutputUnit = expected.MetersPerOutputUnit + (toleranceMeters * 2d) };
+
+        Assert.Empty(ExtensibleStorageProvenanceValues.Diff(expected, withinTolerance));
+        IReadOnlyList<string> mismatches = ExtensibleStorageProvenanceValues.Diff(expected, pastTolerance);
+        AssertSingleMismatchNames(mismatches, "metersPerOutputUnit");
+
+        // Round 2 review finding: CompareLength's shared mismatch message always appended a literal " m"
+        // (meters) suffix to the tolerance value, which is misleading for metersPerOutputUnit -- a unitless
+        // ratio, not a length. Locks the field-specific label instead of the generic one.
+        string mismatch = Assert.Single(mismatches);
+        Assert.Contains("unitless ratio", mismatch, StringComparison.Ordinal);
+        Assert.DoesNotContain(" m).", mismatch, StringComparison.Ordinal);
     }
 
     private static void AssertSingleMismatchNames(IReadOnlyList<string> mismatches, string field)
@@ -350,8 +377,14 @@ public sealed class ExtensibleStorageProvenanceValuesTests
     }
 
     [Fact]
-    public void ComputeDeltasReportsEveryLengthFieldRegardlessOfTolerance()
+    public void ComputeDeltasReportsEveryToleranceBoundedFieldRegardlessOfTolerance()
     {
+        // Round 2 review finding (2026-09-23): ComputeDeltas was left reporting only the five Length-spec
+        // fields' deltas even though the round 1 fix moved metersPerOutputUnit into the same tolerance-bounded
+        // comparison class (Diff now runs it through CompareLength too). Renamed from
+        // ComputeDeltasReportsEveryLengthFieldRegardlessOfTolerance because metersPerOutputUnit is not itself a
+        // Length-spec field (schema table row 24), matching this repo's own precedent for renaming a test whose
+        // name no longer described its full coverage (see DiffDetectsMismatchesFromStringIntAndBoolComparators).
         TerrainProvenance provenance = CreateProvenance();
         ExtensibleStorageProvenanceValues expected = ExtensibleStorageProvenanceValues.From(provenance, BuildInformationalVersion, BuildModuleVersionId, BuildSha256);
         ExtensibleStorageProvenanceValues actual = expected with
@@ -361,13 +394,15 @@ public sealed class ExtensibleStorageProvenanceValuesTests
             LocalOriginXMeters = expected.LocalOriginXMeters + 3d,
             LocalOriginYMeters = expected.LocalOriginYMeters + 4d,
             LocalOriginElevationMeters = expected.LocalOriginElevationMeters + 5d,
+            MetersPerOutputUnit = expected.MetersPerOutputUnit + 6d,
         };
 
         IReadOnlyList<(string Field, double Delta)> deltas = ExtensibleStorageProvenanceValues.ComputeDeltas(expected, actual);
 
-        Assert.Equal(5, deltas.Count);
+        Assert.Equal(6, deltas.Count);
         Assert.Equal(1d, DeltaFor(deltas, "elevationMinimumMeters"), 9);
         Assert.Equal(2d, DeltaFor(deltas, "elevationMaximumMeters"), 9);
+        Assert.Equal(6d, DeltaFor(deltas, "metersPerOutputUnit"), 9);
         Assert.Equal(3d, DeltaFor(deltas, "localOriginXMeters"), 9);
         Assert.Equal(4d, DeltaFor(deltas, "localOriginYMeters"), 9);
         Assert.Equal(5d, DeltaFor(deltas, "localOriginElevationMeters"), 9);
