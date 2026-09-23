@@ -5,7 +5,9 @@ Stage 4 (manual evidence) remains. This note was originally drafted in Stage 3 a
 commits (design record §9); it has since been reconciled line by line against the shipped code, which is
 authoritative over both this note's original draft and the design record wherever the three differ. The
 "Manual evidence plan" section's "Evidence" paragraphs stay blank — Pending Stage 4 — until a real Revit 2027
-session fills them in. Unlike `revit-toposolid-creation.md`'s dedicated "Basis" and "Design decisions with
+session fills them in; a 2026-09-23 session filled in Steps 9, 10, 11, 12, and 13.1 below, with Step 13.2 (and
+its recovery) still pending.
+Unlike `revit-toposolid-creation.md`'s dedicated "Basis" and "Design decisions with
 reasons" headings, this note compresses that same material — the multi-proposal/judge synthesis and the
 per-decision rationale — into this Status paragraph and into bolded inline asides inside the sections below
 (for example "Schema-name rationale," "VendorId comparison," "Per-axis meter normalization," "Tolerance,
@@ -596,17 +598,33 @@ under `...\solidground-issue16\evidence\`, `EVIDENCE-ES.md`, `NN-description.ext
 paragraph below is a placeholder; Stage 4 fills each in from a real Revit 2027 session.
 
 Steps 10, 12, and 13 below drive `SolidGroundProbe` (Issue #15's same throwaway add-in, kept entirely outside
-this repository), which gains a new "ES Probes" ribbon panel with six commands for this issue: `EsDump` (the
-four-part read discipline from "Revit side" above, plus a full field dump to a text file, deliberately
-Core-free); `EsSpotCheck` (a side-by-side comparison of an `EsDump` output against Step 9's known inputs);
-`EsForeignWrite` (one rolled-back attempt to construct the entity under `SolidGroundProbe`'s own, different
-`VendorId`); `EsCopyHost` (copies the host toposolid and dumps the copy's entity); `EsDeleteHost` (calls
-`Element.DeleteEntity(Schema)` on the host toposolid, run under the vendor-matching manifest identity below,
-since `DeleteEntity` shares `SetEntity`'s `AccessLevel.Vendor` gate); and `EsPoisonSchema` (registers a
-same-GUID, differently-shaped schema, used by both Step 13 scenarios). `GeoCheck`, used only by Step 10's own
-required geographic cross-check, is a separate throwaway console application — not a `SolidGroundProbe`
-ribbon command and not a shipped `SolidGround.Cli` verb, an explicit orchestrator ruling, since this
-cross-check is a one-off manual-evidence tool, not a durable product capability.
+this repository). The design record originally called for a second, dedicated "ES Probes" ribbon panel holding
+six new commands for this issue. **2026-09-23 correction:** a Stage 4 runtime crash bisection (see "Decisions
+recorded from evidence" below) implicated `SolidGroundProbe` as a whole — Revit crashed twice with the probe
+installed and opened cleanly once its manifest was removed — without itself isolating any specific line of
+code. A separate, subsequent static code review found no concrete memory-safety defect anywhere in the probe
+by inspection and, by process of elimination rather than a confirmed mechanism, flagged a second same-tab
+`CreateRibbonPanel` call — unique to the six new Extensible Storage buttons — as the only Revit-ribbon API call
+novel to the probe's own previously-proven-safe startup code, at medium (one reviewer) to low (another
+reviewer, "ranked #1 only by elimination of everything else, not on a specific found defect") confidence.
+`probe-crash/fix.md` (kept outside this repository) folded all six buttons onto the pre-existing "Probes" panel
+instead, with every button's name, caption, tooltip, and command class byte-for-byte unchanged; the resulting
+single-panel build then launched cleanly, repeatedly, across every later 2026-09-23 launch, which is consistent
+with but does not prove that specific cause, since a prepared bisection variant that omits the six new buttons
+entirely (`probe-crash/variant-no-es-panel`) was built but never actually run. A seventh command,
+`EsNewEvidenceProjectCommand` ("ES New Evidence Project"), was added to that same panel later the same day to
+resolve a separate template-overwrite incident (see Step 9's Evidence below), bringing the single "Probes"
+panel to 18 buttons total. The six original ES commands: `EsDump` (the four-part read discipline from "Revit
+side" above, plus a full field dump to a text file, deliberately Core-free); `EsSpotCheck` (a side-by-side
+comparison of an `EsDump` output against Step 9's known inputs); `EsForeignWrite` (one rolled-back attempt to
+construct the entity under `SolidGroundProbe`'s own, different `VendorId`); `EsCopyHost` (copies the host
+toposolid and dumps the copy's entity); `EsDeleteHost` (calls `Element.DeleteEntity(Schema)` on the host
+toposolid, run under the vendor-matching manifest identity below, since `DeleteEntity` shares `SetEntity`'s
+`AccessLevel.Vendor` gate); and `EsPoisonSchema` (registers a same-GUID, differently-shaped schema, used by
+both Step 13 scenarios). `GeoCheck`, used only by Step 10's own required geographic cross-check, is a separate
+throwaway console application — not a `SolidGroundProbe` ribbon command and not a shipped `SolidGround.Cli`
+verb, an explicit orchestrator ruling, since this cross-check is a one-off manual-evidence tool, not a durable
+product capability.
 
 ### Step 9 — first write, `process` mode
 
@@ -632,7 +650,61 @@ cross-check is a one-off manual-evidence tool, not a durable product capability.
 the relaunch sample both succeed with none of rows 21a-21c firing; the shipped tolerance is set from at least
 two independent sessions' deltas with a 10x-100x margin over the largest one observed.
 
-**Evidence.** Pending Stage 4.
+**Evidence.** Collected 2026-09-23 (`EVIDENCE-ES.md`, Segments 3-6). Plan item 2 above (the owner's own Save-As)
+was superseded before it ran: the owner's standing 2026-09-23 ruling ("I'm not going to do the Save-As. You are
+more than capable to do that.") put Save/Save As/Undo under scripted automation, and a same-day harness incident
+(below) replaced the Save-As dialog itself with an API-created project.
+
+The first live run of the shipped attach code against a real document (Segment 3, build
+`20260921-230336-05cb759a`, pid `43880`) hit row 21a and rolled back cleanly: `ProvenanceAttachmentException`:
+"SolidGround could not finish publishing its Extensible Storage schema 'SolidGround_Provenance_Toposolid' (GUID
+'bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e'): Units are required for field metersPerOutputUnit." No element
+persisted (QAT Undo confirmed disabled; journal and log agree no transaction committed). Art:
+`S9-1-create-dialog.png`, `S9-1-create-dialog-controls.txt`, `S9-1-log-error.txt`, `S9-1d-rollback-proof.txt`.
+Commit `e80a78c` fixed this the same day: `metersPerOutputUnit` now carries `ProvenanceFieldSpec.Number`
+(`SpecTypeId.Number`/`UnitTypeId.General`), redeployed as build `20260923-111825-199ad874`. Segment 4's first
+run against the fixed build (pid `45580`) log-confirmed success — element `317345`, six finite round-trip
+deltas all exactly `0` including `metersPerOutputUnit` for the first time, schema `bc03d923-...` v1 attached —
+though its own untitled document was never saved: Segment 5's 9.2 attempt (a plain QAT Save) produced no Save
+As dialog and no file, traced to a harness design fact, not a product defect: `Start-Revit2027.ps1` opens the
+installed default template (`Default_I_ENU.rte`) itself as its working document, so Save legitimately saved
+back onto that installed file twice, both resulting saves landing at 4,608,000 bytes (the untouched original was
+3,846,144 bytes). It was restored byte-identical
+from Revit's own auto-rotated `.0001` backup at 11:40:12 on 2026-09-23
+(`evidence/template-incident/restore-log.txt`, SHA-256
+`1E7520D621D47EE49C6185AAC38D9AB740097E84C71632D910541C41D000C4CD` confirmed both on the preserved original and
+after the restore). The fix, applied before Step 9 continued: a new probe command,
+`EsNewEvidenceProjectCommand` ("ES New Evidence Project"), creates, saves, and activates a fresh evidence
+project entirely by API, with no Save As dialog and never touching the launcher's own document; every later
+relaunch reopens that saved project via Revit's own Recent Documents list (a read action, never a save) before
+any further command runs.
+
+With that fix in place, Segment 6 produced three samples against commit `e80a78c`'s build (redeployed,
+re-verified, still `20260923-111825-199ad874`): **Sample 1** — "ES New Evidence Project" created
+`issue16-es-evidence.rvt` (38,510,592 bytes; three-part Pass confirmed: active document path, launcher
+path/`IsModified` unchanged, main window title), then Create Toposolid produced element `1245519` (Level L1,
+ToposolidType "Generic - 20'", 1130 of 1130 points retained, budget 15000), all six deltas exactly `0`,
+placement record confirms `schemaVersion:2`/`extensibleStorage{schemaGuid, schemaVersion:1}` (Art:
+`S9-1-02-create-dialog-seg6.png`, `S9-1-04-log-tail-seg6.txt`, `S9-1-05-placement-seg6.json`). **Sample 2** — an
+unmodified control run against the same document produced element `1245527`, a second Attached/deltas line (all
+six again exactly `0`) plus a benign, expected "Highlighted toposolids overlap" warning (same footprint by
+design), then a QAT Save with no Save As dialog (the document already had a path from Sample 1's own project
+creation): file grew from 38,510,592 to 40,169,472 bytes; the launcher template re-hashed unchanged (Art:
+`S9-3-01-control-dialog-seg6.png`, `S9-3-02-log-tail-seg6.txt`). **Sample 3** — a full close/redeploy (no-op,
+same build)/relaunch (pid `51336`) created a separate throwaway `issue16-es-calibration.rvt` via "ES New
+Evidence Project", then Create Toposolid once produced element `1245519` (cross-process — an independent id
+sequence in the new document), a third Attached/deltas line (all six again exactly `0`); Revit was then closed
+**without** saving that in-memory toposolid, confirmed by an actual "Do you want to save changes to
+issue16-es-calibration.rvt?" prompt answered "No" (Art: `S9-4-07-calibration-dialog-seg6.png`,
+`S9-4-08-log-tail-seg6.txt`, `S9-4-09-savefile-dialog-no-seg6.txt`).
+
+**Outcome.** Every field round-tripped within `ExtensibleStorageRoundTripTolerance` in all three samples, the
+control run's `RequireExactSchema` non-null branch accepted the already-published schema with no re-publish, and
+the relaunch sample supplied the required cross-process delta. All three samples' six round-trip fields — the
+five Length fields plus the newly-fixed `metersPerOutputUnit` — were exactly `0` in every case, not merely
+within tolerance: `ExtensibleStorageRoundTripTolerance = 1e-6 m` is confirmed with a margin far beyond the
+originally-anticipated 10x-100x, for `metersPerOutputUnit` as much as the five Length fields, so no tolerance
+revision is warranted (see "Tolerance, provisional" above, both open questions).
 
 ### Step 10 — same-session cross-vendor read via the probe, plus the required `GeoCheck` geographic cross-check
 
@@ -663,7 +735,7 @@ two independent sessions' deltas with a 10x-100x margin over the largest one obs
    own manual test step 9 predicted the `SetEntity`-level `ArgumentException` specifically; this note corrects
    that prediction for the construction-time path now that the exact `Entity` constructor's own documented
    exception is known. Read back and diff every field against Step 9's dump before Step 11.
-4. **Required: geographic cross-check via `GeoCheck`.** `GeoCheck` (see the "ES Probes" paragraph above)
+4. **Required: geographic cross-check via `GeoCheck`.** `GeoCheck` (see the `SolidGroundProbe` paragraph above)
    references `SolidGround.Core` directly — unlike the deliberately Core-free `SolidGroundProbe` — to
    independently run the full geographic reconstruction leg against dumped fields 28-33 (the horizontal
    forward/inverse operation format, definition, engine name, and version), compared within
@@ -675,7 +747,56 @@ two independent sessions' deltas with a 10x-100x margin over the largest one obs
 the documented `InvalidOperationException` at `Entity` construction and is confirmed rolled back, never
 committed; `GeoCheck`'s delta is within `GeographicRoundTripToleranceDegrees`.
 
-**Evidence.** Pending Stage 4.
+**Evidence.** Collected 2026-09-23 (`EVIDENCE-ES.md`, Segment 6), same session as Step 9 above, against
+`issue16-es-evidence.rvt`. Reopening that file (required before any 10.x command, per the standing rule the
+template incident produced — see Step 9 above) took three attempts: `WM_SETTEXT` on the classic Open dialog's
+file-name field did not retain programmatically-set text, for either the real target path or a trivial test
+string (dialog then cancelled, harmless); toggling the Application Menu button's `TogglePattern` opened an inert,
+invisible "Hidden Window" with zero enumerable descendants (left untouched); enumerating the **main window's
+own** automation tree found the Recent Documents flyout's `issue16-es-evidence.rvt_CommandButton` (matched by
+`AutomationId`, distinct from the co-named pin button), whose invocation changed the title bar to
+`issue16-es-evidence.rvt` — a read action, never a save (Art: `S10-00-launch-seg6.txt` through
+`S10-04-select-sgprobe-tab-seg6.txt`).
+
+**10.1 EsDump.** `entity.isValid`/`readAccessGranted` both `true`, schema
+`bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e` found via `Schema.Lookup`, exactly 36 fields present.
+`metersPerOutputUnit` carries `specTypeId autodesk.spec.aec:number-2.0.0`/`unitTypeId
+autodesk.unit.unit:general-1.0.1`, confirming commit `e80a78c`'s Number-spec fix is live in the schema after a
+real save and reopen, not only in-memory. The five Length fields (`elevationMinimumMeters=166.043`,
+`elevationMaximumMeters=171.278`, `localOriginXMeters=[withheld]`, `localOriginYMeters=[withheld]`,
+`localOriginElevationMeters=0`) match Step 9's known inputs (Art: `S10-1-es-dump.json/.txt`).
+
+**10.2 EsSpotCheck.** `schemaGuid`/`schemaVersion` and `pointCounts.original`/`retained` (1130/1130) EXACT
+MATCH; `localOrigin` deltas all `0`, within the probe's own loose 1e-3 m eyeball tolerance (Art:
+`S10-2-es-spot-check.json/.txt`). **Scope caveat, not a failure** (see "Known limitations" below): the probe
+resolves the placement record it compares against as the newest file under `output.directory`, not the
+currently open document's own — this run actually cross-checked `issue16-es-evidence.rvt`'s entity against
+Sample 3's calibration-run placement record instead of one written against `issue16-es-evidence.rvt` itself,
+numerically correct here only because both runs' synthetic fixture inputs were identical.
+
+**10.3 EsForeignWrite**, against element `1245519`. `new Entity(schema)` threw
+`Autodesk.Revit.Exceptions.InvalidOperationException`: "Writing of Entities of this Schema is not allowed to
+the current add-in." — as "Write-access enforcement point" above predicted. `Element.SetEntity` was then
+**skipped**, not attempted, because entity construction had already failed and no `Entity` existed to pass to
+it — also as that section predicted ("before `SetEntity` is ever reached"). `Element.DeleteEntity(schema)`
+threw `Autodesk.Revit.Exceptions.ArgumentException` with the identical message text plus the standard
+`Parameter name: schema` suffix. `Transaction.RollBack()` returned `RolledBack`; the read-back diff showed "no
+field differences" (Art: `S10-3-es-foreign-write.json/.txt`).
+
+**10.4 GeoCheck (REQUIRED).** `dotnet GeoCheck.dll --dump S10-1-es-dump.json` rebuilt the transform (EPSG:4326
+geographic <-> EPSG:26915 projected, datum NAD83, engine ProjNET 2.1.0) and printed `[PASS] local origin (0,0):
+projected round-trip delta = 0.008633304884933916 m (tolerance 0.02 m)`, exit code `0` (Art:
+`S10-11-cli-cross-check-seg6.txt`, `S10-1-es-dump.json.geocheck.json`).
+
+**Outcome.** Step 10 passes on every stated criterion. `EsForeignWrite`'s observed exception sequence confirms
+"Write-access enforcement point" above precisely: `new Entity(schema)` threw `InvalidOperationException` first,
+so `Element.SetEntity` was never reached at all — not a probe sequencing choice to skip a call it could
+otherwise have made, but a hard consequence of construction failing before any `Entity` object existed to pass
+to it. Only `Element.DeleteEntity`, called separately against the still-live host element (which needs no
+`Entity` argument), went on to actually throw, and did so with `ArgumentException`. `Element.SetEntity`'s own
+predicted `ArgumentException` remains documented in `RevitAPI.xml` but has still never been independently
+exercised by any session, since no code path in `EsForeignWrite` calls it with a null or placeholder `Entity`
+once construction has already failed.
 
 ### Step 11 — save/reopen, `SolidGround.Revit` absent
 
@@ -687,7 +808,24 @@ committed; `GeoCheck`'s delta is within `GeographicRoundTripToleranceDegrees`.
 **Pass criteria.** The schema and every field are readable with `SolidGround.Revit` entirely absent from the
 session, confirming `AccessLevel.Public` read does not depend on the publishing add-in's own presence.
 
-**Evidence.** Pending Stage 4.
+**Evidence.** Collected 2026-09-23 (`EVIDENCE-ES.md`, Segment 7), continuing the same `issue16-es-evidence.rvt`
+Steps 9-10 produced. `SolidGround.addin` (hash `6f8a3f26612b2c6a6b4be5b5ad825fd45291b6ce69239022db24461281e43ec4`)
+was moved, not renamed in place, to `evidence\disabled\SolidGround.addin` — an orchestrator-directed variant of
+this step's own plan item 1 above, which named either mechanism. Relaunch (pid `38176`) showed exactly one
+security dialog (`SolidGroundProbe` only — `SolidGround` did not load) and only the SG Probe ribbon tab
+(`SolidGround`'s own tab absent from the ribbon's button enumeration). `issue16-es-evidence.rvt` was reopened
+via the Recent Documents technique Step 10 established, confirmed by the title-bar change. **ES Dump**
+(`evidenceSequence:"S11-1"`) reported `entity.isValid: true`, `entity.readAccessGranted: true`,
+`schemaFound: true`, exactly 36 fields present, with every spot-checked field (`elevationMinimumMeters`,
+`elevationMaximumMeters`, `localOriginXMeters`, `localOriginYMeters`, `metersPerOutputUnit`) matching `S10-1`'s
+own dump exactly. **Confirms `AccessLevel.Public` read does not depend on `SolidGround.Revit`'s presence — 11.1
+PASSES.** The manifest was moved back afterward and re-hashed
+`6f8a3f26612b2c6a6b4be5b5ad825fd45291b6ce69239022db24461281e43ec4` — byte-identical to the pre-move hash,
+confirming the move-and-restore round trip left it unchanged. This run's own probe output did not separately
+record whether `Schema.Lookup` returned null on an initial call before succeeding, so the specific
+false-negative risk the four-part read discipline's `GetEntitySchemaGuids()`-first check exists for was not
+independently distinguished this session. Art: `S11-00-launch-seg7.txt` through `S11-04-esdump-dialog-seg7.png`,
+`S11-1-es-dump.json/.txt`.
 
 ### Step 12 — deletion, Undo, and copy
 
@@ -711,7 +849,40 @@ before the later sub-tests could observe it intact:
 **Pass criteria.** The entity survives host delete plus Undo byte-for-byte; the copy carries a verbatim
 duplicate; `DeleteEntity` returns `true` then `false` exactly as its `RevitAPI.xml` remark states.
 
-**Evidence.** Pending Stage 4.
+**Evidence.** Collected 2026-09-23 (`EVIDENCE-ES.md`, Segments 7-8), against the still-open `issue16-es-evidence.rvt`.
+`EsDeleteHost`, `EsCopyHost`, and `EsVendorMatchDeleteEntity` below each resolve their target element the same
+newest-placement-record-on-disk way `EsForeignWrite` does in Step 10 above, not by which document is active in
+Revit (see "Known limitations" below); this session's results were correct only because of that same coincidence.
+
+**12.a Delete + scripted Undo.** `EsDeleteHost` (`evidenceSequence:"S12a-1"`) deleted the host toposolid and its
+sketch/boundary dependents in one committed transaction: `deletedElementIds: [1245517, 1245518, 1245519, 1245520,
+1245521, 1245522, 1245523, 1245524, 1245533]` (9 ids), `finalTransactionStatus: "Committed"`. Undo was invoked
+via UI Automation `InvokePattern.Invoke()` on the QAT button matched by `AutomationId:
+ID_Undo_HistoryButtonExecute` (disambiguated from the sibling `ID_Undo_HistoryButtonFlyout`, which shares the
+`Name` "Undo"); its pre-invoke state (`IsEnabled: True`) matched Issue #15's own `R4-B4-08-undo-state-after.txt`
+precedent for "a committed change is on the undo stack." A second `EsDump` (`S12a-2`) then reported
+`entity.isValid: true`, 36 fields, and **zero field differences against `S10-1`** — host and entity both fully
+restored. **12.a PASSES.**
+
+**12.b Copy.** `EsCopyHost` (`S12b-1`) produced copy element `1245537`, `finalTransactionStatus: "RolledBack"`
+(the probe's own transaction, so the copy was never persisted), `duplicated: "CONFIRMED: the copy carries its
+own (duplicate) Extensible Storage entity for this schema."`, `fieldDiff: "identical (every field matches --
+the copy is a verbatim duplicate)."` **12.b PASSES**, confirming rather than merely carrying forward the design
+record's `RevitAPI.xml`-remark citation for this specific schema.
+
+**12.c Vendor-matching `DeleteEntity`.** `SolidGroundProbeVendorMatch.addin` (`VendorId="SolidGround"`, mixed
+case, byte-for-byte matching the shipped add-in's own manifest — not the all-caps `"SOLIDGROUND"` Revit stores
+internally) was installed only for this step (source hash
+`9bce52626849c08015c415c538d2d0656a863a764d8ced08451c4f97610f2844`, installed copy identical), loaded alongside
+`SolidGroundProbe` (its button landed on a new "ES Vendor Match" panel on the same SG Probe tab rather than the
+separate tab the runbook's own prose named — an implementation detail, not a defect). `EsVendorMatchDeleteEntity`
+(`S12c-1`) reported `firstDeleteEntityResult: true`, `firstDeleteEntityException: null`,
+`secondDeleteEntityResult: false`, `secondDeleteEntityException: null`, `finalTransactionStatus: "RolledBack"` —
+no exception on either call, so the mixed-case `VendorId` alone satisfies `AccessLevel.Vendor`'s write-access
+gate; the all-caps-manifest fallback this step's own plan described was not needed. **12.c PASSES.** The
+vendor-match manifest was removed immediately afterward; no save was performed at any point in Step 12. Art:
+`S12a-00` through `S12a-05` (`S12a-1-es-delete-host.json/.txt`, `S12a-2-es-dump.json/.txt`), `S12b-00/01`
+(`S12b-1-es-copy-host.json/.txt`), `S12c-00` through `S12c-05` (`S12c-1-es-vendor-match-delete-entity.json/.txt`).
 
 ### Step 13 — forced schema mismatch, two scenarios with opposite preconditions
 
@@ -729,7 +900,35 @@ The two scenarios never run back-to-back; each needs the opposite session precon
 **Pass criteria.** Scenario 1 reproduces `Finish()`'s documented identity-conflict exception; Scenario 2
 reproduces row 21a's own dialog text, not a raw unhandled exception.
 
-**Evidence.** Pending Stage 4.
+**Evidence.** **13.1 collected 2026-09-23** (`EVIDENCE-ES.md`, Segment 8). A fresh relaunch (pid `24268`) worked
+directly in the launcher's own throwaway `Default_I_ENU.rte` document, never saved, matching this scenario's own
+"close without saving" pass criterion. SolidGround tab → Create Toposolid registered the real schema (element
+`317345`); SG Probe tab → `EsPoisonSchema` (`evidenceSequence:"S13-1"`) then reported:
+
+```
+"scenario": "Scenario 1 (Revit's own protection): a Schema is already registered under this GUID in this session -- Finish() is expected to THROW InvalidOperationException.",
+"finishSucceeded": false,
+"outcome": "Finish() THREW Autodesk.Revit.Exceptions.InvalidOperationException: A different Schema with the same identity already exists.",
+"matchedDesignRecordPrediction": true
+```
+
+The probe's own exception text reads "the same identity," a harmless paraphrase difference from this note's own
+"a matching identity" wording above; `matchedDesignRecordPrediction: true` is the field that actually gates this
+step, and it is `true`. **13.1 PASSES.** Art: `S13-1-01` through `S13-1-05`
+(`S13-1-es-poison-schema.json/.txt`).
+
+**13.2 NOT YET RUN.** Immediately after 13.1, closing the `EsPoisonSchema` dialog and then closing Revit
+surfaced a second, mid-close detection of a concurrent Revit 2026 session (pid `2892`, a different, genuinely
+in-use document than the one Segment 7 had already seen) — the same explicitly-carried-forward "a Revit 2026
+process starts while ours is open" stop condition firing a second time (see Step 12's own stop, above, and
+"Decisions recorded from evidence" below). Unlike that first stop, this session's own Revit 2027 (pid `24268`)
+was still open with a pending native "Save changes to `Default_I_ENU.rte`?" prompt; rather than leave that one
+already-in-flight, already-safe prompt hanging unattended against the launcher's own template — the exact
+hazard the standing save rule exists to prevent — this task completed only that one resolution, confirming the
+dialog named `Default_I_ENU.rte` (not a real evidence file) before answering **No** via pid-verified `BM_CLICK`
+(never Yes, never Cancel). No further action was taken: **13.2 and its recovery remain pending**, waiting for a
+future session window that will not disturb a concurrent Revit 2026 session's own pyRevit port (see "Known
+limitations" below). Art: `S13-1-06-savefile-dialog-no-seg8.txt`.
 
 **Deferred, disclosed.** The same-vendor-different-case write-success scenario (a third add-in whose manifest
 `VendorId` is "SolidGround" in a different letter case, for example "SOLIDGROUND", successfully writing the
@@ -739,26 +938,102 @@ manifest (`SolidGroundProbeVendorMatch.addin`) rather than minting a third add-i
 
 ### Decisions recorded from evidence
 
-**Not yet available.** This documentation stage did not launch Revit and did not run Steps 9-13 above, so no
-decision below is yet settled by observation. Once Stage 4's manual evidence lands, this section is filled in
-with one bold-titled bullet per settled decision — at minimum, the calibrated `ExtensibleStorageRoundTripTolerance`
-value and its margin (Step 9), whether `AccessLevel.Vendor` write enforcement matches the predicted
-`InvalidOperationException` at `Entity` construction and `GeoCheck`'s own observed delta (Step 10), the `Schema.Lookup`
-false-negative outcome with `SolidGround.Revit` absent (Step 11), the host delete/Undo/copy outcomes (Step
-12), and the two forced-schema-mismatch scenarios' outcomes (Step 13) — each with a "See Step N above"
-backreference, mirroring `revit-toposolid-creation.md`'s own "Decisions recorded from evidence (2026-09-21)"
-section exactly in shape.
+Steps 9 and 10 above are settled by a 2026-09-23 Stage 4 evidence session (`EVIDENCE-ES.md`, Segments 3-6), and
+Steps 11, 12(a-c), and 13.1 by that same session's later Segments 7-8. 13.2 and its recovery did not run this
+session — stopped twice on a concurrent Revit 2026 detection, see Step 13's own Evidence above — and stay
+unsettled until a future segment completes them.
+
+- **Number-spec correction shipped and confirmed live (commit `e80a78c`), 2026-09-23.** The first live run
+  against the shipped build hit row 21a ("Units are required for field metersPerOutputUnit") and rolled back
+  cleanly with no element persisted. `e80a78c` gave `metersPerOutputUnit` `ProvenanceFieldSpec.Number`
+  (`SpecTypeId.Number`/`UnitTypeId.General`), redeployed as build `20260923-111825-199ad874`, and Step 10's
+  `EsDump` confirms the schema carries that spec/unit pairing on disk after a real save and reopen, not only
+  in-memory. See Step 9 and Step 10 above.
+- **`ExtensibleStorageRoundTripTolerance` (1e-6 m) confirmed, including the newly-fixed field; no revision
+  needed, 2026-09-23.** All three Step 9 samples (elements `1245519` and `1245527` in `issue16-es-evidence.rvt`,
+  and `1245519` cross-process in the separate, discarded `issue16-es-calibration.rvt` toposolid) report all six
+  round-trip fields — the five Length fields plus `metersPerOutputUnit` — as exactly `0`, a lossless round trip
+  with margin far beyond the originally-anticipated 10x-100x. See Step 9 above.
+- **Write-access exception types observed, 2026-09-23.** `EsForeignWrite` found `new Entity(schema)` throws
+  `InvalidOperationException` and `Element.DeleteEntity` throws `ArgumentException`, both exactly as "Write-access
+  enforcement point" above predicted, but `Element.SetEntity` was never reached: the probe's own test sequence
+  skipped it once `Entity` construction had already failed, so `SetEntity`'s own predicted `ArgumentException` was
+  not independently observed this session. See Step 10 above.
+- **Probe implicated by runtime bisection as a whole; a second ribbon panel flagged only by a subsequent static
+  review, 2026-09-23 (a throwaway diagnostic tool outside this repository, not part of Issue #16's shipped
+  product).** Revit 2027 crashed twice with `SolidGroundProbe` installed (`ntdll.dll` `STATUS_HEAP_CORRUPTION`,
+  `0xc0000374`, while opening its own default template); an initial, pre-bisection hypothesis pass suspected
+  pyRevit/MCP interop, but a direct runtime bisection (identical crash with the probe present at attempts 1-2,
+  a clean open with its manifest removed at attempt 3) implicated `SolidGroundProbe` as a whole, not any specific
+  line of its code. A separate, later static code review found no concrete memory-safety defect anywhere in the
+  probe by inspection; by process of elimination, not a confirmed mechanism, it flagged a second same-tab
+  `CreateRibbonPanel` call — unique to the six new Extensible Storage buttons — as the only Revit-ribbon API call
+  novel to the probe's own previously-proven-safe startup code, at medium (`review-1.md`) to low (`review-3.md`,
+  "ranked #1 only by elimination of everything else, not on a specific found defect") confidence. `probe-crash/fix.md`
+  folded those six buttons onto the pre-existing "Probes" panel with no behavior change to any command; the
+  resulting single-panel build then launched cleanly, repeatedly, across every later 2026-09-23 launch (Segments
+  3-6) with pyRevit still loaded, unaffected — consistent with, but not proof of, the second-panel explanation,
+  since the prepared bisection variant that omits the six new buttons entirely (`probe-crash/variant-no-es-panel`)
+  was built but never actually run. This also confirms pyRevit's mere presence was not the differentiator. The
+  shipped `SolidGround.Revit` add-in was independently cleared by code inspection: its Issue #16 delta is
+  reachable only after a user clicks Create Toposolid, which had not happened before either crash. See "Manual
+  evidence plan" above.
+- **Harness template incident resolved; the probe gained an API-created evidence-project command,
+  2026-09-23.** `Start-Revit2027.ps1` opens the installed default template (`Default_I_ENU.rte`) itself as its
+  working document, so an early Step 9.2 attempt's QAT Save legitimately saved back onto that installed file
+  twice; it was restored byte-identical from Revit's own auto-rotated `.0001` backup at 11:40
+  (`evidence/template-incident/restore-log.txt`, SHA-256 `1E7520D6...C4CD` confirmed both before the pollution
+  and after the restore). The fix: a new probe command, `EsNewEvidenceProjectCommand` ("ES New Evidence
+  Project," on the same "Probes" panel), creates, saves, and activates a fresh evidence project entirely by API
+  with no Save As dialog and never touches the launcher's template; every later relaunch reopens that saved
+  project via Revit's own Recent Documents list (a read action) before any further command runs. See Step 9
+  above.
+- **Coexistence with a concurrent Revit 2026 session held throughout, handle-only, 2026-09-23.** Under the
+  owner's "Run alongside, handle-only" ruling, a separate Revit 2026 session ran alongside these Revit 2027
+  launches with every action pid-verified and no shared mouse/keyboard/focus. pyRevit's MCP bridge gives port
+  48884 to whichever Revit process starts first across versions and 48885 to the second, observed consistently
+  (Revit 2026 held 48884 while this session's Revit 2027 held 48885 when Revit 2026 was already running; this
+  session's Revit 2027 held 48884 itself in Segment 6, when no Revit 2026 was running at launch). No
+  cross-session interference was observed at any point.
+- **`AccessLevel.Public` read confirmed independent of `SolidGround.Revit`'s presence, 2026-09-23.** With
+  `SolidGround.addin` moved out of the Addins folder (only `SolidGroundProbe` loaded), `EsDump` against the saved
+  `issue16-es-evidence.rvt` still reported `entity.isValid`/`entity.readAccessGranted` both `true` and all 36
+  fields present, matching `S10-1`'s own dump exactly on every spot-checked field; the manifest was restored to
+  the same SHA-256 hash it had before the move. See Step 11 above.
+- **A copied host carries its own verbatim-duplicate entity, confirming the carried-over `RevitAPI.xml` remark
+  for this specific schema, 2026-09-23.** `EsCopyHost` produced copy element `1245537` with
+  `fieldDiff: "identical"` against the host and `duplicated: "CONFIRMED"` — the copy's Extensible Storage entity
+  is a full, independent duplicate of the original's, not a reference to it, so a copy's provenance still
+  describes its original's acquisition, not its own. See Step 12(b) above and "Known limitations" below.
+- **`AccessLevel.Vendor` write access is case-insensitive on the calling add-in's declared `VendorId`,
+  2026-09-23.** A probe manifest declaring `VendorId="SolidGround"` (mixed case, matching the shipped add-in's
+  own manifest byte-for-byte, not the all-caps `"SOLIDGROUND"` Revit stores internally) called `DeleteEntity`
+  successfully (`true` then `false`, no exception either call) via `EsVendorMatchDeleteEntity`; the all-caps
+  manifest fallback this step's own plan described was not needed. See Step 12(c) above.
+- **Revit's own same-session schema-identity protection confirmed, 2026-09-23.** With the real schema already
+  registered this session (via a prior Create Toposolid), `EsPoisonSchema`'s `SchemaBuilder.Finish()` threw
+  `Autodesk.Revit.Exceptions.InvalidOperationException` ("A different Schema with the same identity already
+  exists" — the probe's own paraphrase of this note's "a matching identity" wording, not a substantive
+  difference), with `matchedDesignRecordPrediction: true`. Scenario 2 (`RequireExactSchema`'s own drift check, in
+  a fresh session where `EsPoisonSchema` runs first) remains pending as Step 13.2. See Step 13 above.
+
+Steps 11, 12, and 13.1 landed in this same 2026-09-23 session (Segments 7-8) and are reflected above. 12(a)'s
+delete-then-Undo outcome is recorded only in its own Evidence paragraph (Step 12 above), not as a separate
+bullet here, since it confirms already-well-established Undo behavior rather than settling a new question, in
+keeping with this note's own framing of that sub-step. 13.2 and its recovery remain pending and will gain their
+own bullet once run, mirroring `revit-toposolid-creation.md`'s own "Decisions recorded from evidence
+(2026-09-21)" section exactly in shape.
 
 ## Known limitations
 
 - **Worksharing/central-model behavior is unexplored.** `SetEntity`/`AccessLevel.Vendor` behavior in a
   workshared, central-model document is out of scope here; flagged for a future issue before targeting
   workshared models.
-- **A copied toposolid is expected to keep its original's provenance unchanged.** Carried over from the design
-  record's own API review (`Entity`'s `RevitAPI.xml` remarks, not independently reflected or quoted by this
-  note; see "`DeleteEntity`, host delete/Undo, and host copy" above), to be confirmed or corrected by Step
-  12(b): the copy's entity is expected to describe the original's acquisition, not its own. No mitigation
-  ships in this milestone.
+- **A copied toposolid keeps its original's provenance unchanged — confirmed, not merely expected, 2026-09-23.**
+  Carried over from the design record's own API review (`Entity`'s `RevitAPI.xml` remarks, not independently
+  reflected or quoted by this note; see "`DeleteEntity`, host delete/Undo, and host copy" above), and now
+  confirmed for this specific schema by Step 12(b): the copy's entity describes the original's acquisition, not
+  its own. No mitigation ships in this milestone.
 - **Provenance goes stale after an edit.** This issue documents the toposolid at creation time only; once
   toposolid editing exists elsewhere in the product, an edited element's unchanged provenance becomes an
   AGENTS.md accuracy question this issue does not solve.
@@ -781,6 +1056,59 @@ section exactly in shape.
   but unreadable) instead of the real value `EsSpotCheck` needs to compare against Step 9's known inputs. This
   note does not itself change the probe, which lives entirely outside this repository; whoever next runs Step
   10 must special-case `SpecTypeId.Number` fields in `CaptureField` to read with `UnitTypeId.General` first.
+  **Resolved before Step 10 ran (2026-09-23).** The live `EsDump` evidence (`S10-1-es-dump.json`, Step 10 above)
+  shows `metersPerOutputUnit` read back as a real value (`0.3048...`) with `specTypeId
+  autodesk.spec.aec:number-2.0.0`/`unitTypeId autodesk.unit.unit:general-1.0.1`, not `(error)`, so `CaptureField`
+  was special-cased for `SpecTypeId.Number` before this session — an out-of-repo probe change not itself
+  evidenced here.
+- **Harness template risk.** `Start-Revit2027.ps1` opens the installed default template directly as its own
+  working document; any future evidence session that invokes Save or Save As before first creating a dedicated
+  evidence project (via `EsNewEvidenceProjectCommand`) risks overwriting `Default_I_ENU.rte` again, exactly as
+  happened once on 2026-09-23 (restored from Revit's own `.0001` backup — see "Decisions recorded from evidence"
+  above and `evidence/template-incident/restore-log.txt`). This is a harness limitation, not a defect in the
+  shipped product, and nothing in the harness itself prevents a recurrence beyond the standing rule to reopen or
+  create a real project first.
+- **Two Segment 3 evidence artefacts were overwritten by a Segment 6 naming collision, 2026-09-23.**
+  `S9-1-00-select-solidground-tab.txt` and `S9-1-01-click-create-toposolid.txt` were written once during
+  Segment 3 (pid `43880`, 09:54) and, without a pre-write collision check, overwritten with Segment 6's own data
+  at the identical filenames; Segment 3's original content at those two paths is unrecoverable, and Segment 6's
+  own data now lives at `S9-1-00b-select-solidground-tab-seg6.txt`/`S9-1-01b-click-create-toposolid-seg6.txt`
+  instead, with `S9-1-00-INCIDENT-overwritten-by-seg6.txt` recording the incident. Segment 3's own prose narrative
+  in `EVIDENCE-ES.md` is the only surviving record of what those two files originally reported; every artefact
+  written after this point in Segment 6 had its filename checked against a fresh directory listing first, and no
+  further collision occurred. This is a disclosed evidence-integrity gap in the artefact trail, not a gap in the
+  underlying Step 9 findings themselves, which the surviving narrative and log lines still support.
+- **pyRevit's port assignment can flip which Revit session lands on port 48884 depending on launch order,
+  2026-09-23.** Segments 3-4 saw a concurrent Revit 2026 session already running and holding port 48884 before
+  this evidence session's own Revit 2027 launch, so pyRevit gave this session's Revit 2027 process port 48885
+  both times (see "Decisions recorded from evidence" above). In Segments 7 and 8 the order reversed: this
+  session's own Revit 2027 was already running when a separate Revit 2026 session started (pid `20736` at
+  12:45:32 in Segment 7; pid `2892`, mid-close, in Segment 8) — under the same first-to-attach rule, the
+  newly-started Revit 2026 session would be expected to take pyRevit's "second" port (48885) instead of its
+  usual 48884, a port flip not independently confirmed by a port check in either segment, since both stopped
+  (correctly, per the standing "a Revit 2026 process starts while ours is open" condition) before any such check
+  ran. Neither stop was caused by the port itself, but a human-driven Revit 2026 session unexpectedly losing its
+  usual pyRevit port could disrupt whatever tooling that session expects there. Future evidence-session launches
+  should therefore be ordered so this session's own Revit 2027 starts only after confirming a concurrent Revit
+  2026 session already holds port 48884 — never the reverse — which is also the precondition Step 13.2 is
+  waiting on.
+- **`EsSpotCheck`, `EsForeignWrite`, `EsDeleteHost`, `EsCopyHost`, and `EsVendorMatchDeleteEntity` all resolve
+  their target element from the newest placement record on disk, not the open document's own.** The probe
+  resolves the placement record — and, from it, the `toposolid.elementId` to act on — as "newest file under
+  `output.directory`," not by which document is currently active in Revit. This is one shared mechanism, not a
+  comparison quirk unique to `EsSpotCheck`: `S10-3-es-foreign-write.json`, `S12a-1-es-delete-host.json`,
+  `S12b-1-es-copy-host.json`, and `S12c-1-es-vendor-match-delete-entity.json` each carry the identical
+  `hostResolution` string, confirming `EsForeignWrite`, `EsDeleteHost`, `EsCopyHost`, and
+  `EsVendorMatchDeleteEntity` resolve their target the same way `EsSpotCheck` does. In the 2026-09-23 session
+  this meant `issue16-es-evidence.rvt`'s own host element was resolved this same way for every one of them —
+  compared against (`EsSpotCheck`), constructed a foreign entity against (`EsForeignWrite`), deleted and
+  Undo-restored (`EsDeleteHost`), copied (`EsCopyHost`), and deleted again under a vendor-matching manifest
+  (`EsVendorMatchDeleteEntity`) — which produced correct results only because both candidate placement records'
+  synthetic fixture inputs happened to resolve to the identical element (`1245519`). For a read-only command
+  this scope gap can only cause a false pass or a spurious mismatch, as already true of `EsSpotCheck` alone; for
+  a mutating command — `EsDeleteHost` above all — a future session with genuinely divergent candidate placement
+  records could resolve to, and act on, the wrong element in the open document entirely, not merely mis-compare
+  a read. See Step 10 and Step 12 above.
 - **The array-field container type remains unresolved** (inherited from
   `revit-2027-verification-and-host-design.md` item 8), irrelevant here since every field is
   `AddSimpleField`, but still open for any future schema that needs one.
@@ -798,10 +1126,14 @@ has been brought in line with them line by line, the shipped code treated as aut
 differed from this note's original draft or the design record (see "Status" above). Both invented-name
 placeholders originally left in the manual evidence plan above (Steps 10 and 12(c)) are now resolved:
 `EsDump`/`EsSpotCheck`/`EsForeignWrite`/`EsCopyHost`/`EsDeleteHost`/`EsPoisonSchema` on `SolidGroundProbe`'s
-new "ES Probes" panel, and the `SolidGroundProbeVendorMatch.addin` vendor-matching manifest. Still pending:
-Stage 4 fills in every blank "Evidence" paragraph from a real Revit 2027 session, and populates "Decisions
-recorded from evidence" above, left as a pending stub here for the same reason: no evidence yet exists to
-record. It does not change any decision recorded in
+single "Probes" panel (originally planned as a separate "ES Probes" panel; folded into the pre-existing panel by
+a 2026-09-23 fix that followed a runtime crash bisection and a subsequent static review — see "Decisions
+recorded from evidence" above, including that review's own confidence caveats), and the
+`SolidGroundProbeVendorMatch.addin` vendor-matching manifest. Still pending: Stage 4 fills in every blank
+"Evidence" paragraph from a real Revit 2027 session, and populates "Decisions recorded from evidence" above. A
+2026-09-23 session did this for Steps 9, 10, 11, 12, and 13.1 (see those sections above); Step 13.2 and its
+recovery remain pending, waiting for a session window that will not disturb a concurrent Revit 2026 session's
+own pyRevit port (see "Known limitations" above). It does not change any decision recorded in
 `docs/architecture/revit-add-in-conventions.md`, `docs/architecture/revit-2027-verification-and-host-design.md`,
 or `docs/architecture/revit-toposolid-creation.md`. It does not begin Issue #17 (signing, packaging, or a
 clean-install validation) or Issue #19 (the real ribbon icon design). It does not close Issue #16 itself;
