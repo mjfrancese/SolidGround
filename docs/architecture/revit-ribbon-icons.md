@@ -2,9 +2,14 @@
 
 **Status.** The design, refinement, polish, and recognition-testing record below is complete for both the
 32×32 and 16×16 assets and their generation notes, and the final PNG bytes now ship at
-`src/SolidGround.Revit/Resources/SolidGround.{32,16}.png`. Two items remain open: the Revit 2027 light/dark
-evidence session below has not run, and the owner has not yet reviewed either asset (see "Manual evidence plan"
-and "Known limitations" below). This note follows
+`src/SolidGround.Revit/Resources/SolidGround.{32,16}.png`. A 2026-09-24 Revit 2027 session ran the manual
+evidence plan below end to end (see "Evidence"): both assets displayed pixel-exactly, at 100% display
+scaling, on both the large and small ribbon-button roles, in both the light and dark ribbon themes, and the
+light-panel and light-chrome colours this note's own contrast math depended on as DOCUMENTED are now
+MEASURED, matching the documented values exactly. On 2026-09-24, before that session, the owner was shown the
+final pair in chat — ribbon mocks at 1x and 4x on all four backgrounds — was told a different look could be
+requested cheaply, and replied "go," requesting no change; no separate explicit sign-off beyond that reply is
+recorded (see "Known limitations" below). This note follows
 `docs/architecture/revit-add-in-host-scaffold.md` and
 `docs/architecture/revit-extensible-storage-provenance.md`'s own structure, tone, and citation style, and
 continues `docs/architecture/revit-add-in-conventions.md`'s owner decision 5 ("Ship an icon for
@@ -161,8 +166,8 @@ unrelated to this issue), **0 failed**.
 | --- | --- | --- | --- |
 | Dark panel (selected tab / the surface immediately behind a button) | `#3B4453` | **MEASURED** | Three independent Revit 2027 sessions (Issues #14 and #15), two capture methods (`PrintWindow`, full-desktop), two screen configurations, cross-checked against installed `AdWindows.dll`'s own `TabTheme_1` dark-dictionary string (`#3b4453`). |
 | Dark chrome (tab strip / unselected tab) | `#222933` | **MEASURED** | Same three sessions; matches `AdWindows.dll`'s `RibbonTheme_1` dark-dictionary string. |
-| Light panel | `#F5F5F5` | **DOCUMENTED, not yet measured live** | `AdWindows.dll`'s `TabTheme_1` light-dictionary string; no live Revit 2027 light-theme capture exists anywhere in this repository's own evidence history (Issues #14-#16 all show Dark). |
-| Light chrome | `#D9D9D9` | **DOCUMENTED, not yet measured live** | `AdWindows.dll`'s `RibbonTheme_1` light-dictionary string. |
+| Light panel | `#F5F5F5` | **MEASURED (2026-09-24)** | `AdWindows.dll`'s `TabTheme_1` light-dictionary string, now confirmed live: the Issue #19 evidence session's follow-up pixel check (`pixel-exact.ps1`, not committed) sampled the transparent background immediately around every icon instance in the `S4-light-*` captures and found it a 100.0% uniform `#F5F5F5` in all five light-theme instances (see "Evidence" below). |
+| Light chrome | `#D9D9D9` | **MEASURED (2026-09-24)** | `AdWindows.dll`'s `RibbonTheme_1` light-dictionary string, now confirmed live: this note's own preparation independently re-sampled the tab-strip region in the `S4-light-solidground-tab.ribbon-crop.png` capture (the same region-mode technique the session's own `explore-bg.ps1`/`explore-bg2.ps1` scripts, not committed, were written to run but did not save a report from) and found it a 100.0% uniform `#D9D9D9` (see "Evidence" below). |
 
 All four values come directly from `C:\Program Files\Autodesk\Revit 2027\AdWindows.dll`'s own printable-ASCII
 resource strings (the shared Autodesk ribbon-control assembly Revit's WPF ribbon is built on), not from
@@ -314,7 +319,8 @@ independently re-verified for this note). Its full lineage, every intermediate h
 
 ### V1's rejection, and two independent revisions
 
-The orchestrator — not yet the owner, who has not reviewed any candidate — judged V1, at native size, as
+The orchestrator — not yet the owner, who had not yet seen any candidate at this stage of the design process —
+judged V1, at native size, as
 reading like "a cardboard box/planter with a green lid," for four reasons: the untextured tan earth faces
 read as cardboard or wood; the dark seam lines around the top's front edges, plus the vertical front crease,
 read as box edges rather than terrain; the top reads as a flat lid, not landform; and orange appearing only
@@ -431,7 +437,9 @@ or through small deterministic geometry generators the same designers wrote and 
 process" above), then rendered exclusively by the throwaway `icontool` renderer's `render` command (not
 committed), a bespoke standard-library-only tool built for this issue.** No generated pixels needed cleanup:
 no PixelLab output was ever incorporated into a deliverable pixel, so there was no AI generation to clean up.
-The owner's own review, expected next, is the human step this design still has ahead of it.
+On 2026-09-24, the owner was shown the final pair in chat — ribbon mocks at 1x and 4x on all four backgrounds —
+was told a different look could be requested cheaply, and replied "go," requesting no change; no separate
+explicit sign-off beyond that reply is recorded.
 
 ## Palette
 
@@ -554,10 +562,121 @@ not reproduced here):
 
 ## Evidence
 
-*Pending. This section is filled in once a live Revit 2027 session runs the manual evidence plan above,
-following this repository's own "Decisions recorded from evidence" convention — see
-`docs/architecture/revit-extensible-storage-provenance.md` for the shape that section takes once real session
-data exists.*
+**2026-09-24, Revit 2027 (`27.0.10.13`).** The manual evidence plan above ran end to end, carried out by the
+orchestrator on the owner's own "go" in chat; per the orchestrating session's own account, the owner also waived
+the runbook's Owner-rule-3 ten-minute safe-launch-window wait ("Don't wait 10 minutes. Now is your window to
+do it. Do it now."), which is recorded here as a deviation rather than smoothed over. The shipped build at
+commit `e8eb33f` was deployed per-user beforehand (versioned folder `20260924-045034-08478ea1`), and the
+deployed DLL's two embedded icon resources were hash-verified against the committed PNGs before launch. The
+session drove a throwaway probe add-in (its own isolated context, not part of this repository) adding an "SG
+Icon Probe" tab alongside the real "SolidGround" tab: one large button using the 32 px PNG, three stacked
+small buttons using the 16 px PNG, and a `UIThemeManager`-based theme switch (`CurrentTheme` /
+`CurrentCanvasTheme` / `FollowSystemColorTheme`) with a report/restore pair.
+
+**Launches.** Launch 1's probe add-in did not load: its throwaway manifest template's XML comment contained
+a literal `--`, which Revit's journal rejected ("Failed to load add-in manifest file: An XML comment cannot
+contain '--' ..."). The shipped `SolidGround` add-in was unaffected, and dark captures of its tab (plus the
+Massing & Site tab) were still taken; on close, Revit's own "Do you want to save changes to
+`Default_I_ENU.rte`?" prompt was answered No. With the manifest comment fixed, Launch 2 crashed while opening
+the template (Windows Application Error, `ntdll.dll` exception `0xc0000374`, offset `0x117eb5`) — the same
+intermittent fault signature Issue #16 recorded previously, again with a probe add-in loaded and again with
+no exception tied to `SolidGround.Revit` itself. Per the runbook's own one-retry rule, Launch 3 (the single
+allowed retry) succeeded and carried the rest of the session. A concurrent, unrelated Revit 2026/pyRevit
+session held port 48884 throughout; SolidGround's own Revit 2027 process held 48885 in every attempt.
+
+**Theme handling.** A Theme Report at startup read `{"CurrentTheme":"Dark","CurrentCanvasTheme":"Dark",
+"FollowSystemColorTheme":true}` before any capture, so the dark captures below started from the machine's own
+real starting theme rather than a forced one. Dark captures were taken first, then Theme Light switched the
+UI to `{"CurrentTheme":"Light","CurrentCanvasTheme":"Light","FollowSystemColorTheme":false}` for the light
+captures, then Theme Restore switched back, with a second Theme Report confirming the restored state matched
+the captured initial state exactly. Revit itself wrote explicit theme keys into `Revit.ini` on exit
+(`CanvasTheme=0` and a new `[AppFrame]` section with `FollowSystemColorTheme=1`/`Theme=0`); both `Revit.ini`
+and `UIState.dat` were diffed against a pre-session backup, found to differ, and restored — a live re-hash
+after restoration matched the pre-session backup exactly. The default template's SHA-256 was unchanged
+throughout (before launch, after Launch 1's close, and at session end), the old Issue #15 probe manifest
+moved aside at the start was restored byte-identical, and the final close raised no save prompt. Nothing was
+saved anywhere in this session.
+
+**Pixel-exact display.** A follow-up, read-only verification pass (run immediately after the session, against
+the session's own saved screen captures, with no new Revit launch) located each icon inside its button
+rectangle by best-alignment search and compared every opaque source pixel to the captured pixel. All 11 icon
+instances captured across both themes are exact pixel matches, 0 mismatches, confirming Revit 2027 displays
+both PNGs 1:1 at 100% display scaling with no rescale, recolour, or tint in either theme:
+
+| Capture | Button | Theme | Size | Result | Placement inside button rect |
+| --- | --- | --- | --- | --- | --- |
+| `A-dark-solidground-tab.png` (Launch 1) | Create Toposolid | Dark | 32 px | exact, 0/577 mismatches | (13, 3) |
+| `S3-dark-solidground-tab.png` (Launch 3) | Create Toposolid | Dark | 32 px | exact, 0/577 mismatches | (13, 3) |
+| `S4-light-solidground-tab.png` | Create Toposolid | Light | 32 px | exact, 0/577 mismatches | (13, 3) |
+| `S3-dark-probe-tab.png` | Theme Light (probe's own large button) | Dark | 32 px | exact, 0/577 mismatches | — |
+| `S3-dark-probe-tab.png` | Theme Dark (stacked small button) | Dark | 16 px | exact, 0/111 mismatches | (4, 3) |
+| `S3-dark-probe-tab.png` | Theme Restore (stacked small button) | Dark | 16 px | exact, 0/111 mismatches | (4, 3) |
+| `S3-dark-probe-tab.png` | Theme Report (stacked small button) | Dark | 16 px | exact, 0/111 mismatches | (4, 3) |
+| `S4-light-probe-tab.png` | Theme Light (probe's own large button) | Light | 32 px | exact, 0/577 mismatches | — |
+| `S4-light-probe-tab.png` | Theme Dark (stacked small button) | Light | 16 px | exact, 0/111 mismatches | (4, 3) |
+| `S4-light-probe-tab.png` | Theme Restore (stacked small button) | Light | 16 px | exact, 0/111 mismatches | (4, 3) |
+| `S4-light-probe-tab.png` | Theme Report (stacked small button) | Light | 16 px | exact, 0/111 mismatches | (4, 3) |
+
+This is the 32 px `Create Toposolid` icon captured dark twice (across two separate launches) and light once,
+the 32 px probe button captured dark and light, and the 16 px icon observed on three stacked small buttons in
+both themes — the first live observation of the 16 px `Image` slot anywhere in this repository's history
+(never a Quick Access Toolbar placement, which was not exercised).
+
+**Live colours.** The same pass sampled the real background immediately around every icon instance above
+(the icon's own transparent pixels, mapped onto the capture) and, separately, the tab-strip chrome region in
+the ribbon-crop captures:
+
+| Ribbon surface | Hex | Sample | Uniformity |
+| --- | --- | --- | --- |
+| Dark panel | `#3B4453` | mode of the local background around all 6 dark-theme icon instances | 100.0% |
+| Dark chrome | `#222933` | mode of the tab-strip region, `S3-dark-solidground-tab.ribbon-crop.png` | 100.0% |
+| Light panel | `#F5F5F5` | mode of the local background around all 5 light-theme icon instances | 100.0% |
+| Light chrome | `#D9D9D9` | mode of the tab-strip region, `S4-light-solidground-tab.ribbon-crop.png` | 100.0% |
+
+All four exactly match the values this note already documented (dark from earlier Issues #14/#15 sessions;
+light previously from `AdWindows.dll` strings only). This also grounds the "Background colours and the
+contrast ceiling" and "Palette" sections' own contrast arithmetic in live-measured colours rather than
+documented ones alone.
+
+**Contrast against the live colours.** Silhouette (edge-pixel WCAG ≥3:1) is 100% for both sizes against both
+panel colours, matching the palette's design target. Interior-pixel pass rates against the live panel colours:
+dark theme 58.9% (32 px) / 67.6% (16 px) of opaque pixels ≥3:1 — the brown side-face tones `#8A5A30`
+(1.68:1) and `#4A2E18` (1.26:1) are interior-only failures, by design (see "Palette" above); light theme 97.9%
+(32 px) / 98.2% (16 px) — the small sunlit highlight `#57CE68` (1.85:1) is the only interior-only failure.
+Against the chrome colours, the light-chrome silhouette is 0% for both sizes, exactly the structural ceiling
+"Background colours and the contrast ceiling" predicted (no flat colour can clear both a panel and its own
+light chrome at once); this only matters if a 16 px icon is ever placed on a chrome-coloured surface such as
+the Quick Access Toolbar, which this session did not exercise — the ribbon buttons themselves render on the
+panel colour, where both sizes pass.
+
+**Independent legibility review.** Two independent, read-only agent-persona reviewers — a Revit power-user
+persona and a UI visual-designer persona, each given only the live captures, not human usability-test
+participants (the same distinction "Recognition testing" above already keeps explicit for the design-phase
+reader tests) — separately reviewed the dark and light captures at native size and at zoom (wide-region crops
+plus 12×-zoomed close-ups of both sizes in both themes). Both judged the icon legible at real size in both
+themes at both sizes and clearly distinguishable from Revit's own Massing & Site Toposolid icon.
+
+**Anomalies.**
+
+1. The probe manifest's XML-comment defect (two literal `--` sequences) silently kept the probe from loading
+   at Launch 1; fixed and reinstalled before Launch 2.
+2. Launch 2 crashed with the same intermittent `ntdll.dll 0xc0000374` fault Issue #16 recorded previously,
+   again with a probe add-in loaded; the one permitted retry (Launch 3) succeeded. The cause remains
+   unexplained and, on the evidence so far (two occurrences, both with a throwaway probe add-in loaded,
+   neither with the shipped `SolidGround` add-in alone), is attributed to the throwaway probe/Revit
+   interaction rather than to `SolidGround.Revit`.
+3. Launch 1's close raised Revit's own save prompt for the default template; "No" was recorded as clicked,
+   corroborated by the template hash staying unchanged and by Revit reopening the same template with no lock
+   contention a few minutes later.
+4. `Revit.ini`/`UIState.dat` drifted (new theme keys, reordered recent-file entries) and were restored from
+   the pre-session backup; a live re-hash after restoration matched the backup exactly.
+5. The owner's waiver of the runbook's own ten-minute safe-launch-window wait is recorded as a deviation from
+   the written rule; no adverse port conflict resulted in practice.
+
+**Acceptance-criterion verdict.** "The icons remain clear in the supported Revit 2027 light and dark ribbon
+contexts": **Met.** Both assets displayed pixel-exactly in both themes at both button roles, the panel and
+chrome colours this note's contrast math depends on are now live-measured rather than documented, and two
+independent review personas judged both sizes legible and distinguishable in both themes. See AC3 below.
 
 ## Acceptance criteria
 
@@ -565,34 +684,43 @@ data exists.*
 | --- | --- | --- | --- |
 | AC1 | Final files exactly 16×16 and 32×32 with correct alpha transparency. | **Met** | Both files independently re-verified for this note (the throwaway `icontool inspect` command, not committed, and this repository's own offline test suite): 8-bit, colour type 6, exactly 16×16/32×32, chunks exactly `IHDR,IDAT,IEND`, all four corners alpha 0. Both now ship at `src/SolidGround.Revit/Resources/SolidGround.{16,32}.png`. |
 | AC2 | Both sizes use the same recognizable terrain/parcel concept, each independently legible at 100%. | **Supported, with a small-n caveat** | Backed by the context-free blind test (terrain identified in all 18 readings), both forced-choice tests' own results, and the design record's own repeated native-size (100%, no zoom) review at every iteration (see "Design process" and "Final 16px asset"). The reader tests themselves are small-n, self-rated, agent-simulated panels, not a statistically powered study — see "Recognition testing" and "Known limitations" — so this is a supported design judgment, not a proven statistic. |
-| AC3 | Clear in Revit 2027's light and dark ribbon contexts. | **Pending Revit 2027 evidence** | Dark: colours MEASURED live; both final assets' rim colours measure ~3.00:1 against `#3B4453`, giving a 100% silhouette pass rate at both sizes. Light: contrast math only, against DOCUMENTED (not yet live-measured) colours; the manual evidence plan above has not run. |
-| AC4 | Loaded through the owner-approved resource convention, no absolute paths. | **Satisfied by design and by the current test suite** | The mechanism (`EmbeddedResource`, fixed `LogicalName`s, `LoadIcon`) needed no code change for this bytes-only replacement (see "Resource convention" above); `SolidGround.Tests`'s LogicalName-matching and allow-list tests, and the full offline suite (950 tests: 949 passing, 1 skipped, 0 failed), now pass against the final bytes. End-to-end confirmation in a running Revit 2027 process is folded into the manual evidence plan's S0.5/S1. |
-| AC5 | Generation notes name the tool, prompt intent, seed where applicable, and human cleanup, without credentials. | **Met by this note and `Resources/README.md`** | See "Generation notes" above, which names every tool actually used, including the throwaway Python helper scripts disclosed under "Design process" above. No PixelLab output was incorporated into any deliverable pixel, so there was no AI generation to clean up; every pixel was hand-authored by Claude agents, and the owner's own review is the step still ahead of this design. |
-| AC6 | Only final reviewed assets and useful source/provenance files enter the repository. | **Partially met, pending the owner's review** | The offline suite's allow-list test (`RevitResourcesDirectoryContainsOnlyTheApprovedRibbonIconFiles`) keeps `Resources/` to exactly the two PNGs and this repository's own `README.md`; no design-exploration file, PixelLab identifier, or `%TEMP%` path enters the repository (see "Generation notes"). The two PNGs are the orchestrator's selected final candidates, landed as uncommitted local changes; the owner's own review is pending. |
+| AC3 | Clear in Revit 2027's light and dark ribbon contexts. | **Met** | See "Evidence" above: a 2026-09-24 Revit 2027 session found both assets pixel-exact in both themes, live-measured the panel and chrome colours (now matching the documented values exactly), and two independent review personas judged both sizes legible and distinguishable in both themes. |
+| AC4 | Loaded through the owner-approved resource convention, no absolute paths. | **Met** | The mechanism (`EmbeddedResource`, fixed `LogicalName`s, `LoadIcon`) needed no code change for this bytes-only replacement (see "Resource convention" above); `SolidGround.Tests`'s LogicalName-matching and allow-list tests, and the full offline suite (950 tests: 949 passing, 1 skipped, 0 failed), now pass against the final bytes. The 2026-09-24 Revit 2027 session confirmed this end to end in a running process: the deployed DLL's embedded resources hash-matched the committed PNGs before launch, and the icons that actually loaded through this convention and displayed on the ribbon were pixel-exact matches of the source files, in both themes. |
+| AC5 | Generation notes name the tool, prompt intent, seed where applicable, and human cleanup, without credentials. | **Met by this note and `Resources/README.md`** | See "Generation notes" above, which names every tool actually used, including the throwaway Python helper scripts disclosed under "Design process" above. No PixelLab output was incorporated into any deliverable pixel, so there was no AI generation to clean up; every pixel was hand-authored by Claude agents. On 2026-09-24, the owner was shown the final pair in chat and replied "go," requesting no change (see "Generation notes" above). |
+| AC6 | Only final reviewed assets and useful source/provenance files enter the repository. | **Met** | The offline suite's allow-list test (`RevitResourcesDirectoryContainsOnlyTheApprovedRibbonIconFiles`) keeps `Resources/` to exactly the two PNGs and this repository's own `README.md`; no design-exploration file, PixelLab identifier, or `%TEMP%` path enters the repository (see "Generation notes"). The two PNGs are the orchestrator's selected final candidates; the owner was shown the final pair in chat on 2026-09-24 and replied "go," requesting no change — no separate explicit sign-off beyond that reply is recorded. |
 
 ## Known limitations
 
 - The out-of-repo design record's own throwaway tooling included small Python helper scripts (grid-geometry
   generators, colour/contrast searches, verification checks), including the script that laid out the final
   32px and 16px grid text — see "Design process" above. Nothing in this repository uses or depends on Python.
-- Light-theme ribbon colours are DOCUMENTED (installed `AdWindows.dll` resource strings) but not yet MEASURED
-  against a live Revit 2027 render; the manual evidence plan above exists to close exactly this gap.
-- The 16×16 `Image` slot (Quick Access Toolbar rendering) has never been observed rendering in a real Revit
-  2027 session for either `SolidGround.Revit` or the owner's other add-in's own shipped icons (the owner's other add-in deferred, and
-  apparently never wired, its own 16×16 asset) — the manual evidence plan's probe tab is the first
-  opportunity to observe it.
-- Only 100% Windows display scaling has ever been observed for any SolidGround ribbon icon; Autodesk's own
-  material states Revit does not itself rescale a single supplied `ImageSource` at higher display scaling,
-  and a multi-frame-TIFF high-DPI approach is explicitly out of scope for this milestone (see "Theme
-  robustness" above).
-- The reader tests behind "Recognition testing" and "Final 16px asset" above are small-n (3-8 readings per
-  round), self-rated, agent-simulated reader panels, not a statistically powered study. V1's own 16px result
-  flipped from best (the 12-reading forced-choice round) to worst (the later 8-reading 16px-only round); this
-  note reports that reversal as evidence of the tests' own noise rather than smoothing it into one confident
-  number. They were used as one input alongside the orchestrator's own direct review of every candidate's
-  rendered, mocked, and simulated output, not as a substitute for it.
-- the owner has not reviewed either final asset described in this note; that review and the manual evidence
-  plan above are the two items this note still marks as open (see "What this note does not do").
+- The 16×16 `Image` slot has now been observed rendering in a real Revit 2027 session, but only on the
+  probe's own three stacked ribbon buttons (a panel-coloured surface); Quick Access Toolbar placement, a
+  chrome-coloured surface, has still never been observed for either `SolidGround.Revit` or the owner's other add-in's own
+  shipped icons (the owner's other add-in deferred, and apparently never wired, its own 16×16 asset). This matters because the
+  light-chrome silhouette score is a structural 0% (see "Background colours and the contrast ceiling" and
+  "Evidence" above) — a real finding only if a 16 px icon ever lands on a chrome-coloured surface, which
+  remains unobserved.
+- Only 100% Windows display scaling has ever been observed for any SolidGround ribbon icon, including in the
+  2026-09-24 evidence session; Autodesk's own material states Revit does not itself rescale a single supplied
+  `ImageSource` at higher display scaling, and a multi-frame-TIFF high-DPI approach is explicitly out of scope
+  for this milestone (see "Theme robustness" above).
+- The 2026-09-24 evidence session's Launch 2 crashed with the same intermittent `ntdll.dll 0xc0000374` fault
+  Issue #16 recorded previously, again with a throwaway probe add-in loaded and again never with the shipped
+  `SolidGround` add-in alone; the cause remains unexplained. The one permitted retry succeeded, and this
+  remains attributed to the throwaway probe/Revit interaction rather than to `SolidGround.Revit` itself (see
+  "Evidence" above).
+- The reader tests behind "Recognition testing" and "Final 16px asset" above, and the two independent
+  review personas behind "Evidence" above, are small-n, agent-simulated panels — not human usability-test
+  participants and not a statistically powered study. V1's own 16px result flipped from best (the 12-reading
+  forced-choice round) to worst (the later 8-reading 16px-only round); this note reports that reversal as
+  evidence of the tests' own noise rather than smoothing it into one confident number. All of them were used
+  as one input alongside the orchestrator's own direct review of every candidate's rendered, mocked,
+  simulated, and (for the final pair) live-captured output, not as a substitute for it.
+- the owner's review of the final pair is an informal chat reply, not a separate formal sign-off record: on
+  2026-09-24, before the Revit evidence session, he was shown the final pair (ribbon mocks at 1x and 4x on
+  the four backgrounds), was told a different look could be requested cheaply, and replied "go," requesting
+  no change (see "What this note does not do").
 
 ## Sources
 
@@ -649,9 +777,9 @@ the same implementation task instead appends a short, dated pointer to this note
 `docs/architecture/revit-add-in-host-scaffold.md`, `docs/architecture/revit-2027-verification-and-host-design.md`,
 and `docs/architecture/revit-add-in-conventions.md`, matching this repository's own established per-issue
 closeout pattern (Issues #14, #15, and #16 each appended a dated record rather than rewriting an earlier
-note). It does not run the manual evidence plan above or obtain the owner's review; both remain open, marked
-by name above (the
-"Evidence" section and "Known limitations") rather than assumed complete. Once both land, this note's
-"Evidence" section should be filled in place — matching how
+note). A 2026-09-24 Revit 2027 session has since run the manual evidence plan above; its results are recorded
+in "Evidence" above. On that same date, before the session, the owner was shown the final pair in chat and
+replied "go," requesting no change; no separate formal sign-off beyond that reply is recorded (see "Known
+limitations"). This note's own status line already reflects that — matching how
 `docs/architecture/revit-extensible-storage-provenance.md`'s own "Manual evidence plan" placeholder was
 filled from a real Revit 2027 session — rather than rewritten from scratch.
