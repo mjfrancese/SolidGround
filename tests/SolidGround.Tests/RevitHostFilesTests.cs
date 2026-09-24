@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -9,7 +10,7 @@ namespace SolidGround.Tests;
 /// <summary>
 /// Offline, deterministic, platform-independent checks against the committed
 /// <c>src/SolidGround.Revit</c> host files (Issue #14): the manifest, the csproj's local-vs-CI reference
-/// mechanics, both restore lock files, the solution file, the two placeholder ribbon icons, and the CI
+/// mechanics, both restore lock files, the solution file, the two ribbon icons, and the CI
 /// workflow's trigger surface. These tests read plain text, XML, JSON, and raw PNG header bytes only;
 /// they never load <c>SolidGround.Revit.dll</c>, never reference <c>SolidGround.Revit</c> from this test
 /// project, and never require Revit, so they run unmodified on the Linux solidground-pve2 CI runner.
@@ -195,6 +196,42 @@ public sealed class RevitHostFilesTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void CsprojDeclaresExactlyTwoEmbeddedResourceItemsForTheRibbonIcons()
+    {
+        // SolidGround Issue #19's "resource convention" acceptance criterion: SolidGroundApplication.cs
+        // loads both ribbon icons by LogicalName through GetManifestResourceStream, so the csproj must
+        // embed exactly the two icon files -- no stray third resource, no accidental duplicate.
+        XElement root = LoadXmlRoot(CsprojPath);
+        XElement[] embeddedResources = [.. root.Descendants("EmbeddedResource")];
+
+        Assert.Equal(2, embeddedResources.Length);
+    }
+
+    [Theory]
+    [InlineData("SolidGround.16.png", "SmallIconResourceName")]
+    [InlineData("SolidGround.32.png", "LargeIconResourceName")]
+    public void CsprojEmbedsEachRibbonIconWithARelativeIncludeAndTheMatchingApplicationLogicalNameConstant(
+        string fileName, string applicationConstantName)
+    {
+        XElement root = LoadXmlRoot(CsprojPath);
+        XElement resource = Assert.Single(
+            root.Descendants("EmbeddedResource"),
+            element => ((string?)element.Attribute("Include"))?.EndsWith(fileName, StringComparison.Ordinal) == true);
+
+        string include = (string?)resource.Attribute("Include") ?? string.Empty;
+
+        // Path.IsPathRooted disagrees with itself across platforms (a Windows drive-letter or
+        // backslash-rooted path is not "rooted" by Unix's own rules), and this suite also runs on the
+        // Linux solidground-pve2 CI runner, so a plain string check is used instead of that BCL method.
+        Assert.False(include.StartsWith('/') || include.StartsWith('\\'), $"EmbeddedResource Include '{include}' must be relative, not rooted.");
+        Assert.False(Regex.IsMatch(include, "^[A-Za-z]:"), $"EmbeddedResource Include '{include}' must not contain a drive letter.");
+        Assert.Equal($@"Resources\{fileName}", include);
+
+        string expectedLogicalName = ReadApplicationStringConstant(applicationConstantName);
+        Assert.Equal(expectedLogicalName, (string?)resource.Attribute("LogicalName"));
+    }
+
     // ------------------------------------------------------------------------------------------------
     // (c) Both restore lock files
     // ------------------------------------------------------------------------------------------------
@@ -281,20 +318,117 @@ public sealed class RevitHostFilesTests
     }
 
     // ------------------------------------------------------------------------------------------------
-    // (f) Placeholder ribbon icons
+    // (f) Ribbon icons (SolidGround Issue #19 strengthens these beyond the Issue #14 placeholder-era
+    // dimension-only check: IHDR's full pixel format, the chunk sequence, and real corner transparency)
     // ------------------------------------------------------------------------------------------------
 
     [Theory]
     [InlineData("SolidGround.16.png", 16, 16)]
     [InlineData("SolidGround.32.png", 32, 32)]
-    public void RibbonIconHasTheExpectedPixelDimensions(string fileName, int expectedWidth, int expectedHeight)
+    public void RibbonIconIhdrDeclaresEightBitNonInterlacedRgbaAtTheExpectedPixelDimensions(
+        string fileName, int expectedWidth, int expectedHeight)
     {
         string path = Path.Combine(RevitProjectDirectory, "Resources", fileName);
         Assert.True(File.Exists(path), $"Missing icon file: {path}");
 
-        (int width, int height) = ReadPngDimensions(path);
+        (int width, int height, int bitDepth, int colorType, int interlaceMethod) = ReadPngIhdr(path);
+
         Assert.Equal(expectedWidth, width);
         Assert.Equal(expectedHeight, height);
+        Assert.Equal(8, bitDepth);
+        Assert.Equal(6, colorType); // PNG colour type 6: truecolour with alpha (RGBA).
+        Assert.Equal(0, interlaceMethod);
+    }
+
+    [Theory]
+    [InlineData("SolidGround.16.png")]
+    [InlineData("SolidGround.32.png")]
+    public void RibbonIconContainsOnlyCriticalPngChunks(string fileName)
+    {
+        // WPF's BitmapFrame reads a pHYs chunk's pixels-per-metre value as the image's DPI, and 96 DPI
+        // (what WPF assumes in that chunk's absence) is not an exact integer number of pixels per metre
+        // (96 / 0.0254 = 3779.527...), so any pHYs chunk on a 96 DPI-authored icon is necessarily a
+        // rounded approximation -- WPF would then size this 16x16/32x32 icon at roughly 16.002/32.004
+        // device-independent pixels instead of exactly 16/32. Omitting pHYs entirely leaves WPF's
+        // documented 96 DPI default in force, so the icon renders pixel-perfect on the ribbon.
+        // gAMA/cHRM/sRGB/iCCP invite a colour-managed decoder to rescale the glyph's authored colour
+        // values, which is equally unwanted for a fixed-palette ribbon icon. Restricting the chunk
+        // sequence to the three critical chunks (IHDR, IDAT, IEND) rules out all of the above by
+        // construction, rather than only the specific chunk types named here.
+        string path = Path.Combine(RevitProjectDirectory, "Resources", fileName);
+        Assert.True(File.Exists(path), $"Missing icon file: {path}");
+
+        List<string> chunkTypes = ReadPngChunkTypes(path);
+
+        HashSet<string> allowedChunkTypes = ["IHDR", "IDAT", "IEND"];
+        string[] disallowedChunkTypes = [.. chunkTypes.Where(type => !allowedChunkTypes.Contains(type)).Distinct()];
+        Assert.True(
+            disallowedChunkTypes.Length == 0,
+            $"'{path}' contains non-critical chunk(s): {string.Join(", ", disallowedChunkTypes)}.");
+
+        Assert.Equal("IHDR", chunkTypes[0]);
+        Assert.Equal("IEND", chunkTypes[^1]);
+        Assert.Contains("IDAT", chunkTypes);
+    }
+
+    [Theory]
+    [InlineData("SolidGround.16.png")]
+    [InlineData("SolidGround.32.png")]
+    public void RibbonIconHasATransparentBackgroundBehindAnOpaqueGlyph(string fileName)
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Resources", fileName);
+        Assert.True(File.Exists(path), $"Missing icon file: {path}");
+
+        (int width, int height, byte[] pixels) = DecodePngRgbaPixels(path);
+
+        Assert.Equal(0, AlphaAt(pixels, width, 0, 0));
+        Assert.Equal(0, AlphaAt(pixels, width, width - 1, 0));
+        Assert.Equal(0, AlphaAt(pixels, width, 0, height - 1));
+        Assert.Equal(0, AlphaAt(pixels, width, width - 1, height - 1));
+
+        int totalPixelCount = width * height;
+        int opaquePixelCount = 0;
+        for (int i = 3; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] == 255) { opaquePixelCount++; }
+        }
+
+        Assert.True(
+            opaquePixelCount >= totalPixelCount / 4,
+            $"Expected at least a quarter of '{path}' pixels to be fully opaque (alpha 255); found {opaquePixelCount} of {totalPixelCount}.");
+    }
+
+    [Fact]
+    public void RevitResourcesDirectoryContainsOnlyTheApprovedRibbonIconFiles()
+    {
+        // SolidGround Issue #19 acceptance criterion 6 ("only final reviewed assets and useful
+        // source/provenance files enter the repository"): nothing in this suite previously failed if a
+        // future commit dropped a stray design-exploration file -- an extra candidate PNG, an
+        // iteration render, a designer's own scratch note -- into this folder alongside the two
+        // shipped icons and their README. This is an explicit allow-list, not a blocklist naming
+        // specific unwanted files, so any unexpected addition of any kind is caught, not just the
+        // ones anticipated today.
+        //
+        // AC5 ("generation notes identify the tool, prompt intent, seed when applicable, and human
+        // cleanup without including credentials") has no automated coverage, unlike AC6 above, and is
+        // not expected to gain any: the final-asset-landing commit settled generation notes into
+        // docs/architecture/revit-ribbon-icons.md and this same Resources/README.md -- not a separate
+        // generation-notes file under Resources/ -- so the allow-list below needs no new entry for it.
+        // A content check would only ever assert prose stayed prose, so AC5 is met by those two
+        // documents themselves (reviewed for the absence of credentials and PixelLab identifiers as
+        // part of writing them), not by an automated test.
+        string resourcesDirectory = Path.Combine(RevitProjectDirectory, "Resources");
+        Assert.True(Directory.Exists(resourcesDirectory), $"Missing directory: {resourcesDirectory}");
+
+        HashSet<string> approvedFileNames = new(StringComparer.Ordinal) { "README.md", "SolidGround.16.png", "SolidGround.32.png" };
+        string[] actualFileNames = [.. Directory.EnumerateFiles(resourcesDirectory).Select(path => Path.GetFileName(path))];
+
+        string[] unexpectedFileNames = [.. actualFileNames.Where(name => !approvedFileNames.Contains(name))];
+        Assert.True(
+            unexpectedFileNames.Length == 0,
+            $"Unexpected file(s) in '{resourcesDirectory}': {string.Join(", ", unexpectedFileNames)}.");
+
+        Assert.Empty(Directory.EnumerateDirectories(resourcesDirectory));
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -564,6 +698,26 @@ public sealed class RevitHostFilesTests
             .Replace("\"", string.Empty, StringComparison.Ordinal);
 
     /// <summary>
+    /// Reads a <c>private const string</c> value directly out of SolidGroundApplication.cs's own source
+    /// text (for example <c>SmallIconResourceName</c>), so the csproj LogicalName assertion above fails
+    /// loudly the moment that constant and the csproj attribute it must match drift apart, rather than
+    /// hardcoding a second copy of the expected value in this test file.
+    /// </summary>
+    private static string ReadApplicationStringConstant(string constantName)
+    {
+        string path = Path.Combine(RevitProjectDirectory, "SolidGroundApplication.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        // Word-boundary anchored so a legitimate longer identifier can never be matched as a substring
+        // (the same defensive style NoRevitProjectOrScriptFileHardcodesAnAllUserAddInPath above already
+        // uses for the same class of risk, e.g. \ballusersaddins\b).
+        Match match = Regex.Match(content, $@"\b{Regex.Escape(constantName)}\b\s*=\s*""([^""]+)""");
+        Assert.True(match.Success, $"Could not find a string constant named '{constantName}' in '{path}'.");
+        return match.Groups[1].Value;
+    }
+
+    /// <summary>
     /// Parses a NuGet <c>packages*.lock.json</c> file and returns every package name (from every
     /// restore target) paired with its resolved version. Extracts plain strings inside the method's own
     /// <c>using</c> scope rather than yielding <see cref="JsonElement"/>/<see cref="JsonProperty"/>
@@ -619,12 +773,13 @@ public sealed class RevitHostFilesTests
         return segments.Any(segment => segment is "bin" or "obj");
     }
 
-    private static (int Width, int Height) ReadPngDimensions(string path)
+    /// <summary>Reads the fixed-layout IHDR chunk that the PNG spec guarantees is the very first chunk.</summary>
+    private static (int Width, int Height, int BitDepth, int ColorType, int InterlaceMethod) ReadPngIhdr(string path)
     {
         byte[] expectedSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
         using FileStream stream = File.OpenRead(path);
-        byte[] header = new byte[24];
+        byte[] header = new byte[29];
         stream.ReadExactly(header);
 
         Assert.True(header.AsSpan(0, 8).SequenceEqual(expectedSignature), $"'{path}' does not start with the PNG signature.");
@@ -632,6 +787,123 @@ public sealed class RevitHostFilesTests
 
         int width = BinaryPrimitives.ReadInt32BigEndian(header.AsSpan(16, 4));
         int height = BinaryPrimitives.ReadInt32BigEndian(header.AsSpan(20, 4));
-        return (width, height);
+        int bitDepth = header[24];
+        int colorType = header[25];
+        int interlaceMethod = header[28];
+        return (width, height, bitDepth, colorType, interlaceMethod);
     }
+
+    /// <summary>
+    /// Walks a PNG's chunk stream after the 8-byte signature, returning each chunk's type and data in
+    /// file order. Does not validate CRCs: these are committed, offline fixture files, not
+    /// attacker-controlled input, so the signature and IHDR-name checks already in use elsewhere in this
+    /// file are enough to catch a truncated or non-PNG file.
+    /// </summary>
+    private static List<(string Type, byte[] Data)> ReadPngChunks(string path)
+    {
+        byte[] expectedSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        byte[] bytes = File.ReadAllBytes(path);
+        Assert.True(bytes.AsSpan(0, 8).SequenceEqual(expectedSignature), $"'{path}' does not start with the PNG signature.");
+
+        List<(string Type, byte[] Data)> chunks = [];
+        int position = 8;
+        while (position < bytes.Length)
+        {
+            int length = BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(position, 4));
+            string type = Encoding.ASCII.GetString(bytes, position + 4, 4);
+            byte[] data = bytes[(position + 8)..(position + 8 + length)];
+            chunks.Add((type, data));
+            position += 8 + length + 4; // length field + type + data + CRC
+        }
+
+        return chunks;
+    }
+
+    private static List<string> ReadPngChunkTypes(string path) => [.. ReadPngChunks(path).Select(chunk => chunk.Type)];
+
+    /// <summary>
+    /// Decodes an 8-bit RGBA (PNG colour type 6) image's pixels for a direct transparency assertion,
+    /// without taking a package dependency on top of the standard library: concatenates every IDAT
+    /// chunk's compressed bytes, inflates them with <see cref="ZLibStream"/>, then reverses each of the
+    /// PNG spec's five per-scanline filter types (section 9: None, Sub, Up, Average, Paeth) one row at a
+    /// time. Every ribbon icon this repository ships is 8-bit RGBA (asserted below), so this
+    /// intentionally does not handle any other bit depth or colour type.
+    /// </summary>
+    private static (int Width, int Height, byte[] Pixels) DecodePngRgbaPixels(string path)
+    {
+        List<(string Type, byte[] Data)> chunks = ReadPngChunks(path);
+
+        (string ihdrType, byte[] ihdr) = chunks[0];
+        Assert.Equal("IHDR", ihdrType);
+
+        int width = BinaryPrimitives.ReadInt32BigEndian(ihdr.AsSpan(0, 4));
+        int height = BinaryPrimitives.ReadInt32BigEndian(ihdr.AsSpan(4, 4));
+        int bitDepth = ihdr[8];
+        int colorType = ihdr[9];
+        Assert.Equal(8, bitDepth);
+        Assert.Equal(6, colorType);
+
+        using MemoryStream compressed = new();
+        foreach ((string type, byte[] data) in chunks)
+        {
+            if (type == "IDAT") { compressed.Write(data); }
+        }
+
+        compressed.Position = 0;
+        using ZLibStream inflater = new(compressed, CompressionMode.Decompress);
+        using MemoryStream rawStream = new();
+        inflater.CopyTo(rawStream);
+        byte[] raw = rawStream.ToArray();
+
+        const int BytesPerPixel = 4;
+        int stride = width * BytesPerPixel;
+        byte[] pixels = new byte[height * stride];
+        byte[] previousLine = new byte[stride];
+        int rawPosition = 0;
+
+        for (int y = 0; y < height; y++)
+        {
+            byte filterType = raw[rawPosition];
+            rawPosition++;
+            byte[] currentLine = new byte[stride];
+
+            for (int x = 0; x < stride; x++)
+            {
+                byte filtered = raw[rawPosition + x];
+                byte left = x >= BytesPerPixel ? currentLine[x - BytesPerPixel] : (byte)0;
+                byte above = previousLine[x];
+                byte aboveLeft = x >= BytesPerPixel ? previousLine[x - BytesPerPixel] : (byte)0;
+
+                currentLine[x] = filterType switch
+                {
+                    0 => filtered,
+                    1 => unchecked((byte)(filtered + left)),
+                    2 => unchecked((byte)(filtered + above)),
+                    3 => unchecked((byte)(filtered + ((left + above) / 2))),
+                    4 => unchecked((byte)(filtered + PaethPredictor(left, above, aboveLeft))),
+                    _ => throw new NotSupportedException($"Unsupported PNG filter type {filterType} in '{path}'."),
+                };
+            }
+
+            Array.Copy(currentLine, 0, pixels, y * stride, stride);
+            rawPosition += stride;
+            previousLine = currentLine;
+        }
+
+        return (width, height, pixels);
+    }
+
+    /// <summary>PNG spec section 9.2's Paeth predictor, used to reverse filter type 4 above.</summary>
+    private static byte PaethPredictor(byte left, byte above, byte aboveLeft)
+    {
+        int initial = left + above - aboveLeft;
+        int distanceToLeft = Math.Abs(initial - left);
+        int distanceToAbove = Math.Abs(initial - above);
+        int distanceToAboveLeft = Math.Abs(initial - aboveLeft);
+
+        if (distanceToLeft <= distanceToAbove && distanceToLeft <= distanceToAboveLeft) { return left; }
+        return distanceToAbove <= distanceToAboveLeft ? above : aboveLeft;
+    }
+
+    private static int AlphaAt(byte[] rgbaPixels, int width, int x, int y) => rgbaPixels[(((y * width) + x) * 4) + 3];
 }

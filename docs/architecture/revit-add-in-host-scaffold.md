@@ -329,6 +329,12 @@ so this milestone ships a real, working icon-loading path end to end — embedde
 bytes; the embedded-resource mechanism, the logical names, and `SolidGroundApplication`'s loading code do
 not need to change when it does.
 
+**2026-09-24 (Issue #19).** The final, designed terrain-and-parcel icon pair described above has replaced
+these two files' bytes; the embedded-resource mechanism, the logical names, and `SolidGroundApplication`'s
+loading code needed no change, as predicted. See `docs/architecture/revit-ribbon-icons.md` for the full
+design record, palette, contrast evidence, and manual evidence plan, and
+`src/SolidGround.Revit/Resources/README.md` for the shipped files' own short record.
+
 ## Manual integration test steps this milestone inherits
 
 Every step below is copied, in summary, from `docs/architecture/revit-2027-verification-and-host-design.md`'s
