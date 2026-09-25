@@ -1,22 +1,33 @@
 # Revit release packaging and signing
 
-**Status.** DESIGN-stage, SCRIPTS-stage, and the live Revit 2027 manual evidence plan are all complete.
+**Status. Complete.** DESIGN-stage, SCRIPTS-stage, the live Revit 2027 manual evidence plan, the owner's AC6
+acceptance, and the published GitHub Release are all complete.
 `scripts/Sign-RevitAddIn.ps1 -NewCertificate` was run for real on 2026-09-24 local time (2026-09-25T02:35Z) and
 minted the SolidGround signing certificate; see "Certificate creation parameters" and "The signing certificate
 pin file" below for its recorded identity. A 2026-09-25 live Revit 2027 session then built, signed, and
 packaged a release candidate from commit `a515f0e` (zip SHA-256
 `6456AFFE8C83223EA67DCFBA83C58276153B36F224EBE222A02455EE2BF8B36D`) and ran the full "Manual evidence plan"
 below end to end against a real Revit 2027 (build 27.0.10.13, i.e. update 2027.0.1) process on Windows 11; its
-results are recorded in "Evidence" below and in each numbered step's own Evidence paragraph.
+results are recorded in "Evidence" below and in each numbered step's own Evidence paragraph. Commit `eeb2214`,
+which followed, changed only installer message text and documentation (the trust-prompt wording and a known
+limitation), so it did not repeat the live session: its package was instead re-verified by a complete offline
+dry run (all steps pass, zero privacy hits) and a 2026-09-25 live smoke test (installed via `install.cmd`,
+Revit 2027 launched with no security prompt, the SolidGround tab and Create Toposolid button present, closed
+cleanly). **The owner accepted this result on 2026-09-25** ("Accept and publish (Recommended)"), and the
+orchestrator published **SolidGround 0.1.0 for Revit 2027** as a GitHub Release: tag `v0.1.0` (annotated tag
+object `3c09986a269753e9b9c5e2d90f1c50984ecc0b0e`) targeting commit `eeb2214`
+(`eeb22148dc2aa21742b656b1aff5b0d461af6801`), with assets `SolidGround-Revit2027-v0.1.0.zip` (748,496 bytes,
+SHA-256 `802010120BA05F8E3A17FFF54D999968399C9B851CB0A42CA609B0DB9FC676E9`, re-verified after publication) and
+its `.sha256` file; neither the tag push nor the release triggered a CI run. See "GitHub Release" and
+"Evidence" below for the full record.
 `Directory.Build.props` now declares `<Version>0.1.0</Version>`; `scripts/Sign-RevitAddIn.ps1`,
 `scripts/Import-SigningTrust.ps1`, `scripts/Uninstall-SolidGround.ps1`, `scripts/New-ReleasePackage.ps1`,
 `scripts/Install-SolidGround.ps1`, and `scripts/install.cmd` all exist and are described below directly from
 their own committed source, and have now all been run for real (see "Evidence" below).
 `scripts/signing-certificate.json` — the pin file every signing/packaging/install script treats as its one
 source of truth for the certificate's identity — now exists, written by that same mint; its committed values
-are quoted directly in "The signing certificate pin file" below. **What remains open**: AC6 (the owner's
-acceptance of this end-to-end result) and, gated on it, the GitHub Release publication described in "GitHub
-Release" below — neither has happened yet. It follows the structure, tone, and citation style of
+are quoted directly in "The signing certificate pin file" below. **Nothing remains open.** It follows the
+structure, tone, and citation style of
 `docs/architecture/revit-toposolid-creation.md`, `docs/architecture/revit-extensible-storage-provenance.md`,
 and `docs/architecture/revit-ribbon-icons.md`, and is synthesized from Issue #17's own multi-proposal,
 four-review design record (`design-record.md`, Draft 4; not committed to this repository) plus a read-only
@@ -715,14 +726,23 @@ event, not a `push`-to-`main`-branch event; `.github/workflows/ci.yml`'s entire 
 branches: [main]`, with no `release`, `workflow_dispatch`, `repository_dispatch`, or `workflow_call` key
 anywhere — confirmed offline today by `CiWorkflowHasNoDisallowedTriggersAndReferencesTheApprovedRunner`. The
 job-level guard and the first step's own repository/event/ref checks independently reject a tag-ref or
-non-push-event run even in a hypothetical misconfiguration. **To be confirmed at publish time**: after
-`gh release create`, `gh run list --workflow=ci.yml --limit 5` shows no new run with a timestamp after the
-release was created.
+non-push-event run even in a hypothetical misconfiguration. **Confirmed at publish time**: after
+`gh release create`, `gh run list --workflow=ci.yml --limit 5` showed no new run with a timestamp after the
+release was created — the latest run remained the `eeb2214` push (run `36166329355`, green).
 
-**The release build has now happened** (the `a515f0e` release candidate described in "Evidence" below), but
-the git tag and the GitHub Release publication itself have not: both are gated on AC6, the owner's explicit
-acceptance, which is still pending. This section describes the design D2 adopted; it makes no claim that the
-`git tag`/`gh release create` commands above have actually been run.
+**Done, 2026-09-25.** The owner accepted the live Revit 2027 result ("Accept and publish (Recommended)"), and
+the orchestrator published the release following the procedure above. The release build validated end to end
+by the live session was the `a515f0e` candidate described in "Evidence" below; commit `eeb2214` afterward
+changed only installer message text and documentation, so rather than repeating the live session, its package
+was re-verified by a complete offline dry run (all steps pass, zero privacy hits) and a live smoke test on
+2026-09-25. The tag `v0.1.0` (annotated tag object `3c09986a269753e9b9c5e2d90f1c50984ecc0b0e`) targets commit
+`eeb2214` (`eeb22148dc2aa21742b656b1aff5b0d461af6801`) — the exact commit that dry run and smoke test
+validated. The published GitHub Release, "SolidGround 0.1.0 for Revit 2027"
+(<https://github.com/mjfrancese/SolidGround/releases/tag/v0.1.0>), carries assets
+`SolidGround-Revit2027-v0.1.0.zip` (748,496 bytes, SHA-256
+`802010120BA05F8E3A17FFF54D999968399C9B851CB0A42CA609B0DB9FC676E9`, re-verified against the downloaded asset
+after publication) and its `.sha256` file. The procedure above is the recorded procedure the orchestrator
+actually followed; it is retained verbatim rather than rewritten into past tense.
 
 ## Manual evidence plan (Revit 2027 session)
 
@@ -1029,9 +1049,12 @@ locations; the installed Revit template hash unchanged. Only after the owner's A
 publication (above) proceed.
 *Evidence: this note's "Evidence" section and "Acceptance criteria" table below were written from this
 session's real results, and this manual evidence plan's own per-step Evidence paragraphs above were filled in
-directly from the session's recorded output. The final-machine-state checklist (2.12) passed all 9 items. **AC6
-itself — the owner's explicit acceptance of this full sequence — is pending the owner's review as of this
-writing; GitHub Release publication does not proceed until that acceptance is given.***
+directly from the session's recorded output. The final-machine-state checklist (2.12) passed all 10 items
+(corrected here from an earlier miscount of 9). **AC6 itself — the owner's explicit acceptance of this full
+sequence — was given on 2026-09-25** ("Accept and publish (Recommended)"); the orchestrator then published
+SolidGround 0.1.0 for Revit 2027 as a GitHub Release, tag `v0.1.0` targeting commit `eeb2214`, following the
+procedure recorded in "GitHub Release" above. See "GitHub Release" above and the "Evidence" section's own AC6
+paragraph below for the full record.*
 
 **Stop conditions throughout**: no launch without the owner's "go"; re-check before every click; the unified
 button rule at every dialog; any diff found at 2.3 is recorded and reverted before 2.4 proceeds; any hash
@@ -1075,8 +1098,20 @@ light re-confirmation (32 px icon rendered correctly, dark theme).
 
 **AC5 (accuracy statement)** — met; unaffected by this issue's changes.
 
-**AC6 (owner acceptance)** — **pending the owner's review.** GitHub Release publication does not proceed until
-this is given.
+**AC6 (owner acceptance)** — **Met.** The owner accepted this end-to-end result on 2026-09-25, in his own
+words: "Accept and publish (Recommended)." The orchestrator then published the release: GitHub Release
+"SolidGround 0.1.0 for Revit 2027" (<https://github.com/mjfrancese/SolidGround/releases/tag/v0.1.0>), annotated
+tag `v0.1.0` (tag object `3c09986a269753e9b9c5e2d90f1c50984ecc0b0e`) targeting commit `eeb2214`
+(`eeb22148dc2aa21742b656b1aff5b0d461af6801`), with assets `SolidGround-Revit2027-v0.1.0.zip` (748,496 bytes,
+SHA-256 `802010120BA05F8E3A17FFF54D999968399C9B851CB0A42CA609B0DB9FC676E9`, re-verified after publication) and
+its `.sha256` file. The full live session validated the `a515f0e` release candidate; commit `eeb2214` changed
+only installer message text and documentation, so its package was re-verified instead by a complete offline
+dry run (all steps pass, zero privacy hits) and a live smoke test on 2026-09-25 — installed via `install.cmd`,
+Revit 2027 launched with no security prompt, the SolidGround tab and Create Toposolid button present, closed
+cleanly; the installed template hash was unchanged. Final machine state: `0.1.0+eeb2214` installed per-user,
+`settings.json` identical to the pre-session baseline, the pre-existing `CodeSigning` values restored, and the
+certificate trusted in `LocalMachine\Root` and `LocalMachine\TrustedPublisher`. Neither the tag push nor the
+release triggered a CI run (the latest run remained the `eeb2214` push, `36166329355`, green).
 
 **Deviations from the plan, disclosed rather than smoothed over** (see each stage's own Evidence paragraph for
 full detail):
@@ -1114,7 +1149,7 @@ The final-machine-state checklist (Stage 2.12) confirmed 9 of 9 items restored o
 | AC3 | The reviewed 16×16 and 32×32 icons render correctly in the supported Revit ribbon contexts. | **Met (by Issue #19)** | `docs/architecture/revit-ribbon-icons.md`'s own Evidence section already carries a 2026-09-24 Revit 2027 session finding both sizes pixel-exact in both ribbon themes; Stage 2.6 above is a light re-confirmation (32 px, dark theme), not new evidence this issue depends on. |
 | AC4 | No native geospatial binaries or Autodesk assemblies are committed or bundled unlawfully. | **Met** | Nothing native or Autodesk-owned is committed to this repository today, and the 2026-09-25 packaging run that produced the `a515f0e` release candidate exercised `New-ReleasePackage.ps1`'s preconditions 2 and 9 (`THIRD-PARTY-NOTICES` completeness; native-binary/`runtimes\` rejection) against real build output without tripping either. |
 | AC5 | README retains the site-form accuracy limit and does not claim survey-grade output. | **Met** | `README.md`'s `## Accuracy` section is untouched by this issue's own edits (see `docs/revit-install-guide.md`'s own `## Accuracy` section, which points at it rather than repeating or paraphrasing it, and `README.md` itself); this note adds no claim of survey-grade output anywhere. |
-| AC6 | The owner accepts the Revit 2027 end-to-end result. | **Pending the owner's review** | Stages 1-2 have run and this note's "Evidence" section above is filled in from that real session; the owner's own explicit acceptance has not yet been given. GitHub Release publication (see "GitHub Release" above) does not proceed until it is. |
+| AC6 | The owner accepts the Revit 2027 end-to-end result. | **Met** | The owner accepted on 2026-09-25 ("Accept and publish (Recommended)"); the orchestrator published SolidGround 0.1.0 for Revit 2027 as a GitHub Release (tag `v0.1.0` at commit `eeb2214`, zip SHA-256 `802010120BA05F8E3A17FFF54D999968399C9B851CB0A42CA609B0DB9FC676E9`). See "Evidence" above and "GitHub Release" above for the full record. |
 
 ## Known limitations
 
