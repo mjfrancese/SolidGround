@@ -1,102 +1,139 @@
 # SolidGround
 
-SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
+SolidGround is a free, open-source Revit 2027 add-in that turns real, measured ground elevation data into a native Revit terrain surface for one property — clipped to the parcel, simplified to a safe size, and labeled with a record of exactly where the data came from. It's built for architects, designers, and builders who want a quick, real terrain surface instead of a flat pad or hand-traced contours.
 
-The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, provenance with deterministic exports, and the end-to-end CLI workflow established**. Core, CLI, and offline test projects compile on .NET 10; the `process`/`fetch`/`run`/`verify` CLI workflow is implemented and tested — see [Usage](#usage) below. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md), and the [CLI workflow design note](docs/architecture/cli-workflow.md). Phase 2 has begun: Issue #14 (2026-09-21) scaffolded `src/SolidGround.Revit`, the Revit 2027 add-in host, following the owner's established conventions; it ships a manifest, a ribbon with one read-only Preflight-and-report command, diagnostics, a deploy script, and an active CI compile gate — see [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md). Issue #15 (2026-09-21) then implemented `CreateToposolidCommand`, which runs the same acquisition/processing pipeline Core exposes to the CLI and creates a bounded, native Revit toposolid inside one transaction with provable-unchanged-on-rejection semantics — see [the toposolid creation design note](docs/architecture/revit-toposolid-creation.md). Issue #16 (2026-09-21 to 2026-09-23) then attached Extensible Storage provenance to the created toposolid itself, with all Revit 2027 evidence complete as of 2026-09-23 — see [the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md). Issue #19 (2026-09-23 to 2026-09-24) replaced the placeholder ribbon icons with the final 16×16/32×32 terrain-and-parcel pair, confirmed pixel-exact in both the light and dark ribbon themes in a 2026-09-24 Revit 2027 session — see [the ribbon icons design note](docs/architecture/revit-ribbon-icons.md). Issue #17 is packaging, signing, and validating the Revit 2027 release for install from a GitHub Release zip — see [the release packaging and signing design note](docs/architecture/revit-release-packaging-and-signing.md) and [Install](#install) below.
+**Status:** version 0.1.0 was released 2026-09-25. See [Status and roadmap](#status-and-roadmap) below.
 
-## Scope
+## Contents
 
-The intended workflow is:
+- [What it does](#what-it-does)
+- [Who it's for, and why use it](#who-its-for-and-why-use-it)
+- [What you need](#what-you-need)
+- [Getting started](#getting-started)
+- [Accuracy](#accuracy)
+- [Limitations](#limitations)
+- [Status and roadmap](#status-and-roadmap)
+- [For developers](#for-developers)
+- [License](#license)
 
-1. Accept a WGS 84 bounding box, a latitude/longitude and radius, or a parcel polygon in GeoJSON or WKT.
-2. Request the USGS 1 m DEM from OpenTopography as Arc/Info ASCII Grid (`AAIGrid`).
-3. Reject malformed grids and remove every `NODATA_value` cell.
-4. Transform horizontal coordinates and make the output unit explicit.
-5. Clip to the parcel with an optional buffer.
-6. Shift the surface to a recorded local origin.
-7. Reduce the grid to an approximately 15,000-point budget with a terrain-aware method that preserves ridges and swales.
-8. Export development artifacts from the CLI (implemented today by the `process`/`fetch`/`run` commands); in Phase 2, create the bounded toposolid through the Revit API.
-9. Attach source, datum, quality, statistics, simplification, units, and local-origin provenance to the created element.
+## What it does
 
-The primary fixture is a small example area on public, non-residential land, centered at `41.591194, -93.603806`. The approximately 17,222-square-foot area is used for every offline test and CLI usage example in this repository; no street address, lot, plat, ZIP, or place name is ever recorded for it, because SolidGround's product goal is to create an accurate, simplified toposolid for any property, quickly and easily — not just one lot. The original test lot's extensive mature tree canopy, and the terrain-quality behavior observed under it, are described in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
+A few terms used below, explained once:
+
+- **Lidar** — a way of measuring ground height from an aircraft using laser pulses.
+- **Bare-earth data** — lidar with trees, buildings, and other clutter already removed, leaving just the ground.
+- **Toposolid** — Revit's own name (since Revit 2024) for a native, built-in terrain surface object.
+- **OpenTopography** — the public data service SolidGround downloads elevation data from.
+- **API key** — a private code that lets SolidGround talk to OpenTopography on your behalf.
+- **Provenance** — a record of exactly where a piece of data came from, kept alongside it.
+
+From your point of view, using SolidGround looks like this:
+
+1. Install SolidGround as a Revit 2027 add-in (see [Getting started](#getting-started)). It adds one tab to the ribbon, "SolidGround," with one button, "Create Toposolid."
+2. The first time you click the button, SolidGround writes a starting configuration file and stops, asking you to edit it.
+3. In that file, you choose:
+   - Where the terrain data comes from — a live download, or a file you already have.
+   - The area you want — a parcel boundary file, a map point plus a radius, or a rectangular box.
+   - Your preferred unit of measurement.
+   - Optionally, a target point budget (15,000 by default).
+   - Optionally, which Level and terrain type in your Revit project to use.
+4. Click the button again. SolidGround first runs a read-only check: it confirms a project is open, your settings make sense, your area is reachable, and (for a live download) that your API key is set. Nothing in your model changes yet — if anything is wrong, one message lists every problem at once.
+5. If that check passes, SolidGround gets the terrain data and removes any cells with no data. It clips the result to your chosen area and shifts the coordinates to line up cleanly with your project. Finally, it reduces the number of points to a safe amount, using a method that tries to preserve ridges and low spots rather than flattening them out.
+6. SolidGround creates one native toposolid. If anything about the result looks wrong, the whole thing is undone automatically and your model is left exactly as it was — you never end up with a half-built surface.
+7. On success, you'll see a confirmation message with the element's ID and how much of the available detail was kept. The same source information is also written directly onto the new toposolid, so it stays with your Revit file even after you close and reopen it.
+
+There's also a command-line version of the same tool, mainly for developers and batch work — see [For developers](#for-developers).
+
+## Who it's for, and why use it
+
+SolidGround is for architects, designers, and builders working in Revit 2027 who want a quick, real terrain surface for a site — instead of starting from a flat pad, hand-tracing contours from a PDF, or building a surface manually from a separate survey file.
+
+What it offers:
+
+- **Free and open source**, under the MIT license.
+- **Fine-grained U.S. elevation data** — 1-meter resolution, fetched automatically once you give it an area, with no manual file-hunting required.
+- **Clips to your actual parcel shape**, not just a rectangle.
+- **Keeps the terrain's real shape** — ridges, low spots, and slopes — when it reduces the data down to a size Revit can handle, instead of thinning it out evenly and blurring those features away.
+- **Records where the data came from, on the element itself** — the source, its date, its accuracy tier, and the exact math needed to trace a point back to its real-world location, all stored with the toposolid so it survives save and reopen.
+- **Nothing extra to install** — no separate GIS (mapping) software, no Python, no scripting environment. Just Revit and the SolidGround add-in.
+
+### How it compares to other ways to get terrain into Revit
+
+Revit has no built-in way to fetch real-world elevation data on its own — by itself, it can only build a surface from a file you already have (survey CAD, or a points file). Here is how SolidGround compares to a few other tools that fill that gap, based on each tool's own published information, as of 2026-09-25:
+
+| Tool | What you need | Elevation detail (published figures) | Cost |
+| --- | --- | --- | --- |
+| **SolidGround** | An OpenTopography account with U.S. 1-meter access | 1 meter (U.S. only) | Free, open source |
+| Autodesk Forma + its Revit add-in | A Forma subscription, or the AEC Collection | About 30 meters worldwide by default (about 25 meters in Europe); finer where a regional dataset applies | $700/year for a standalone Forma Site Design subscription, or $3,675/year via the AEC Collection |
+| Groundit (free, open-source pyRevit extension) | pyRevit and IronPython installed; no account or key | About 10–30 meters worldwide | Free, open source |
+
+As of the Revit 2027 release, Autodesk includes some Forma access — including Forma Site Design — directly with a Revit subscription itself, so an existing Revit 2027 subscriber may not need a separate purchase for at least part of what's shown above. (Source: Autodesk's own ["What's New in Revit 2027"](https://www.autodesk.com/blogs/aec/2026/04/07/whats-new-in-revit-2027/) post, 2026-04-07.)
+
+*(Already sold? Skip to [What you need](#what-you-need).)*
+
+A few more points of comparison, all drawn from each product's own materials:
+
+- **Add-ins that turn a LiDAR file you already have into a Revit surface** (for example, "Topography" by archi, or the point-cloud tools built into "Environment" by arch-intelligence) can exceed 1-meter detail if you already own a high-density scan — but you have to find and supply that file yourself. SolidGround fetches U.S. 1-meter data automatically once you've set up access.
+- **Free, no-account tools** like Groundit work worldwide with no sign-up at all, at a coarser resolution than SolidGround's U.S. data, and without clipping to a parcel shape.
+- Of the tools we compared, none is documented as clipping to an arbitrary parcel outline, simplifying while preserving terrain shape, or writing this kind of traceable record onto the created element — all three of which SolidGround does.
+
+Where other tools may currently serve you better:
+
+- **Anywhere in the world.** SolidGround only covers the continental United States. Forma, Groundit, and several others work worldwide, at a coarser resolution than SolidGround's U.S. data.
+- **No special account needed.** Groundit needs no account or key at all. SolidGround requires an OpenTopography account with 1-meter access, which is not automatic (see [Limitations](#limitations)).
+- **Typing an address or drawing a box in the tool itself.** Several other tools let you search or draw the area directly. SolidGround has this planned but not yet built (see [Status and roadmap](#status-and-roadmap)).
+- **Older Revit versions.** Some tools support Revit versions going back to 2015. SolidGround targets Revit 2027 only.
+- **More than terrain.** Forma, Groundit, and others also bring in buildings, roads, and imagery. SolidGround is deliberately scoped to terrain alone.
+
+## What you need
+
+- **Windows**, with **Revit 2027** already installed. No earlier Revit version is supported.
+- **The SolidGround release zip**, from the [Releases page](https://github.com/mjfrancese/SolidGround/releases). No programming tools or source code are needed for ordinary use.
+- **An OpenTopography account and API key with U.S. 1-meter access** — but only if you want to download terrain live. If you already have an elevation grid file (the plain-text `.asc` grid format OpenTopography also delivers), no key is required.
+  - This access is not automatic: as of 2026-09-25, OpenTopography's own documentation states that 1-meter data is restricted to academic users, or to anyone who separately requests an "enterprise" key. An ordinary free key without that access is rejected — SolidGround reports this plainly rather than silently using lower-quality data instead.
+- **An area to model**: a parcel boundary file — a shape file in GeoJSON or WKT format (two common plain-text ways of describing a boundary; a county GIS/assessor site, or a surveyor or civil engineer, can often supply one) — or a map center point plus a radius, or a rectangular box of coordinates.
+- **Administrator rights**, but only for the one-time certificate trust step described next (optional, but recommended). Everything else installs for your Windows user only, with no admin prompt.
+
+## Getting started
+
+1. Download the latest release from the [Releases page](https://github.com/mjfrancese/SolidGround/releases).
+2. Follow [`docs/revit-install-guide.md`](docs/revit-install-guide.md) — it walks through verifying the download, installing, and your first run, step by step.
+
+   *About Revit's security warning:* SolidGround is signed with its own certificate rather than one bought from a public certificate authority. Until your computer trusts that certificate, Revit shows a **"Security - Invalid Signature"** warning when it starts, saying the add-in may have been tampered with and recommending you don't load it. That wording comes from the certificate not being publicly issued, not from anything being wrong with the files (the installer checks every file's signature before it installs anything). The install guide includes a one-time step, run as administrator, that tells your computer to trust the SolidGround certificate; after that, Revit loads SolidGround with no warning. We recommend doing it. The guide explains exactly what trusting a certificate means before you decide.
+
+3. If you plan to download terrain live, set your OpenTopography API key as described in the guide.
 
 ## Accuracy
 
-SolidGround is for overall lot form and site context. QL2 bare-earth lidar is roughly 10 cm vertical RMSE under favorable conditions, with poorer and less uniform results under canopy. The resulting surface is not suitable for foundation-perimeter grading or construction layout. Those tasks need field measurement, such as a rotary laser, or a professional survey.
+**SolidGround is a site-form tool, not a survey instrument.** The underlying lidar data is roughly 10 centimeters (about 4 inches) of typical vertical error under good conditions, and worse under thick tree cover, where fewer laser pulses reach the ground. The resulting surface is a good guide to a site's overall shape — high points, low points, slopes, and drainage — but it is not suitable for foundation-perimeter grading or construction layout. Those need an actual field survey or a rotary laser.
 
-SolidGround preserves source resolution and quality metadata, but it cannot recover terrain that was never observed or remove interpolation artifacts without also changing the measured surface. At the original test fixture, the observed 1-meter surface is smooth and fully populated, with no NODATA holes and millimeter-scale neighbor residuals almost everywhere; that smoothness is a same-surface proxy for internal consistency, not a measure of accuracy against the true ground beneath the canopy — see "Terrain quality observed under canopy" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
+## Limitations
 
-## Verified technical baseline
+Other real limitations, honestly listed:
 
-The following points were checked during setup on 2026-09-15, unless otherwise dated below:
+- **United States only** — and not the entire country. SolidGround only supports the lower 48 states. Alaska, Hawaii, Puerto Rico, and other U.S. territories are deliberately excluded, because SolidGround cannot confirm the correct elevation reference system for those areas and won't guess.
+- **Special access required.** As noted above, 1-meter data needs an academic-authorized account or a separately requested enterprise key — an ordinary free account isn't enough.
+- **A download counts as two requests, not one**, against your daily limit, because the data provider's response doesn't include its own coordinate-system information, so SolidGround has to ask a second time just to learn that.
+- **Daily and per-request limits apply**, set by the data provider rather than SolidGround: as of 2026-09-25, 200 requests per day for academic accounts (50 for others), and a single request can't cover more than 250 square kilometers.
+- **Revit has its own ceiling on terrain detail.** Revit quietly stops adding points to a terrain surface once it nears its own configured limit (20,000 by default, adjustable between 10,000 and 50,000). SolidGround targets a more conservative 15,000 points by default, and checks your Revit setting before it starts, so you get a clear message instead of a silently cut-off surface.
+- **No "type an address" feature yet.** You currently provide the parcel file, map point and radius, or bounding box yourself. See [Status and roadmap](#status-and-roadmap).
+- **Doesn't touch your project's shared coordinates.** SolidGround only reads them, to confirm it hasn't changed anything by accident — it never moves your project's base point or survey point.
+- **A security warning until you trust the certificate.** Without the one-time trust step, Revit warns that the add-in's signature is invalid every time it starts — see [Getting started](#getting-started).
+- **An occasional Revit crash at startup, cause not yet known.** In testing on Revit 2027 update 2027.0.1, Revit sometimes crashed while opening a document right after it started: 3 of 7 test launches with SolidGround loaded, and none of 2 launches without it. The crash happens inside Revit itself, it also happened with an unsigned build, and a relaunch has always worked. Installing the latest Revit 2027 update is recommended. If it keeps happening to you, please open an issue.
+- **Elevations are used exactly as delivered.** SolidGround does not adjust or convert between different vertical measurement systems; you get the source data's own reference height, unchanged.
+- **A smooth-looking surface under trees isn't proof of accuracy.** Where the ground was hard to see from the air, the delivered surface fills the gap by estimating between nearby points — and that estimate can look just as smooth as a directly measured area. SolidGround can't tell the difference from the data alone, and doesn't pretend otherwise.
 
-- Revit 2027 uses .NET 10. The local Revit API assemblies are version `27.0.10.13`.
-- OpenTopography's current OpenAPI definition exposes `GET /API/usgsdem`, accepts `datasetName=USGS1m`, and still lists `AAIGrid`. `GTiff` remains the default, so SolidGround requests `AAIGrid` explicitly.
-- The parser follows Esri's ASCII raster contract: positive dimensions and cell size, matched lower-left corner or center origins, optional `NODATA_VALUE` defaulting to `-9999`, and north-to-south row-major samples. It converts NODATA to missing cells before returning an elevation grid.
-- The same OpenAPI definition states that USGS 1 m access currently requires academic authorization or an enterprise API key. SolidGround reports access errors and does not substitute lower-resolution data silently. Verified live on 2026-09-19: a no-key run observed exit code 3 with the exact authorization message.
-- Verified live on 2026-09-19: the `usgsdem` `AAIGrid` response is packaged as a bare `.asc` body with no `.prj`/`.aux.xml` sidecar and no reference metadata of any kind; a same-box `GTiff` response for the identical request carries `EPSG:26915` (NAD83 / UTM zone 15N) as its projected coordinate system but no vertical GeoKeys. See "Response packaging and metadata observed" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md). A live re-run on 2026-09-19 confirmed the CLI now completes end to end from this packaging, using that same `GTiff` response's GeoKeys for the horizontal reference and dataset documentation for the vertical reference; see "Live OpenTopography scenario, verified 2026-09-19" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
-- Revit 2027's installed `SiteDB.dll` contains `NativeToposolidMaxPointThreshold` and `LinkToposolidMaxPointThreshold`. Autodesk's public 2027 documentation found during setup did not restate their numeric limits, so the project uses a conservative application default near 15,000 and will re-check limits before the Revit phase.
-- Revit 2027 added explicit isolated-context manifest settings and dependency declarations. The planned add-in will use a private context and will not share managed geospatial assemblies by default.
-- Revit 2027 Extended Properties represent externally supplied, linked property data. SolidGround provenance is owned with the created element, so Extensible Storage is the current recommendation.
+## Status and roadmap
 
-Primary references are the [Revit 2027 API changes](https://help.autodesk.com/view/RVT/2027/ENU/?guid=f7165618-24c9-4160-a7a4-09979fe4a981), [Revit 2027 Extensible Storage guide](https://help.autodesk.com/view/RVT/2027/ENU/?guid=Revit_API_Revit_API_Developers_Guide_Advanced_Topics_Storing_Data_in_the_Revit_model_Extensible_Storage_html), [Revit SDK downloads](https://aps.autodesk.com/developer/overview/revit-api), [OpenTopography API documentation](https://portal.opentopography.org/apidocs/), its [OpenAPI definition](https://portal.opentopography.org/apidocs/openapi.json), and the [Esri ASCII raster format](https://desktop.arcgis.com/en/arcmap/latest/manage-data/raster-and-images/esri-ascii-raster-format.htm).
+**Version 0.1.0** was released on 2026-09-25 — the first installable version for Revit 2027. See the [release notes](https://github.com/mjfrancese/SolidGround/releases/tag/v0.1.0).
 
-## Architecture
+Everything described in [What it does](#what-it-does) above is built and working today.
 
-```text
-SolidGround.slnx
-+-- src/
-|   +-- SolidGround.Core/     pure .NET 10; no Revit reference
-|   +-- SolidGround.Cli/      console host over Core
-|   `-- SolidGround.Revit/    net10.0-windows; Revit 2027 host adapter, ribbon, and manifest
-`-- tests/
-    `-- SolidGround.Tests/    xUnit tests against Core
-```
+**Planned, not yet built:** typing in a street address and having SolidGround find and let you confirm the matching parcel boundary automatically, instead of supplying one yourself. This has been researched but not implemented.
 
-`SolidGround.Revit` is Issue #14's scaffold (a manifest, a ribbon with one read-only Preflight-and-report
-command, diagnostics, and a deploy script) plus Issue #15's `CreateToposolidCommand`, which creates a
-bounded, native Revit toposolid from the same acquisition/processing pipeline Core already exposes to the
-CLI. Issue #16 then attached Extensible Storage provenance to the created element via a dedicated schema
-(`SolidGround_Provenance_Toposolid`), with all Revit 2027 evidence complete as of 2026-09-23, and Issue #19
-shipped the final ribbon icon pair, pixel-exact in both ribbon themes as of 2026-09-24. See
-[the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md),
-[the toposolid creation design note](docs/architecture/revit-toposolid-creation.md),
-[the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md), and
-[the ribbon icons design note](docs/architecture/revit-ribbon-icons.md).
+## For developers
 
-The central design rule is that acquisition, parsing, geometry, transformations, simplification, provenance models, and exports remain testable without Revit installed. [Groundit](https://github.com/lewismconte/groundit) demonstrates the useful architectural pattern of a pure core with offline tests and a thin Revit-specific build step. SolidGround does not adopt Groundit's Python, pyRevit, browser, multi-version, or data-source choices.
-
-Phase 1 may add managed geospatial packages, each only with a pinned version:
-
-- **NetTopologySuite 2.6.0** is referenced for robust topology, buffered polygons, holes, multipolygons, and clipping (`SolidGround.Core.Aois.PolygonalRegion`, `ParcelGeometryParser`'s WKT reader, and `SolidGround.Core.Clipping`). These operations are complex enough that a hand-written substitute would create unnecessary geometry risk. GeoJSON parcel geometry is parsed separately, by a bounded, hand-written reader over the inbox `System.Text.Json.JsonDocument` rather than a further NetTopologySuite.IO package — see [the AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md) for the full rationale.
-- **ProjNET 2.1.0** (LGPL-2.1-or-later) is referenced for managed WKT1 horizontal coordinate transformations (`SolidGround.Core.Transformations.ProjNetHorizontalCoordinateTransformFactory`, built on `CoordinateSystemFactory.CreateFromWkt` and `CoordinateTransformationFactory.CreateFromCoordinateSystems`). It performs no vertical datum conversion; vertical reference metadata is preserved unchanged — see [the coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md) for the full rationale and the accepted NAD83↔WGS84 zero-datum-shift caveat.
-
-No native dependency may be loaded into the Revit process. There is no Python or GDAL path.
-
-## Exports and provenance
-
-`SolidGround.Core.Exports` and `SolidGround.Core.Provenance` turn a clipped, simplified terrain sample set into a deterministic, byte-reproducible export bundle: a `*.solidground.json` document carrying full reversible provenance (source, datums, units, the local-origin offset, and point counts) alongside a bare `*.points.csv` file shaped for Revit's toposolid points-file import, bound together by a recorded sample count and SHA-256 hash. `TerrainProvenance.CurrentSchemaVersion` (currently `2`, adding `sourceHorizontalReferenceOrigin` and `sourceVerticalReferenceOrigin` alongside the rest of the manifest) names the one manifest `TerrainExportBundleRenderer` and `TerrainExportBundleReader` write and strictly read; see [the provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md) for the full manifest, the determinism rules, and how a local coordinate is reconstructed back to its source datum.
-
-In Revit, Issue #16 attaches this same provenance to the created toposolid itself as a Revit Extensible
-Storage entity (`SolidGround_Provenance_Toposolid`, public read, SolidGround-only write) rather than a
-sidecar file; see [the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md)
-for the full field list and how the round trip is verified before the transaction commits.
-
-## Install
-
-To use SolidGround in Revit 2027 without building it yourself, download the latest release zip from the
-[GitHub Releases page](https://github.com/mjfrancese/SolidGround/releases) and follow
-[`docs/revit-install-guide.md`](docs/revit-install-guide.md), which covers verifying the download,
-installing per-user with `install.cmd`, the Mark-of-the-Web and Revit's own add-in security prompt, the
-optional one-time certificate-trust import, setting `OPENTOPOGRAPHY_API_KEY`, `settings.json`, logs,
-troubleshooting, upgrading, and uninstalling. This is a separate, no-SDK-required path from the developer
-source-build workflow in [Build](#build) below; see
-[the release packaging and signing design note](docs/architecture/revit-release-packaging-and-signing.md)
-for how that release is built and signed.
-
-## Build
-
-Install the .NET 10 SDK listed in [`global.json`](global.json). Visual Studio users need Visual Studio 2026 version 18.0 or later to target .NET 10.
+SolidGround is a .NET 10 solution. [`AGENTS.md`](AGENTS.md) is this repository's canonical instructions file, for both human contributors and AI coding assistants.
 
 ```powershell
 dotnet restore SolidGround.slnx --locked-mode
@@ -104,13 +141,7 @@ dotnet build SolidGround.slnx --configuration Release --no-restore
 dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release --no-build
 ```
 
-`SolidGround.Revit` (Issue #14) is now part of `SolidGround.slnx`, so a full-solution build needs the Revit
-2027 SDK installed locally; `SolidGround.Core`, `SolidGround.Cli`, and their tests do not. `SolidGround.Revit.csproj`
-references `RevitAPI.dll`/`RevitAPIUI.dll` through a `RevitInstallDir` MSBuild property, default
-`C:\Program Files\Autodesk\Revit 2027`, overridable with `-p:RevitInstallDir="<path>"` or an environment
-variable of the same name; a clear build error reports a missing install at that path instead of a bare
-"could not resolve this reference." Without Revit installed, build or test `SolidGround.Core`/`SolidGround.Cli`/
-`SolidGround.Tests` individually instead of the whole `.slnx`:
+Building the whole solution needs the Revit 2027 SDK installed locally, since `SolidGround.Revit` is part of it. `SolidGround.Core`, `SolidGround.Cli`, and their tests do not — build or test those individually if you don't have Revit installed:
 
 ```powershell
 dotnet build src/SolidGround.Core/SolidGround.Core.csproj --configuration Release
@@ -118,108 +149,23 @@ dotnet build src/SolidGround.Cli/SolidGround.Cli.csproj --configuration Release
 dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release
 ```
 
-Deploy a locally built add-in to your per-user Revit 2027 Add-Ins folder with
-[`scripts/Deploy-RevitAddIn.ps1`](scripts/Deploy-RevitAddIn.ps1) (PowerShell 5.1 or 7):
-
-```powershell
-.\scripts\Deploy-RevitAddIn.ps1
-```
-
-then fully restart Revit 2027 — add-ins are not hot-reloaded — and confirm the deployed bytes match the
-build with `.\scripts\Deploy-RevitAddIn.ps1 -Verify`. See [`scripts/README.md`](scripts/README.md) and
-[the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md) for the full
-deploy-script design, safety switches, and parameters.
-
-Run the CLI with a real command; see [Usage](#usage) below for one example per command:
-
-```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/example-site.solidground.json
-```
-
-Feature tests are offline by default. Parser tests use a small inspected synthetic fixture based on the example site scenario; it is not represented as measured terrain or an OpenTopography response. An opt-in end-to-end fetch test against the live OpenTopography endpoint runs only when both the `SOLIDGROUND_OPENTOPOGRAPHY_LIVE` environment variable is set to `1` and `OPENTOPOGRAPHY_API_KEY` is set to a non-empty value; otherwise it skips rather than failing the offline suite. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
-
-The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
-
-## Usage
-
-Each command prints one line per stage by default; add `--verbose` for full diagnostics. Every command's
-own `--help` lists its complete option set, and `--version` prints the CLI's version.
-
-`--verbose` prints the redacted acquisition request evidence for `fetch`/`run`, and, whenever an AOI is
-given, the clip's NODATA and region-excluded cell counts. `run --save-raster` keeps the raster set
-(`.asc`, `.prj`, `.source.json`) alongside the export bundle instead of discarding it after processing.
-A bare AAIGrid response — the observed USGS 1 m behaviour — triggers a second `GTiff` request whose GeoKeys
-supply the horizontal reference (`EPSG:26915` at the example site); the vertical reference is
-declared from the dataset's own published documentation and labelled as such, never read off either response.
-Each such acquisition costs two API calls against the configured key's daily quota instead of one, and
-`fetch`, `run`, and `process` each print a reference line stating both origins — see the
-[OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md)'s
-"Two-request contract, verified 2026-09-19" section and the
-[Phase 1 validation note](docs/architecture/phase-1-validation.md)'s "Live OpenTopography scenario, verified
-2026-09-19" section. A request whose area falls below OpenTopography's own undocumented per-request minimum —
-for example, the parcel-plus-5-meter-buffer case recorded in that note — still ends with exit code 2 before
-any raster is returned, and `process` against a local `.asc` file with its own `.prj` runs end to end.
-
-Process a local AAIGrid file offline:
-
-```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- process --asc terrain.asc --parcel lot.geojson --buffer 3 --output out --name example-site
-```
-
-Fetch a raster set from OpenTopography:
-
-```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- fetch --bbox -93.6045,41.5906,-93.6031,41.5917 --output out --name example-site
-```
-
-Fetch and process in one step:
+**Command-line tool.** `SolidGround.Cli` offers the same fetch/clip/simplify/export pipeline outside Revit — useful for development, batch runs, or inspecting results without opening a Revit project. Four commands: `process` (use a local terrain file, no key needed), `fetch` (download a raster from OpenTopography), `run` (fetch and process in one step), and `verify` (re-check a previously written result). Example:
 
 ```powershell
 dotnet run --project src/SolidGround.Cli --configuration Release -- run --center 41.591194,-93.603806 --radius 60 --output out --name example-site
 ```
 
-Verify a written export bundle:
+**Project layout:**
 
-```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/example-site.solidground.json
+```text
+src/SolidGround.Core     Revit-free domain logic: data parsing, geometry, coordinate transforms, provenance
+src/SolidGround.Cli      Console tool over Core
+src/SolidGround.Revit    Revit 2027 add-in host: ribbon, command, toposolid creation
+tests/SolidGround.Tests  Offline xUnit tests against Core (no Revit required)
 ```
 
-`fetch` and `run` acquire data online and require an OpenTopography API key. Set `OPENTOPOGRAPHY_API_KEY`
-in the process environment, or register one with the .NET user-secrets tool:
-
-```powershell
-dotnet user-secrets set OPENTOPOGRAPHY_API_KEY "<key>" --id solidground-cli
-```
-
-See the [CLI workflow design note](docs/architecture/cli-workflow.md) for the full option table, exit
-codes, secrets resolution order, and known limitations.
-
-## Continuous integration and the Revit project
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, compile-checks `SolidGround.Revit` under the CI-only reference-assembly gate described below, and runs the offline Core tests on a repository-scoped, ephemeral self-hosted runner. Actions are pinned to immutable commit SHAs, and the workflow does not use GitHub-hosted cache storage.
-
-SolidGround is public, so the self-hosted workflow accepts only trusted pushes to `main`. It has no pull-request trigger, checks the repository, owner, event, ref, and runner identity before checkout, and has no GitHub-hosted or secondary self-hosted fallback. Pull requests therefore do not run this workflow. If the self-hosted runner is unavailable, the job remains visibly queued instead of moving to another runner.
-
-The trust-boundary conditions this lane must keep true, and the never-list it must honor, are recorded in [`AGENTS.md`](AGENTS.md)'s "Build and CI" section. That section also records the owner's decision to harden this repository's Actions settings, which now require full-commit-SHA pinning and limit the allow-list to exactly `actions/checkout` and `actions/setup-dotnet`.
-
-As of Issue #14 (2026-09-21), the CI-only compile gate is active: the workflow passes `-p:UseRevitReferenceAssemblies=true` to both `dotnet restore SolidGround.slnx --locked-mode` and `dotnet build SolidGround.slnx --configuration Release --no-restore`, which swaps `SolidGround.Revit`'s local `HintPath` references for the exact-pinned, CI-only `Nice3point.Revit.Api.RevitAPI`/`RevitAPIUI` `2027.0.10` packages — SHA-256-byte-identical to the installed Revit 2027 build — restored against a second, separate lock file (`packages.ci.lock.json`) so the default `packages.lock.json` never gains a Nice3point entry. `PrivateAssets="all"`/`ExcludeAssets="runtime"` on those packages, plus a dedicated CI step that fails the job if any `RevitAPI*`/`Nice3point*` assembly appears under `src/SolidGround.Revit/bin`, keep the gate CI-only: no Autodesk binary is ever committed, and neither a local build nor the shipped add-in ever depends on it. Local and deploy builds keep referencing the installed Revit 2027 SDK directly via `RevitInstallDir` (default `C:\Program Files\Autodesk\Revit 2027`). See [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md) for the full mechanism and [`docs/architecture/revit-add-in-conventions.md`](docs/architecture/revit-add-in-conventions.md) section 10 for the original design and licensing position.
-
-## Agent portability
-
-[`AGENTS.md`](AGENTS.md) is the sole canonical instruction file. Current primary documentation produced this repository layout:
-
-| T3 provider | Current project-instruction behavior | Repository file |
-| --- | --- | --- |
-| Codex | Reads root and nested `AGENTS.md` files directly. | `AGENTS.md` |
-| Claude Code | Reads `CLAUDE.md`, explicitly recommends `@AGENTS.md` on Windows for an AGENTS-based repository. | `CLAUDE.md` containing one line: `@AGENTS.md` |
-| Cursor | Reads root and nested `AGENTS.md`; `.cursor/rules` is an alternative. | `AGENTS.md` |
-| Grok Build | Reads the `AGENTS.md` family while walking the project tree. | `AGENTS.md` |
-| OpenCode | Uses `AGENTS.md` as its native custom-instruction file. | `AGENTS.md` |
-
-Sources: [Codex AGENTS.md guidance](https://developers.openai.com/codex/agent-configuration/agents-md), [Claude Code memory files](https://code.claude.com/docs/en/memory), [Cursor rules](https://cursor.com/docs/rules), [Grok Build project rules](https://docs.x.ai/build/features/project-rules), and [OpenCode rules](https://opencode.ai/docs/rules/).
-
-Only `CLAUDE.md` is needed as a vendor-specific pointer for the five requested providers. The repository therefore has no `.cursor/rules`, `.github/copilot-instructions.md`, or `GEMINI.md`. T3 Code's upstream repository now also advertises Google Antigravity, but that additional provider is outside the five-provider scope established for SolidGround.
+Design notes for each major piece of work live under [`docs/architecture/`](docs/architecture/), and the install guide referenced above is at [`docs/revit-install-guide.md`](docs/revit-install-guide.md).
 
 ## License
 
-SolidGround is available under the [MIT License](LICENSE).
+SolidGround is available under the [MIT License](LICENSE). It uses a small number of third-party open-source packages; see [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) for their licenses.
