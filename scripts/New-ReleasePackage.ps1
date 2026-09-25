@@ -473,7 +473,7 @@ try {
     if (-not (Test-Path -LiteralPath $BuildOutputDirectory -PathType Container)) {
         throw "Build output directory not found: '$BuildOutputDirectory'. Did precondition 6's build actually target this -Configuration?"
     }
-    $explainedFiles = @(Get-ReleasePayloadFileNames -DeployScriptPath $DeployScriptPath -SourceDirectory $BuildOutputDirectory -AddinsDirectory $deployWhatIfAddinsDirectory)
+    $explainedFiles = Get-ReleasePayloadFileNames -DeployScriptPath $DeployScriptPath -SourceDirectory $BuildOutputDirectory -AddinsDirectory $deployWhatIfAddinsDirectory
 
     # Precondition 9: native-binary / runtimes\ folder / unexplained-extra-file check against the
     # real build output directory (never our own staging copy, which is tautologically limited to

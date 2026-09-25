@@ -151,10 +151,39 @@ function Get-SolidGroundSigningCertificatePin {
     return $pin
 }
 
+function Test-SolidGroundCertificateInStore {
+    <#
+        Read-only presence check: opens the named LocalMachine store and reports whether
+        $Certificate's thumbprint is already present. Performs no write and calls no
+        ShouldProcess -- see the rule stated on Add-SolidGroundTrustedCertificate below.
+    #>
+    param(
+        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.StoreName]$StoreName
+    )
+
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+        $StoreName, [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+        return [bool]($store.Certificates | Where-Object { $_.Thumbprint -eq $Certificate.Thumbprint })
+    } finally {
+        $store.Close()
+    }
+}
+
 function Add-SolidGroundTrustedCertificate {
     <#
-        Adds $Certificate to the named LocalMachine store via the X509Store API, checking by
-        thumbprint first and treating "already present" as a no-op, not an error.
+        Rule: $PSCmdlet.ShouldProcess() may only be called from this script's top-level scope. A
+        function whose own [Parameter(Mandatory)]/[CmdletBinding()] makes it an advanced function
+        gets its own, separate $PSCmdlet, whose SupportsShouldProcess silently defaults to $false --
+        so a ShouldProcess() call inside such a function can silently return $true under -WhatIf
+        instead of throwing (confirmed by an isolated reproduction, Issue #17, 2026-09-24).
+
+        This function performs no ShouldProcess call itself and assumes the caller already obtained
+        confirmation; it unconditionally adds $Certificate to the named LocalMachine store. The
+        top-level script below checks Test-SolidGroundCertificateInStore, calls
+        $PSCmdlet.ShouldProcess() itself, and calls this function only when that returns $true.
     #>
     param(
         [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
@@ -165,31 +194,7 @@ function Add-SolidGroundTrustedCertificate {
         $StoreName, [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
     try {
         $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-
-        $alreadyPresent = [bool]($store.Certificates | Where-Object { $_.Thumbprint -eq $Certificate.Thumbprint })
-        if ($alreadyPresent) {
-            Write-Host "Cert:\LocalMachine\$StoreName already contains thumbprint $($Certificate.Thumbprint); nothing to do."
-            return
-        }
-
-        $description = "add certificate (subject '$($Certificate.Subject)', thumbprint $($Certificate.Thumbprint)) to Cert:\LocalMachine\$StoreName"
-
-        # $PSCmdlet.ShouldProcess() itself throws (a bare NullReferenceException on Windows PowerShell
-        # 5.1, "Windows PowerShell is in NonInteractive mode" on PowerShell 7) when it needs to show
-        # its own interactive confirmation prompt but this session's console input is redirected --
-        # for example, non-interactive automation. Converting that into a clear, actionable error here
-        # (rather than letting either cryptic exception surface directly) is this script's own
-        # supported behavior for that case; -Confirm:$false avoids it entirely by skipping the prompt.
-        try {
-            $shouldProcess = $PSCmdlet.ShouldProcess("Cert:\LocalMachine\$StoreName", $description)
-        } catch {
-            throw "Import-SigningTrust.ps1 could not show its own confirmation prompt to $description, most likely because this session's console input is redirected (a non-interactive/automated invocation cannot service an interactive Y/N prompt). Re-run with -Confirm:`$false to proceed without prompting -- the elevation, signature, and pin cross-checks above already ran and still fail closed either way -- or with -WhatIf to preview. Original error: $($_.Exception.Message)"
-        }
-
-        if ($shouldProcess) {
-            $store.Add($Certificate)
-            Write-Host "Added thumbprint $($Certificate.Thumbprint) to Cert:\LocalMachine\$StoreName." -ForegroundColor Green
-        }
+        $store.Add($Certificate)
     } finally {
         $store.Close()
     }
@@ -253,8 +258,31 @@ if ($actualSha256 -ne $pin.sha256) {
 # Import into both LocalMachine stores, idempotently
 # ----------------------------------------------------------------------------
 
-Add-SolidGroundTrustedCertificate -Certificate $certificate -StoreName Root
-Add-SolidGroundTrustedCertificate -Certificate $certificate -StoreName TrustedPublisher
+foreach ($storeName in @([System.Security.Cryptography.X509Certificates.StoreName]::Root, [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher)) {
+    if (Test-SolidGroundCertificateInStore -Certificate $certificate -StoreName $storeName) {
+        Write-Host "Cert:\LocalMachine\$storeName already contains thumbprint $($certificate.Thumbprint); nothing to do."
+        continue
+    }
+
+    $description = "add certificate (subject '$($certificate.Subject)', thumbprint $($certificate.Thumbprint)) to Cert:\LocalMachine\$storeName"
+
+    # $PSCmdlet.ShouldProcess() itself throws (a bare NullReferenceException on Windows PowerShell
+    # 5.1, "Windows PowerShell is in NonInteractive mode" on PowerShell 7) when it needs to show
+    # its own interactive confirmation prompt but this session's console input is redirected --
+    # for example, non-interactive automation. Converting that into a clear, actionable error here
+    # (rather than letting either cryptic exception surface directly) is this script's own
+    # supported behavior for that case; -Confirm:$false avoids it entirely by skipping the prompt.
+    try {
+        $shouldProcess = $PSCmdlet.ShouldProcess("Cert:\LocalMachine\$storeName", $description)
+    } catch {
+        throw "Import-SigningTrust.ps1 could not show its own confirmation prompt to $description, most likely because this session's console input is redirected (a non-interactive/automated invocation cannot service an interactive Y/N prompt). Re-run with -Confirm:`$false to proceed without prompting -- the elevation, signature, and pin cross-checks above already ran and still fail closed either way -- or with -WhatIf to preview. Original error: $($_.Exception.Message)"
+    }
+
+    if ($shouldProcess) {
+        Add-SolidGroundTrustedCertificate -Certificate $certificate -StoreName $storeName
+        Write-Host "Added thumbprint $($certificate.Thumbprint) to Cert:\LocalMachine\$storeName." -ForegroundColor Green
+    }
+}
 
 Write-Host ''
 Write-Host 'Trust import complete. Fully restart Revit for this to take effect; SolidGround builds signed'
