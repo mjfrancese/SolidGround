@@ -13,7 +13,7 @@ namespace SolidGround.Tests;
 /// required content markers of every new <c>scripts/*.ps1</c> file and <c>scripts/install.cmd</c>. These
 /// tests read plain text and JSON only and never shell out to PowerShell (ruling R17, and this project's
 /// own standing rule already stated in design-record.md §7: no xUnit test may ever start a PowerShell
-/// process, since the solidground-pve2 CI runner is Linux) -- matching RevitHostFilesTests.cs's own
+/// process, since the self-hosted CI runner is Linux) -- matching RevitHostFilesTests.cs's own
 /// established discipline for the same reason. This suite therefore never loads <c>SolidGround.Revit.dll</c>
 /// and never references <c>SolidGround.Revit</c> from this test project.
 /// </summary>

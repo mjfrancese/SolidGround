@@ -18,7 +18,8 @@ internal static class ProvenanceSchemaAdapter
     /// Returns SolidGround's own published schema, publishing it for the first time this Revit session if
     /// <see cref="Schema.Lookup(Guid)"/> does not yet know about it. When a schema is already registered
     /// under <see cref="ExtensibleStorageProvenanceSchema.SchemaGuid"/>, its shape is compared exactly against
-    /// the expected contract (the owner's other add-in's own <c>RequireExactSchema</c> precedent) rather than trusted as-is.
+    /// the expected contract (matching a related internal project's own fail-loud schema-validation
+    /// precedent) rather than trusted as-is.
     /// </summary>
     /// <exception cref="ProvenanceAttachmentException">
     /// An already-registered schema under this GUID has drifted from the expected name, vendor id, access
@@ -161,8 +162,9 @@ internal static class ProvenanceSchemaAdapter
     /// Compares <paramref name="schema"/> against the expected contract field-by-field, by name (via
     /// <see cref="Schema.ListFields"/>, never by position -- design record §3), throwing on the first drift
     /// found, in the order: schema name, vendor id, read/write access level, field count, then each field's
-    /// presence, <see cref="Field.ValueType"/>, and spec. Never silently adapts to a drifted schema (the owner's other add-in's
-    /// own precedent, backed by a real historical bug about trusting an unvalidated predecessor read).
+    /// presence, <see cref="Field.ValueType"/>, and spec. Never silently adapts to a drifted schema (the same
+    /// fail-loud precedent a related internal project adopted after its own experience trusting an
+    /// unvalidated predecessor read).
     /// </summary>
     private static void RequireExactSchema(Schema schema)
     {

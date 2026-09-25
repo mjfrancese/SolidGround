@@ -18,12 +18,12 @@ public sealed class AoiSettingsFactoryTests
         AoiSettings settings = new()
         {
             Kind = AreaOfInterestKind.BoundingBox,
-            BoundingBox = new BoundingBoxAoiSettings { West = -90.5, South = 38.6, East = [withheld], North = 38.7 },
+            BoundingBox = new BoundingBoxAoiSettings { West = -93.7, South = 41.5, East = -93.6, North = 41.6 },
         };
 
         AreaOfInterest result = AoiSettingsFactory.Build(settings, Wgs84Reference(), parcelGeometryText: null);
 
-        Assert.Equal(new Wgs84BoundingBoxAoi(-90.5, 38.6, [withheld], 38.7), result);
+        Assert.Equal(new Wgs84BoundingBoxAoi(-93.7, 41.5, -93.6, 41.6), result);
     }
 
     [Fact]
@@ -32,18 +32,18 @@ public sealed class AoiSettingsFactoryTests
         AoiSettings settings = new()
         {
             Kind = AreaOfInterestKind.Radius,
-            Radius = new RadiusAoiSettings { CenterLatitude = 38.7, CenterLongitude = [withheld], RadiusMeters = 75d },
+            Radius = new RadiusAoiSettings { CenterLatitude = 41.59, CenterLongitude = -93.60, RadiusMeters = 75d },
         };
 
         AreaOfInterest result = AoiSettingsFactory.Build(settings, Wgs84Reference(), parcelGeometryText: null);
 
-        Assert.Equal(new Wgs84RadiusAoi(38.7, [withheld], LinearDistance.Meters(75d)), result);
+        Assert.Equal(new Wgs84RadiusAoi(41.59, -93.60, LinearDistance.Meters(75d)), result);
     }
 
     [Fact]
     public void BuildForParcelReprojectsTheSuppliedGeometryText()
     {
-        const string geometryText = "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))";
+        const string geometryText = "POLYGON ((-93.61 41.59, -93.60 41.59, -93.60 41.60, -93.61 41.60, -93.61 41.59))";
         AoiSettings settings = new()
         {
             Kind = AreaOfInterestKind.Parcel,

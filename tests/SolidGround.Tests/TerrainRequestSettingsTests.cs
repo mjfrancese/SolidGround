@@ -156,7 +156,7 @@ public sealed class TerrainRequestSettingsTests
             {
                 Kind = AreaOfInterestKind.Radius,
                 BoundingBox = settings.AreaOfInterest.BoundingBox,
-                Radius = new RadiusAoiSettings { CenterLatitude = 38.7, CenterLongitude = [withheld], RadiusMeters = 50 },
+                Radius = new RadiusAoiSettings { CenterLatitude = 41.59, CenterLongitude = -93.60, RadiusMeters = 50 },
             },
         };
 
@@ -175,7 +175,7 @@ public sealed class TerrainRequestSettingsTests
             {
                 Kind = AreaOfInterestKind.Parcel,
                 BoundingBox = settings.AreaOfInterest.BoundingBox,
-                Radius = new RadiusAoiSettings { CenterLatitude = 38.7, CenterLongitude = [withheld], RadiusMeters = 50 },
+                Radius = new RadiusAoiSettings { CenterLatitude = 41.59, CenterLongitude = -93.60, RadiusMeters = 50 },
                 Parcel = new ParcelAoiSettings { Path = @"C:\SolidGround\parcel.geojson", Format = "geojson", BufferMeters = 0 },
             },
         };
@@ -490,7 +490,7 @@ public sealed class TerrainRequestSettingsTests
         string json = """
             {
               "mode": "fetch",
-              "areaOfInterest": { "kind": "boundingBox", "boundingBox": { "west": -90.5, "south": 38.6, "east": [withheld], "north": 38.7 }, "radius": null, "parcel": null },
+              "areaOfInterest": { "kind": "boundingBox", "boundingBox": { "west": -93.7, "south": 41.5, "east": -93.6, "north": 41.6 }, "radius": null, "parcel": null },
               "process": null,
               "localOrigin": { "x": 1000.0, "y": 2000.0, "z": 50.0 },
               "outputUnit": "usSurveyFoot",
@@ -509,7 +509,7 @@ public sealed class TerrainRequestSettingsTests
         string json = """
             {
               "mode": "process",
-              "areaOfInterest": { "kind": "boundingBox", "boundingBox": { "west": -90.5, "south": 38.6, "east": [withheld], "north": 38.7 }, "radius": null, "parcel": null },
+              "areaOfInterest": { "kind": "boundingBox", "boundingBox": { "west": -93.7, "south": 41.5, "east": -93.6, "north": 41.6 }, "radius": null, "parcel": null },
               "process": {
                 "asc": "C:\\SolidGround\\terrain.asc", "prj": null, "sourceJson": null,
                 "sourceName": null, "dataset": null,
@@ -535,7 +535,7 @@ public sealed class TerrainRequestSettingsTests
         string json = $$"""
             {
               "mode": "{{mode}}",
-              "areaOfInterest": { "kind": "boundingBox", "boundingBox": { "west": -90.5, "south": 38.6, "east": [withheld], "north": 38.7 }, "radius": null, "parcel": null },
+              "areaOfInterest": { "kind": "boundingBox", "boundingBox": { "west": -93.7, "south": 41.5, "east": -93.6, "north": 41.6 }, "radius": null, "parcel": null },
               "process": null,
               "localOrigin": { "kind": "{{localOriginKind}}", "x": 0.0, "y": 0.0, "z": 0.0 },
               "outputUnit": "{{outputUnit}}",
@@ -554,7 +554,7 @@ public sealed class TerrainRequestSettingsTests
         AreaOfInterest = new AoiSettings
         {
             Kind = AreaOfInterestKind.BoundingBox,
-            BoundingBox = new BoundingBoxAoiSettings { West = -90.5, South = 38.6, East = [withheld], North = 38.7 },
+            BoundingBox = new BoundingBoxAoiSettings { West = -93.7, South = 41.5, East = -93.6, North = 41.6 },
         },
         LocalOrigin = new LocalOriginRequest(LocalOriginKind.Southwest, 0d, 0d, 0d),
         OutputUnit = LengthUnit.UsSurveyFoot,

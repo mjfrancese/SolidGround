@@ -5,13 +5,13 @@ using SolidGround.Core.Units;
 namespace SolidGround.Tests;
 
 /// <summary>
-/// Parses the committed synthetic ExampleSite [withheld] parcel fixtures (see Fixtures/README.md) through
+/// Parses the committed synthetic example-site parcel fixtures (see Fixtures/README.md) through
 /// <see cref="ParcelGeometryParser"/>, exercising the GeoJSON and WKT paths against real fixture files rather
 /// than inline literals.
 /// </summary>
 public sealed class ParcelGeometryFixtureTests
 {
-    private const double ExampleSiteLatitude = [withheld]d;
+    private const double ExampleSiteLatitude = 41.591194d;
 
     [Fact]
     public void GeoJsonFixtureParsesIntoTheExpectedSyntheticLot()
@@ -22,20 +22,25 @@ public sealed class ParcelGeometryFixtureTests
 
         Assert.Equal(1, region.PolygonCount);
         Assert.Equal(0, region.HoleCount);
-        Assert.Equal([withheld]d, region.Envelope.MinX, 9);
-        Assert.Equal([withheld]d, region.Envelope.MaxX, 9);
-        Assert.Equal([withheld]d, region.Envelope.MinY, 9);
-        Assert.Equal([withheld]d, region.Envelope.MaxY, 9);
+        Assert.Equal(-93.604047631d, region.Envelope.MinX, 9);
+        Assert.Equal(-93.603564371d, region.Envelope.MaxX, 9);
+        Assert.Equal(41.591012685d, region.Envelope.MinY, 9);
+        Assert.Equal(41.591375478d, region.Envelope.MaxY, 9);
 
-        // The synthetic footprint is ~[withheld] m^2 ([withheld] sq ft); converting the parsed envelope's degree
-        // extents back to meters with the same ellipsoid factors AoiNormalizer uses should land close to that.
+        // The synthetic footprint is 1,600 m^2 (~17,222.26 sq ft); converting the parsed envelope's degree
+        // extents back to meters with the same (constant-latitude, ellipsoid-only) factors AoiNormalizer uses
+        // should land close to that, though not as tightly as the fixture's own former, hand-computed-in-degree-
+        // space rectangle did: this fixture's corners are instead the real forward/inverse transverse-Mercator
+        // projection of a true 40 m UTM square (see Fixtures/README.md), so the gap between that genuine
+        // projection and this simpler constant-factor approximation shows up here as a real, expected few
+        // percent of distortion, not a defect in either the fixture or the approximation.
         double widthMeters = (region.Envelope.MaxX - region.Envelope.MinX) * Wgs84Ellipsoid.MetersPerDegreeLongitude(ExampleSiteLatitude);
         double heightMeters = (region.Envelope.MaxY - region.Envelope.MinY) * Wgs84Ellipsoid.MetersPerDegreeLatitude(ExampleSiteLatitude);
         double approximateAreaSquareMeters = widthMeters * heightMeters;
-        double relativeDifference = Math.Abs(approximateAreaSquareMeters - [withheld]d) / [withheld]d;
+        double relativeDifference = Math.Abs(approximateAreaSquareMeters - 1600d) / 1600d;
         Assert.True(
-            relativeDifference < 0.001d,
-            $"Expected approximately [withheld] m^2, computed {approximateAreaSquareMeters} (relative difference {relativeDifference}).");
+            relativeDifference < 0.02d,
+            $"Expected approximately 1600 m^2, computed {approximateAreaSquareMeters} (relative difference {relativeDifference}).");
     }
 
     [Fact]
@@ -47,14 +52,14 @@ public sealed class ParcelGeometryFixtureTests
 
         Assert.Equal(1, region.PolygonCount);
         Assert.Equal(0, region.HoleCount);
-        Assert.Equal([withheld], region.Envelope.MinX);
-        Assert.Equal([withheld], region.Envelope.MaxX);
-        Assert.Equal([withheld], region.Envelope.MinY);
-        Assert.Equal([withheld], region.Envelope.MaxY);
+        Assert.Equal(449655.327630d, region.Envelope.MinX);
+        Assert.Equal(449695.327630d, region.Envelope.MaxX);
+        Assert.Equal(4604544.615466d, region.Envelope.MinY);
+        Assert.Equal(4604584.615466d, region.Envelope.MaxY);
 
-        double expectedArea = ([withheld] - [withheld]) * ([withheld] - [withheld]);
+        double expectedArea = (449695.327630d - 449655.327630d) * (4604584.615466d - 4604544.615466d);
         Assert.Equal(expectedArea, region.Area);
-        Assert.Equal([withheld]d, region.Area, 3);
+        Assert.Equal(1600d, region.Area, 3);
     }
 
     [Fact]

@@ -18,7 +18,7 @@ public sealed class ContractModelTests
     {
         ParcelGeometryAoi parcel = new(
             ParcelGeometryFormat.Wkt,
-            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
+            "POLYGON ((-93.61 41.58, -93.60 41.58, -93.60 41.60, -93.61 41.60, -93.61 41.58))",
             GeographicReference(),
             LinearDistance.Meters(2.5d));
 
@@ -32,7 +32,7 @@ public sealed class ContractModelTests
     {
         ParcelGeometryAoi parcel = new(
             ParcelGeometryFormat.Wkt,
-            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
+            "POLYGON ((-93.61 41.58, -93.60 41.58, -93.60 41.60, -93.61 41.60, -93.61 41.58))",
             GeographicReference());
 
         Assert.Equal(LinearDistance.Zero, parcel.Buffer);
@@ -41,10 +41,10 @@ public sealed class ContractModelTests
     [Fact]
     public void RadiusAoiCarriesItsLinearDistanceAndRejectsANonPositiveRadius()
     {
-        Wgs84RadiusAoi radius = new([withheld], [withheld], LinearDistance.Meters(100d));
+        Wgs84RadiusAoi radius = new(41.591194, -93.603806, LinearDistance.Meters(100d));
 
         Assert.Equal(LinearDistance.Meters(100d), radius.Radius);
-        Assert.Throws<ArgumentOutOfRangeException>(() => new Wgs84RadiusAoi([withheld], [withheld], LinearDistance.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Wgs84RadiusAoi(41.591194, -93.603806, LinearDistance.Zero));
     }
 
     [Fact]

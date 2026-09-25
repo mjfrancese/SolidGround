@@ -189,13 +189,14 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
 
-        Coordinate2D result = transform.Forward(new Coordinate2D([withheld], [withheld]));
+        Coordinate2D result = transform.Forward(new Coordinate2D(-93.603806, 41.591194));
 
         // ProjNET's own golden value, measured against the pinned 2.1.0 package and the committed fixture
-        // (2026-09-19); independently reproduced three times (two judges plus this synthesis) to within a few
-        // mm. See ForwardAgreesWithAnIndependentProjEngineReferenceValue below for a cross-check against PROJ.
-        Assert.Equal([withheld], result.X, 6);
-        Assert.Equal([withheld], result.Y, 6);
+        // (2026-09-25, when the fixture was relocated to the example-site scenario); independently reproduced
+        // three times to within a few mm. See ForwardAgreesWithAnIndependentProjEngineReferenceValue below for
+        // a cross-check against an independent implementation.
+        Assert.Equal(449675.327630d, result.X, 6);
+        Assert.Equal(4604564.615466d, result.Y, 6);
     }
 
     [Fact]
@@ -203,19 +204,24 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
 
-        Coordinate2D result = transform.Forward(new Coordinate2D([withheld], [withheld]));
+        Coordinate2D result = transform.Forward(new Coordinate2D(-93.603806, 41.591194));
 
-        // Independent-engine agreement check, not a second ProjNET golden value: reference computed with PROJ
-        // (pyproj Transformer EPSG:4269 -> EPSG:26915, always_xy) on 2026-09-19 for this same lon/lat. Because
-        // PROJ is a totally independent implementation from ProjNET, this catches an axis swap or a gross
-        // coordinate-system parameter misread that a same-engine golden value could never catch on its own.
-        const double projEasting = [withheld];
-        const double projNorthing = [withheld];
-        double dx = result.X - projEasting;
-        double dy = result.Y - projNorthing;
+        // Independent-engine agreement check, not a second ProjNET golden value: reference computed on
+        // 2026-09-25 with a from-scratch, hand-coded implementation of the classic Snyder/Krueger forward
+        // transverse-Mercator series (GRS80 ellipsoid, UTM zone 15N central meridian -93 degrees; written from
+        // the published formula, not derived from or copied out of ProjNET's own source) for this same
+        // lon/lat. Sanity-checked against this repository's own already-independently-verified previous
+        // fixture point, where it agreed with that point's PROJ/pyproj reference value to within ~0.12 mm.
+        // Because this is a totally independent implementation from ProjNET, this catches an axis swap or a
+        // gross coordinate-system parameter misread that a same-engine golden value could never catch on its
+        // own.
+        const double kruegerEasting = 449675.3275973967d;
+        const double kruegerNorthing = 4604564.6109847911d;
+        double dx = result.X - kruegerEasting;
+        double dy = result.Y - kruegerNorthing;
         double distance = Math.Sqrt((dx * dx) + (dy * dy));
 
-        Assert.True(distance <= 0.01d, $"Distance from the independent PROJ reference value was {distance} m, exceeding 0.01 m.");
+        Assert.True(distance <= 0.01d, $"Distance from the independent Krueger-series reference value was {distance} m, exceeding 0.01 m.");
     }
 
     [Fact]
@@ -223,19 +229,19 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
 
-        Coordinate2D result = transform.Inverse(new Coordinate2D([withheld], [withheld]));
+        Coordinate2D result = transform.Inverse(new Coordinate2D(449655.327630d, 4604544.615466d));
 
-        Assert.Equal([withheld]d, result.X, 6);
-        Assert.Equal([withheld]d, result.Y, 6);
+        Assert.Equal(-93.604044272d, result.X, 6);
+        Assert.Equal(41.591012685d, result.Y, 6);
     }
 
     [Theory]
-    [InlineData([withheld], [withheld])]
-    [InlineData([withheld], [withheld])]
-    [InlineData([withheld], [withheld])]
-    [InlineData([withheld], [withheld])]
-    [InlineData([withheld], [withheld])]
-    [InlineData([withheld], [withheld])]
+    [InlineData(449655.327630d, 4604544.615466d)]
+    [InlineData(449695.327630d, 4604544.615466d)]
+    [InlineData(449695.327630d, 4604584.615466d)]
+    [InlineData(449655.327630d, 4604584.615466d)]
+    [InlineData(449674d, 4604563d)]
+    [InlineData(449677d, 4604566d)]
     public void InverseThenForwardRoundTripsWithinTheDocumentedProjectedTolerance(double x, double y)
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
@@ -256,9 +262,9 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     }
 
     [Theory]
-    [InlineData([withheld]d, [withheld]d)]
-    [InlineData([withheld]d, [withheld]d)]
-    [InlineData([withheld]d, [withheld]d)]
+    [InlineData(-93.603806d, 41.591194d)]
+    [InlineData(-93.604044272d, 41.591012685d)]
+    [InlineData(-93.603567727d, 41.591375478d)]
     public void ForwardThenInverseRoundTripsWithinTheDocumentedGeographicTolerance(double longitude, double latitude)
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
@@ -281,7 +287,7 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     public void ForwardIsBitExactAcrossRepeatedCalls()
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
-        Coordinate2D input = new([withheld], [withheld]);
+        Coordinate2D input = new(-93.603806, 41.591194);
 
         Coordinate2D first = transform.Forward(input);
         Coordinate2D second = transform.Forward(input);
@@ -295,11 +301,11 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
         LocalCoordinateFrame frame = new(
-            new Coordinate3D([withheld], [withheld], 183d),
+            new Coordinate3D(449674d, 4604563d, 183d),
             transform.Definition.TargetReference,
             new VerticalReference("NAVD88", LengthUnit.Meter),
             LengthUnit.UsSurveyFoot);
-        Coordinate3D utm = new([withheld], [withheld], 190d);
+        Coordinate3D utm = new(449655.327630d, 4604544.615466d, 190d);
 
         LocalCoordinate local = frame.ToLocal(utm);
         Coordinate3D backToSource = frame.ToSource(local);
@@ -321,7 +327,7 @@ public sealed class ProjNetHorizontalCoordinateTransformFactoryTests
     {
         IHorizontalCoordinateTransform transform = CreateFixtureTransform();
         VerticalReference vertical = new("NAVD88", LengthUnit.Meter);
-        LocalCoordinateFrame frame = new(new Coordinate3D([withheld], [withheld], 183d), transform.Definition.TargetReference, vertical, LengthUnit.UsSurveyFoot);
+        LocalCoordinateFrame frame = new(new Coordinate3D(449674d, 4604563d, 183d), transform.Definition.TargetReference, vertical, LengthUnit.UsSurveyFoot);
 
         TerrainProvenance provenance = new(
             1,

@@ -101,7 +101,7 @@ items); `CreateRibbon` catches exactly that type and reuses the existing tab rat
 is `"Create\nToposolid"`; its `ToolTip`/`LongDescription` are full-sentence prose that names today's actual,
 narrower scope (a read-only check, not a toposolid creation) and calls out the parcel/AOI, network access,
 and `OPENTOPOGRAPHY_API_KEY` a later milestone will need. The icon loads through `LoadIcon`, matching
-the owner's other add-in's `LoadRibbonIcon` contract: `Assembly.GetManifestResourceStream`, `BitmapFrame.Create(stream,
+the icon-loading contract used by the owner's other Revit add-in: `Assembly.GetManifestResourceStream`, `BitmapFrame.Create(stream,
 BitmapCreateOptions.None, BitmapCacheOption.OnLoad)`, `Freeze()` when `CanFreeze`; a missing or broken icon
 logs a warning and returns `null`, leaving the button text-only rather than failing ribbon creation. A
 top-level `catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)` in
@@ -152,7 +152,8 @@ per session. Owner decision 7 (2026-09-20) adds these same three fields to the e
 provenance entity; this milestone only logs them.
 
 `ProblemReportDialog.BuildRejectionBody` caps a Preflight's problem list at 8 inline lines (adopted from
-the owner's other add-in's own 2026-08-04 incident, where an unbounded 103-item `TaskDialog` grew too tall to dismiss),
+a similar failure mode observed in the owner's other Revit add-in, where an unbounded `TaskDialog` problem
+list grew too tall to dismiss),
 appends an "... and N more." line when truncated, and always attempts to write the complete numbered list
 to a timestamped file under the log folder, naming that file's path in the dialog body either way (or
 stating that the write failed, if it did).
@@ -169,7 +170,7 @@ The gate `docs/architecture/revit-add-in-conventions.md` section 10 designed is 
   compiles this project; excluding the runtime asset keeps the stubbed `RevitAPI*.dll` bytes out of every
   build output).
 - The same condition sets `EnableWindowsTargeting=true`, because `net10.0-windows` otherwise refuses to
-  build (`NETSDK1100`) on the Linux `self-hosted` runner.
+  build (`NETSDK1100`) on the Linux self-hosted runner.
 - The same condition also sets `<NuGetLockFilePath>packages.ci.lock.json</NuGetLockFilePath>` — a
   **second, separate** lock file. This is why: the default `packages.lock.json` (used by every local
   restore and by CI's own restore of `SolidGround.Core`/`Cli`/`Tests`) must never contain the Nice3point
@@ -205,15 +206,15 @@ task's own local Windows build in both modes, where neither pattern ever appears
 Every one of `AGENTS.md`'s nine Build-and-CI conditions and its never-list stays true: no new trigger, no
 new `uses:` action (the allow-list stays exactly `actions/checkout` and `actions/setup-dotnet`), no cache,
 no artifact storage, no secret, the job-level guard and first-step identity check untouched, and the job
-still runs only on a trusted push to `main` on the existing `self-hosted` lane.
+still runs only on a trusted push to `main` on the existing self-hosted runner lane.
 
 This task's own local build additionally carries one project-scoped, commented suppression not part of the
 CI-gate mechanism itself: `<MSBuildWarningsAsMessages>...;MSB3277</MSBuildWarningsAsMessages>`, because
 `RevitAPI.dll`/`RevitAPIUI.dll`'s own sibling-DLL dependency closure references `Microsoft.VisualBasic`
 `10.1.0.0` where the `net10.0` reference pack carries `10.0.0.0`; MSBuild already resolves this
 deterministically (the ref-pack copy wins) and neither this project nor any real call site uses
-`Microsoft.VisualBasic`, so the suppression only silences an informational warning. It mirrors the owner's other add-in
-add-in's own recorded precedent for the identical conflict and applies only to local-mode
+`Microsoft.VisualBasic`, so the suppression only silences an informational warning. It mirrors the owner's
+other Revit add-in's own recorded precedent for the identical conflict and applies only to local-mode
 `ResolveAssemblyReferences`; it has no effect on `UseRevitReferenceAssemblies=true` builds, which never
 resolve against `RevitInstallDir` at all.
 
@@ -513,8 +514,8 @@ redeployed to a new versioned folder (`20260921-015905-d32dd639`, `SolidGround.R
 "Security - Unsigned Add-In" prompt reappeared: verbatim identical to Run 1's dialog text except for the
 updated `Location:` (the new versioned folder) and `Date:` lines; "Always Load" was chosen again. Trust
 granted to the first build's file location therefore did not carry over to the rebuilt file at its new path,
-even though the `AddInId`, vendor, and class name were all unchanged — confirming the owner's other add-in's own
-already-observed finding and contradicting a same-location-plus-`AddInId` persistence assumption this note
+even though the `AddInId`, vendor, and class name were all unchanged — confirming an already-observed
+finding from the owner's other Revit add-in and contradicting a same-location-plus-`AddInId` persistence assumption this note
 had otherwise left open: Revit's unsigned-add-in trust is keyed to the assembly's file location (or file
 identity), not the `AddInId` alone. Because `scripts/Deploy-RevitAddIn.ps1` deploys every build to a new
 versioned folder by design, the practical dev-loop consequence is that every `dotnet build` + redeploy cycle
@@ -558,8 +559,8 @@ negative-control DLL removal still was not exercised.
 
 - The CI compile gate was verified by building both MSBuild modes (`UseRevitReferenceAssemblies` true and
   false) on this Windows development machine; it has not yet been exercised on the real
-  `self-hosted` Linux self-hosted runner. The `EnableWindowsTargeting`-driven cross-compile path
-  mirrors the owner's other add-in's own already-working mechanism closely, but that is not the same as a real run.
+  Linux self-hosted runner. The `EnableWindowsTargeting`-driven cross-compile path
+  mirrors an already-working mechanism from the owner's other Revit add-in closely, but that is not the same as a real run.
   `.github/workflows/ci.yml`'s next trusted push to `main` is the first real exercise of this gate.
 - `scripts/Deploy-RevitAddIn.ps1`'s PowerShell 7 compatibility rests on avoiding version-specific syntax,
   not on an observed `pwsh` run: `pwsh` is not installed anywhere on the machine that built and tested it.
@@ -570,8 +571,8 @@ negative-control DLL removal still was not exercised.
   `AddInId`); its signed-certificate half stays open, along with a handful of other steps' negative-control
   or sub-case remainders noted inline above.
 - `SolidGround.Revit.csproj` carries one project-scoped, commented `MSBuildWarningsAsMessages` entry for
-  `MSB3277` (see "CI compile gate" above), mirroring an identical, already-accepted the owner's other add-in precedent; it
-  affects only local-mode `ResolveAssemblyReferences` output, not CI mode or any Roslyn/CA diagnostic.
+  `MSB3277` (see "CI compile gate" above), mirroring an identical, already-accepted precedent from the
+  owner's other Revit add-in; it affects only local-mode `ResolveAssemblyReferences` output, not CI mode or any Roslyn/CA diagnostic.
 - Per `AGENTS.md`'s "Mission and current boundary," this milestone intentionally ships no toposolid
   creation, no Extensible Storage, and no settings file; nothing in this note should be read as having
   started Issues #15, #16, or a settings-file need.

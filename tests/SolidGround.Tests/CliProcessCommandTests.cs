@@ -64,10 +64,10 @@ public sealed class CliProcessCommandTests
             "responseByteCount": 12345,
             "metadataRequest": null,
             "fetchEnvelope": {
-              "west": [withheld],
-              "south": [withheld],
-              "east": [withheld],
-              "north": [withheld],
+              "west": -93.6045,
+              "south": 41.5906,
+              "east": -93.6031,
+              "north": 41.5917,
               "minimumSideMeters": 110.0,
               "expanded": false,
               "widthBeforeMeters": 121.8,
@@ -211,12 +211,12 @@ public sealed class CliProcessCommandTests
         DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
         try
         {
-            // Covers only the grid's westernmost column (cell centers near x=[withheld]); the eastern boundary
-            // [withheld] is the WGS84 longitude of the vertical line x=[withheld] (the column 0/1 cell edge).
+            // Covers only the grid's westernmost column (cell centers near x=449674.5); the eastern boundary
+            // -93.603810 is the WGS84 longitude of the vertical line x=449675 (the column 0/1 cell edge).
             (int exitCode, _, _) = await RunAsync(
                 [
                     "process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"),
-                    "--bbox", "[withheld],[withheld],[withheld],[withheld]", "--output", tempDirectory.FullName,
+                    "--bbox", "-93.603854,41.590998,-93.603810,41.591218", "--output", tempDirectory.FullName,
                 ],
                 TestContext.Current.CancellationToken);
 
@@ -241,7 +241,7 @@ public sealed class CliProcessCommandTests
             (int exitCode, _, _) = await RunAsync(
                 [
                     "process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"),
-                    "--center", "[withheld],[withheld]", "--radius", "5", "--output", tempDirectory.FullName,
+                    "--center", "41.591194,-93.603806", "--radius", "5", "--output", tempDirectory.FullName,
                 ],
                 TestContext.Current.CancellationToken);
 
@@ -327,7 +327,7 @@ public sealed class CliProcessCommandTests
             (int exitCode, _, string stderr) = await RunAsync(
                 [
                     "process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"),
-                    "--bbox", "[withheld],[withheld],[withheld],[withheld]", "--output", tempDirectory.FullName,
+                    "--bbox", "-93.6045,41.6405,-93.6031,41.6419", "--output", tempDirectory.FullName,
                 ],
                 TestContext.Current.CancellationToken);
 
@@ -507,15 +507,15 @@ public sealed class CliProcessCommandTests
             (int exitCode, _, _) = await RunAsync(
                 [
                     "process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"),
-                    "--origin", "[withheld],[withheld],183.5", "--output", tempDirectory.FullName,
+                    "--origin", "449674.25,4604563.75,183.5", "--output", tempDirectory.FullName,
                 ],
                 TestContext.Current.CancellationToken);
             Assert.Equal(CliExitCodes.Success, exitCode);
 
             using JsonDocument document = ReadDocument(tempDirectory.FullName, "terrain");
             JsonElement origin = document.RootElement.GetProperty("provenance").GetProperty("localFrame").GetProperty("origin");
-            Assert.Equal([withheld], origin.GetProperty("x").GetDouble());
-            Assert.Equal([withheld], origin.GetProperty("y").GetDouble());
+            Assert.Equal(449674.25d, origin.GetProperty("x").GetDouble());
+            Assert.Equal(4604563.75d, origin.GetProperty("y").GetDouble());
             Assert.Equal(183.5d, origin.GetProperty("elevation").GetDouble());
         }
         finally

@@ -32,7 +32,7 @@ public sealed class ExtensibleStorageProvenanceValuesTests
     private const string BuildSha256 = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
     [Fact]
-    public async Task FromProducesExpectedValuesForAExampleSiteLikeProvenance()
+    public async Task FromProducesExpectedValuesForAnExampleSiteLikeProvenance()
     {
         Fixture fixture = LoadFixture();
         TerrainProcessingOutcome outcome = await RunPipelineAsync(fixture, TestContext.Current.CancellationToken);
@@ -41,7 +41,7 @@ public sealed class ExtensibleStorageProvenanceValuesTests
             outcome.Payload.Provenance, BuildInformationalVersion, BuildModuleVersionId, BuildSha256);
 
         Assert.Equal(ExtensibleStorageProvenanceSchema.CurrentVersion, values.SchemaVersion);
-        Assert.Equal("ExampleSite synthetic fixture", values.SourceDatasetName);
+        Assert.Equal("Example-site synthetic fixture", values.SourceDatasetName);
         Assert.Equal("example-site-synthetic", values.SourceDatasetIdentifier);
         Assert.False(values.HasCollectionPeriod);
         Assert.Equal(string.Empty, values.CollectionPeriodStartIso);
@@ -64,8 +64,8 @@ public sealed class ExtensibleStorageProvenanceValuesTests
         Assert.Equal(184.2d, values.ElevationMaximumMeters, 9);
         Assert.Equal("meter", values.OutputUnitToken);
         Assert.Equal(1d, values.MetersPerOutputUnit);
-        Assert.Equal([withheld], values.LocalOriginXMeters, 9);
-        Assert.Equal([withheld], values.LocalOriginYMeters, 9);
+        Assert.Equal(449674d, values.LocalOriginXMeters, 9);
+        Assert.Equal(4604563d, values.LocalOriginYMeters, 9);
         Assert.Equal(183d, values.LocalOriginElevationMeters, 9);
 
         string prjWkt = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "example-site-synthetic.prj"));
@@ -420,7 +420,7 @@ public sealed class ExtensibleStorageProvenanceValuesTests
         Coordinate3D reconstructed = ExtensibleStorageProvenanceValues.ReconstructSourceCoordinate(values, sampleLocal);
         Coordinate3D expected = ExtensibleStorageProvenanceValues.ToSourceMeters(outcome.Payload.Provenance.LocalFrame, sampleLocal);
 
-        // The ExampleSite fixture's horizontal, vertical, and output units are all meters (MetersPerUnit == 1
+        // The example-site fixture's horizontal, vertical, and output units are all meters (MetersPerUnit == 1
         // exactly for every factor involved), so both computation paths reduce to the same exact arithmetic
         // with zero rounding difference.
         Assert.Equal(expected, reconstructed);
@@ -535,11 +535,11 @@ public sealed class ExtensibleStorageProvenanceValuesTests
             new CoordinateOperationDefinition("WKT1", "inverse-definition"),
             "ProjNET",
             "2.1.0");
-        LocalCoordinateFrame frame = new(origin ?? new Coordinate3D([withheld], [withheld], 183d), projected, vertical, outputUnit);
+        LocalCoordinateFrame frame = new(origin ?? new Coordinate3D(449674d, 4604563d, 183d), projected, vertical, outputUnit);
 
         return new TerrainProvenance(
             1,
-            new ElevationSourceMetadata("ExampleSite synthetic fixture", "example-site-synthetic", collectionPeriod, qualityLevel),
+            new ElevationSourceMetadata("Example-site synthetic fixture", "example-site-synthetic", collectionPeriod, qualityLevel),
             transformation,
             vertical,
             ReferenceOrigin.Operator,
@@ -555,12 +555,12 @@ public sealed class ExtensibleStorageProvenanceValuesTests
 
     private static Task<TerrainProcessingOutcome> RunPipelineAsync(Fixture fixture, CancellationToken cancellationToken)
     {
-        LocalOriginRequest origin = new(LocalOriginKind.Explicit, [withheld], [withheld], 183d);
+        LocalOriginRequest origin = new(LocalOriginKind.Explicit, 449674d, 4604563d, 183d);
 
         return TerrainProcessingPipeline.RunAsync(
             fixture.Grid, fixture.Transform, fixture.VerticalReference,
             new ReferenceOrigins(ReferenceOrigin.Operator, ReferenceOrigin.Operator),
-            new ElevationSourceMetadata("ExampleSite synthetic fixture", "example-site-synthetic"),
+            new ElevationSourceMetadata("Example-site synthetic fixture", "example-site-synthetic"),
             aoi: null, origin, LengthUnit.Meter, SimplificationMethod.CurvatureAware, 500, 0.2d, cancellationToken);
     }
 

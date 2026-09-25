@@ -85,7 +85,7 @@ internal static class ProvenanceEntityWriter
 
         // Four-part read discipline (design record §3 step 4), applied to the host element immediately after
         // SetEntity: Schema.Lookup(guid) == null only proves the schema is unregistered in *this* session
-        // (the owner's other add-in's documented lesson), so (a) checks the element's own recognized schema GUIDs first.
+        // (a lesson documented in a related internal project), so (a) checks the element's own recognized schema GUIDs first.
         if (!toposolid.GetEntitySchemaGuids().Contains(schema.GUID))
         {
             throw new ProvenanceAttachmentException(
@@ -170,8 +170,8 @@ internal static class ProvenanceEntityWriter
             // and logging" rule -- "a long list is capped in the dialog and written in full to the log
             // folder" -- applies here exactly as it already does to ProblemReportDialog.BuildRejectionBody,
             // which exists specifically so an unbounded list can never grow a TaskDialog past the screen and
-            // take its own close button with it (that dialog's own remarks cite the owner's other add-in's 2026-08-04
-            // incident). Log the complete, uncapped list here first: RunTransaction's general catch also
+            // take its own close button with it (that dialog's own remarks cite a related internal
+            // project's own incident). Log the complete, uncapped list here first: RunTransaction's general catch also
             // logs this exception's Message via AddInLog.Error(headline, ex), but that copy is capped below.
             AddInLog.Error(
                 $"Extensible Storage round-trip mismatches for element {elementIdText}: {string.Join(" | ", mismatches)} " +

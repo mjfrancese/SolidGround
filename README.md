@@ -18,13 +18,13 @@ The intended workflow is:
 8. Export development artifacts from the CLI (implemented today by the `process`/`fetch`/`run` commands); in Phase 2, create the bounded toposolid through the Revit API.
 9. Attach source, datum, quality, statistics, simplification, units, and local-origin provenance to the created element.
 
-The primary fixture is [withheld] at [withheld] the reference parcel, the area, the area, centered at `[withheld], [withheld]`. The approximately [withheld]-square-foot lot has extensive mature tree canopy; a live capture over this lot showed the 1-meter surface responding to that canopy with smoothness rather than visible roughness — see "Terrain quality observed under canopy" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
+The primary fixture is a small example area on public, non-residential land, centered at `41.591194, -93.603806`. The approximately 17,222-square-foot area is used for every offline test and CLI usage example in this repository; no street address, lot, plat, ZIP, or place name is ever recorded for it, because SolidGround's product goal is to create an accurate, simplified toposolid for any property, quickly and easily — not just one lot. The original test lot's extensive mature tree canopy, and the terrain-quality behavior observed under it, are described in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 
 ## Accuracy
 
 SolidGround is for overall lot form and site context. QL2 bare-earth lidar is roughly 10 cm vertical RMSE under favorable conditions, with poorer and less uniform results under canopy. The resulting surface is not suitable for foundation-perimeter grading or construction layout. Those tasks need field measurement, such as a rotary laser, or a professional survey.
 
-SolidGround preserves source resolution and quality metadata, but it cannot recover terrain that was never observed or remove interpolation artifacts without also changing the measured surface. At the reference parcel fixture, the observed 1-meter surface is smooth and fully populated, with no NODATA holes and millimeter-scale neighbor residuals almost everywhere; that smoothness is a same-surface proxy for internal consistency, not a measure of accuracy against the true ground beneath the canopy — see "Terrain quality observed under canopy" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
+SolidGround preserves source resolution and quality metadata, but it cannot recover terrain that was never observed or remove interpolation artifacts without also changing the measured surface. At the original test fixture, the observed 1-meter surface is smooth and fully populated, with no NODATA holes and millimeter-scale neighbor residuals almost everywhere; that smoothness is a same-surface proxy for internal consistency, not a measure of accuracy against the true ground beneath the canopy — see "Terrain quality observed under canopy" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 
 ## Verified technical baseline
 
@@ -34,7 +34,6 @@ The following points were checked during setup on 2026-09-15, unless otherwise d
 - OpenTopography's current OpenAPI definition exposes `GET /API/usgsdem`, accepts `datasetName=USGS1m`, and still lists `AAIGrid`. `GTiff` remains the default, so SolidGround requests `AAIGrid` explicitly.
 - The parser follows Esri's ASCII raster contract: positive dimensions and cell size, matched lower-left corner or center origins, optional `NODATA_VALUE` defaulting to `-9999`, and north-to-south row-major samples. It converts NODATA to missing cells before returning an elevation grid.
 - The same OpenAPI definition states that USGS 1 m access currently requires academic authorization or an enterprise API key. SolidGround reports access errors and does not substitute lower-resolution data silently. Verified live on 2026-09-19: a no-key run observed exit code 3 with the exact authorization message.
-- The OpenTopography catalog still contains `[withheld]`, collected 2017-02-17 through 2017-02-27, with NAVD88 Geoid12B vertical metadata. Catalog metadata is provenance context; the raster response's own coordinate reference information remains authoritative for processing.
 - Verified live on 2026-09-19: the `usgsdem` `AAIGrid` response is packaged as a bare `.asc` body with no `.prj`/`.aux.xml` sidecar and no reference metadata of any kind; a same-box `GTiff` response for the identical request carries `EPSG:26915` (NAD83 / UTM zone 15N) as its projected coordinate system but no vertical GeoKeys. See "Response packaging and metadata observed" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md). A live re-run on 2026-09-19 confirmed the CLI now completes end to end from this packaging, using that same `GTiff` response's GeoKeys for the horizontal reference and dataset documentation for the vertical reference; see "Live OpenTopography scenario, verified 2026-09-19" in the [Phase 1 validation note](docs/architecture/phase-1-validation.md).
 - Revit 2027's installed `SiteDB.dll` contains `NativeToposolidMaxPointThreshold` and `LinkToposolidMaxPointThreshold`. Autodesk's public 2027 documentation found during setup did not restate their numeric limits, so the project uses a conservative application default near 15,000 and will re-check limits before the Revit phase.
 - Revit 2027 added explicit isolated-context manifest settings and dependency declarations. The planned add-in will use a private context and will not share managed geospatial assemblies by default.
@@ -134,10 +133,10 @@ deploy-script design, safety switches, and parameters.
 Run the CLI with a real command; see [Usage](#usage) below for one example per command:
 
 ```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/[withheld].solidground.json
+dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/example-site.solidground.json
 ```
 
-Feature tests are offline by default. Parser tests use a small inspected synthetic fixture near the reference parcel scenario; it is not represented as measured terrain or an OpenTopography response. An opt-in end-to-end fetch test against the live OpenTopography endpoint runs only when both the `SOLIDGROUND_OPENTOPOGRAPHY_LIVE` environment variable is set to `1` and `OPENTOPOGRAPHY_API_KEY` is set to a non-empty value; otherwise it skips rather than failing the offline suite. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
+Feature tests are offline by default. Parser tests use a small inspected synthetic fixture based on the example site scenario; it is not represented as measured terrain or an OpenTopography response. An opt-in end-to-end fetch test against the live OpenTopography endpoint runs only when both the `SOLIDGROUND_OPENTOPOGRAPHY_LIVE` environment variable is set to `1` and `OPENTOPOGRAPHY_API_KEY` is set to a non-empty value; otherwise it skips rather than failing the offline suite. Copy [`.env.example`](.env.example) only for local tooling that deliberately loads dotenv files; `.env` is ignored and SolidGround will not commit or log the key.
 
 The current test dependencies are pinned: `Microsoft.NET.Test.Sdk` supplies the .NET test host, `xunit.v3` supplies the test framework, and `xunit.runner.visualstudio` enables discovery from `dotnet test` and Visual Studio. No coverage package is included because the initial CI does not publish coverage.
 
@@ -150,7 +149,7 @@ own `--help` lists its complete option set, and `--version` prints the CLI's ver
 given, the clip's NODATA and region-excluded cell counts. `run --save-raster` keeps the raster set
 (`.asc`, `.prj`, `.source.json`) alongside the export bundle instead of discarding it after processing.
 A bare AAIGrid response — the observed USGS 1 m behaviour — triggers a second `GTiff` request whose GeoKeys
-supply the horizontal reference (`EPSG:26915` at the reference parcel fixture); the vertical reference is
+supply the horizontal reference (`EPSG:26915` at the example site); the vertical reference is
 declared from the dataset's own published documentation and labelled as such, never read off either response.
 Each such acquisition costs two API calls against the configured key's daily quota instead of one, and
 `fetch`, `run`, and `process` each print a reference line stating both origins — see the
@@ -164,25 +163,25 @@ any raster is returned, and `process` against a local `.asc` file with its own `
 Process a local AAIGrid file offline:
 
 ```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- process --asc terrain.asc --parcel lot.geojson --buffer 3 --output out --name [withheld]
+dotnet run --project src/SolidGround.Cli --configuration Release -- process --asc terrain.asc --parcel lot.geojson --buffer 3 --output out --name example-site
 ```
 
 Fetch a raster set from OpenTopography:
 
 ```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- fetch --bbox [withheld],[withheld],[withheld],[withheld] --output out --name [withheld]
+dotnet run --project src/SolidGround.Cli --configuration Release -- fetch --bbox -93.6045,41.5906,-93.6031,41.5917 --output out --name example-site
 ```
 
 Fetch and process in one step:
 
 ```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- run --center [withheld],[withheld] --radius 60 --output out --name [withheld]
+dotnet run --project src/SolidGround.Cli --configuration Release -- run --center 41.591194,-93.603806 --radius 60 --output out --name example-site
 ```
 
 Verify a written export bundle:
 
 ```powershell
-dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/[withheld].solidground.json
+dotnet run --project src/SolidGround.Cli --configuration Release -- verify --document out/example-site.solidground.json
 ```
 
 `fetch` and `run` acquire data online and require an OpenTopography API key. Set `OPENTOPOGRAPHY_API_KEY`
@@ -197,11 +196,11 @@ codes, secrets resolution order, and known limitations.
 
 ## Continuous integration and the Revit project
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, compile-checks `SolidGround.Revit` under the CI-only reference-assembly gate described below, and runs the offline Core tests on the repository-scoped `self-hosted` ephemeral runner in the infrastructure project. Actions are pinned to immutable commit SHAs, and the workflow does not use GitHub-hosted cache storage.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is plain GitHub Actions. It restores locked packages, builds Core and CLI, compile-checks `SolidGround.Revit` under the CI-only reference-assembly gate described below, and runs the offline Core tests on a repository-scoped, ephemeral self-hosted runner. Actions are pinned to immutable commit SHAs, and the workflow does not use GitHub-hosted cache storage.
 
-SolidGround is public, so the self-hosted workflow accepts only trusted pushes to `main`. It has no pull-request trigger, checks the repository, owner, event, ref, and runner identity before checkout, and has no GitHub-hosted or a second self-hosted runner fallback. Pull requests therefore do not run this workflow. If self-hosted is unavailable, the job remains visibly queued instead of moving to another runner.
+SolidGround is public, so the self-hosted workflow accepts only trusted pushes to `main`. It has no pull-request trigger, checks the repository, owner, event, ref, and runner identity before checkout, and has no GitHub-hosted or secondary self-hosted fallback. Pull requests therefore do not run this workflow. If the self-hosted runner is unavailable, the job remains visibly queued instead of moving to another runner.
 
-The trust-boundary conditions this lane must keep true, the authorizing the infrastructure project issue number, and the infrastructure project never-list it must honor are recorded in [`AGENTS.md`](AGENTS.md)'s "Build and CI" section, mirroring a prior infrastructure decision. a prior infrastructure decision authorized and audited the `self-hosted` lane under that ADR, and a prior infrastructure decision recorded the owner's decision to harden this repository's Actions settings, which now require full-commit-SHA pinning and limit the allow-list to exactly `actions/checkout` and `actions/setup-dotnet`.
+The trust-boundary conditions this lane must keep true, and the never-list it must honor, are recorded in [`AGENTS.md`](AGENTS.md)'s "Build and CI" section. That section also records the owner's decision to harden this repository's Actions settings, which now require full-commit-SHA pinning and limit the allow-list to exactly `actions/checkout` and `actions/setup-dotnet`.
 
 As of Issue #14 (2026-09-21), the CI-only compile gate is active: the workflow passes `-p:UseRevitReferenceAssemblies=true` to both `dotnet restore SolidGround.slnx --locked-mode` and `dotnet build SolidGround.slnx --configuration Release --no-restore`, which swaps `SolidGround.Revit`'s local `HintPath` references for the exact-pinned, CI-only `Nice3point.Revit.Api.RevitAPI`/`RevitAPIUI` `2027.0.10` packages — SHA-256-byte-identical to the installed Revit 2027 build — restored against a second, separate lock file (`packages.ci.lock.json`) so the default `packages.lock.json` never gains a Nice3point entry. `PrivateAssets="all"`/`ExcludeAssets="runtime"` on those packages, plus a dedicated CI step that fails the job if any `RevitAPI*`/`Nice3point*` assembly appears under `src/SolidGround.Revit/bin`, keep the gate CI-only: no Autodesk binary is ever committed, and neither a local build nor the shipped add-in ever depends on it. Local and deploy builds keep referencing the installed Revit 2027 SDK directly via `RevitInstallDir` (default `C:\Program Files\Autodesk\Revit 2027`). See [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md) for the full mechanism and [`docs/architecture/revit-add-in-conventions.md`](docs/architecture/revit-add-in-conventions.md) section 10 for the original design and licensing position.
 

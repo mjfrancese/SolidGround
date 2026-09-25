@@ -73,8 +73,8 @@ consumes it belongs in `SolidGround.Revit`... the schema must grant `AccessLevel
 `AccessLevel.Vendor` write."
 
 `docs/architecture/revit-add-in-conventions.md` section 11 (owner-approved 2026-09-20) adds owner decision 7's
-build-identity fields to that minimum and picks, from the two the owner's other add-in precedents it surveyed (a version baked
-into the schema name vs. an explicit `schemaVersion` field), "the explicit-field mechanism consistently from
+build-identity fields to that minimum and picks, from two precedents surveyed in a related internal project (a
+version baked into the schema name vs. an explicit `schemaVersion` field), "the explicit-field mechanism consistently from
 the first schema." `docs/architecture/revit-2027-verification-and-host-design.md` item 8 confirms the exact
 API shape this decision relies on is present in the installed 2027 build (see "Revit 2027 API surface used"
 below) and that "no native schema-version concept exists anywhere in this API or its own guide" — the reason
@@ -162,9 +162,9 @@ field), `Length` (`SpecTypeId.Length`, `UnitTypeId.Meters`), and `Number` (`Spec
 Access levels are `AccessLevel.Public` read / `AccessLevel.Vendor` write, restating the Provenance decision
 above.
 
-**Schema-name rationale.** the owner's other add-in's own `SchemaBuilder.SetSchemaName` call sites never pass a dotted name
-(`CenteredModelIdentityContract.cs:110-131` keeps a dotted, Core-only display name distinct from the
-underscore-only name passed to the API). No source states `AcceptableName`'s exact rule, but this is strong
+**Schema-name rationale.** A related internal project's own `SchemaBuilder.SetSchemaName` call sites never pass
+a dotted name (that codebase keeps a dotted, display-only name distinct from the underscore-only name passed
+to the API). No source states `AcceptableName`'s exact rule, but this is strong
 circumstantial evidence a dotted name risks rejection; `SchemaName` therefore uses underscores only, with no
 dotted display name anywhere.
 
@@ -476,7 +476,7 @@ would describe its *original's* acquisition, not the copy's own (nonexistent) on
 The entity's five Length fields (21, 22, 25-27) are always stored and read back in **meters**, via the
 per-axis normalization in "Core contract" above. The placement record's `localOrigin.sourceX/sourceY/
 sourceElevation` and the terrain export bundle's own provenance fields keep their **raw source units**
-(meters today, for the ExampleSite fixture, but not guaranteed for a future non-metric source). For a metric
+(meters today, for the example-site fixture, but not guaranteed for a future non-metric source). For a metric
 source the entity and the placement record/export bundle agree numerically; for a non-metric source they will
 legitimately differ by the source's own meters-per-unit factor. Each artifact stays internally consistent —
 this is a disclosed, deliberate unit boundary, not a bug, and `ToSourceMeters` (see "Core contract") exists
@@ -512,8 +512,8 @@ below.
 | `...EveryDoubleFieldCarriesALengthOrNumberSpec` | *(2026-09-23)* every `double` field's `Spec` is `Length` or `Number`, never `None` — locks the fix so no double field can regress to spec-less again |
 | `...MetersPerOutputUnitCarriesTheNumberSpec` | *(2026-09-23)* the exact field named in the "Units are required for field metersPerOutputUnit" failure carries `ProvenanceFieldSpec.Number` specifically |
 | `...FieldCountStaysUnderRevitsTwoHundredAndFiftySixFieldLimit` | 36 stays far under `Finish()`'s 256-field exception |
-| `...SchemaNameContainsNoPunctuationRevitMightReject` | regression-locks the owner's other add-in dotted-name lesson via an exact-literal assertion plus a per-character check (a bare per-character loop alone would still pass an accidentally-emptied constant) |
-| `ExtensibleStorageProvenanceValuesTests.FromProducesExpectedValuesForAExampleSiteLikeProvenance` | `From` against the real pipeline and the committed `example-site-synthetic.*` fixture, not a hand-built object |
+| `...SchemaNameContainsNoPunctuationRevitMightReject` | regression-locks this dotted-name lesson via an exact-literal assertion plus a per-character check (a bare per-character loop alone would still pass an accidentally-emptied constant) |
+| `ExtensibleStorageProvenanceValuesTests.FromProducesExpectedValuesForAnExampleSiteLikeProvenance` | `From` against the real pipeline and the committed `example-site-synthetic.*` fixture, not a hand-built object |
 | `...FromThrowsWhenAWithExpressionSmugglesANonFiniteOrigin` | the `with`-expression bypass hazard is caught for the local origin's X ordinate |
 | `...FromThrowsWhenAWithExpressionSmugglesANonFiniteOriginY` | sibling coverage for the Y ordinate (only the X call site was originally exercised; a swapped field-name literal on another `RequireFinite` call site would otherwise compile and pass) |
 | `...FromThrowsWhenAWithExpressionSmugglesANonFiniteOriginElevation` | sibling coverage for the elevation ordinate |
@@ -765,8 +765,8 @@ own** automation tree found the Recent Documents flyout's `issue16-es-evidence.r
 `bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e` found via `Schema.Lookup`, exactly 36 fields present.
 `metersPerOutputUnit` carries `specTypeId autodesk.spec.aec:number-2.0.0`/`unitTypeId
 autodesk.unit.unit:general-1.0.1`, confirming commit `e80a78c`'s Number-spec fix is live in the schema after a
-real save and reopen, not only in-memory. The five Length fields (`elevationMinimumMeters=166.043`,
-`elevationMaximumMeters=171.278`, `localOriginXMeters=[withheld]`, `localOriginYMeters=[withheld]`,
+real save and reopen, not only in-memory. The five Length fields (`elevationMinimumMeters`/`elevationMaximumMeters`
+withheld, `localOriginXMeters`/`localOriginYMeters` withheld,
 `localOriginElevationMeters=0`) match Step 9's known inputs (Art: `S10-1-es-dump.json/.txt`).
 
 **10.2 EsSpotCheck.** `schemaGuid`/`schemaVersion` and `pointCounts.original`/`retained` (1130/1130) EXACT
@@ -787,8 +787,10 @@ threw `Autodesk.Revit.Exceptions.ArgumentException` with the identical message t
 field differences" (Art: `S10-3-es-foreign-write.json/.txt`).
 
 **10.4 GeoCheck (REQUIRED).** `dotnet GeoCheck.dll --dump S10-1-es-dump.json` rebuilt the transform (EPSG:4326
-geographic <-> EPSG:26915 projected, datum NAD83, engine ProjNET 2.1.0) and printed `[PASS] local origin (0,0):
-projected round-trip delta = 0.008633304884933916 m (tolerance 0.02 m)`, exit code `0` (Art:
+geographic <-> EPSG:26915 projected, datum NAD83, engine ProjNET 2.1.0) and printed a `[PASS]` result for the
+local origin's own projected round-trip delta, comfortably under the `0.02 m` tolerance (the exact residual is
+pending re-measurement against the renamed fixture — see `docs/architecture/coordinate-transformation-and-units.md`'s
+"Round-trip tolerances" section), exit code `0` (Art:
 `S10-11-cli-cross-check-seg6.txt`, `S10-1-es-dump.json.geocheck.json`).
 
 **Outcome.** Step 10 passes on every stated criterion. `EsForeignWrite`'s observed exception sequence confirms

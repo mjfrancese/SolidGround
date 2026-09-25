@@ -17,7 +17,7 @@ public sealed class GeoTiffMetadataReaderTests
             .WithShort(256, 124)
             .WithShort(257, 117)
             .WithDoubles(33550, 1d, 1d, 0d)
-            .WithDoubles(33922, 0d, 0d, 0d, [withheld], [withheld], 0d)
+            .WithDoubles(33922, 0d, 0d, 0d, 449614d, 4604623.000340247d, 0d)
             .WithAscii(42113, "-9999")
             .WithAscii(34737, geoAscii)
             .WithGeoKeyDirectory(
@@ -39,7 +39,7 @@ public sealed class GeoTiffMetadataReaderTests
         Assert.Equal(citation, metadata.Citation);
         Assert.Equal(geographicCitation, metadata.GeographicCitation);
         Assert.Equal((1d, 1d, 0d), metadata.ModelPixelScale);
-        Assert.Equal((0d, 0d, 0d, [withheld], [withheld], 0d), metadata.ModelTiepoint);
+        Assert.Equal((0d, 0d, 0d, 449614d, 4604623.000340247d, 0d), metadata.ModelTiepoint);
         Assert.Equal("-9999", metadata.NoDataText);
     }
 
@@ -53,7 +53,7 @@ public sealed class GeoTiffMetadataReaderTests
             .WithLong(256, 124)
             .WithLong(257, 117)
             .WithDoubles(33550, 1d, 1d, 0d)
-            .WithDoubles(33922, 0d, 0d, 0d, [withheld], [withheld], 0d)
+            .WithDoubles(33922, 0d, 0d, 0d, 449614d, 4604623.000340247d, 0d)
             .WithAscii(42113, "-999999")
             .WithAscii(34737, geoAscii)
             .WithGeoKeyDirectory(
@@ -288,15 +288,16 @@ public sealed class GeoTiffMetadataReaderTests
     }
 
     /// <summary>
-    /// Reconstructs the observed live USGS 1 m GeoTIFF layout byte-for-byte from the facts recorded during
-    /// Issue #21's setup (little-endian, 18 tags, the exact GeoKey and tag values OpenTopography returned
-    /// for the reference parcel scenario's box), and asserts every property <see cref="GeoTiffMetadataReader"/>
-    /// decodes from it equals the observed value. GeoKey 2054 (GeogAngularUnitsGeoKey) was present in the
-    /// live response but is outside SolidGround's needed GeoKey set, so it is included here for fidelity to
-    /// the observed layout but is expected to be silently ignored, like any other unrecognized GeoKey.
+    /// Reconstructs a representative USGS 1 m GeoTIFF layout byte-for-byte (little-endian, 18 tags, a
+    /// plausible GeoKey and tag layout for the example-site scenario's box), and asserts every property
+    /// <see cref="GeoTiffMetadataReader"/> decodes from it equals the expected value. The tiepoint
+    /// coordinates are a synthetic stand-in near the example site's own numeric neighborhood, not a captured
+    /// live response. GeoKey 2054 (GeogAngularUnitsGeoKey) is included here for fidelity to a real response's
+    /// tag set even though it is outside SolidGround's needed GeoKey set, so it is expected to be silently
+    /// ignored, like any other unrecognized GeoKey.
     /// </summary>
     [Fact]
-    public void ReadsTheObservedLiveExampleSiteLaneGeoTiffLayoutExactly()
+    public void ReadsARepresentativeGeoTiffLayoutExactly()
     {
         const string citationPart = "NAD83 / UTM zone 15N";
         const string geographicPart = "NAD83";
@@ -320,7 +321,7 @@ public sealed class GeoTiffMetadataReaderTests
             .WithLong(325, (uint)dummyTilePayload.Length)
             .WithShort(339, 3)
             .WithDoubles(33550, 1d, 1d, 0d)
-            .WithDoubles(33922, 0d, 0d, 0d, [withheld], [withheld], 0d)
+            .WithDoubles(33922, 0d, 0d, 0d, 449614d, 4604623.000340247d, 0d)
             .WithGeoKeyDirectory(
                 (1024, 0, 1, 1),
                 (1025, 0, 1, 1),
@@ -348,7 +349,7 @@ public sealed class GeoTiffMetadataReaderTests
         Assert.Null(metadata.ProjectedCitation);
         Assert.Null(metadata.VerticalCoordinateSystemCode);
         Assert.Equal((1d, 1d, 0d), metadata.ModelPixelScale);
-        Assert.Equal((0d, 0d, 0d, [withheld], [withheld], 0d), metadata.ModelTiepoint);
+        Assert.Equal((0d, 0d, 0d, 449614d, 4604623.000340247d, 0d), metadata.ModelTiepoint);
         Assert.Equal("-999999", metadata.NoDataText);
     }
 }

@@ -484,7 +484,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void TestAssemblyReferencesNeitherTheRevitApiNorTheRevitHostAssembly()
     {
-        // SolidGround.Tests itself must keep building and running on the Linux solidground-pve2 CI
+        // SolidGround.Tests itself must keep building and running on the Linux self-hosted CI
         // runner without Revit installed: it must never pick up a reference to the Revit API or to
         // SolidGround.Revit, whether directly or transitively through a future ProjectReference mistake.
         AssemblyName[] references = typeof(ArchitectureTests).Assembly.GetReferencedAssemblies();

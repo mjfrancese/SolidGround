@@ -22,7 +22,7 @@ namespace SolidGround.Tests;
 public sealed class CliFetchAndRunCommandTests
 {
     private const string FakeKey = "fixture-fake-key-0123456789";
-    private const string Bbox = "[withheld],[withheld],[withheld],[withheld]";
+    private const string Bbox = "-93.6045,41.5906,-93.6031,41.5917";
 
     [Fact]
     public async Task MissingKeyOnFetchExitsWithAuthorizationAndNeverInvokesTheHandler()
@@ -453,10 +453,10 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(CliExitCodes.Success, exitCode);
             Assert.Single(handler.Requests);
             HttpRequestMessage request = handler.Requests[0];
-            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "west"));
-            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "south"));
-            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "east"));
-            Assert.Equal(FormatCoordinate([withheld]d), GetQueryValue(request, "north"));
+            Assert.Equal(FormatCoordinate(-93.6045d), GetQueryValue(request, "west"));
+            Assert.Equal(FormatCoordinate(41.5906d), GetQueryValue(request, "south"));
+            Assert.Equal(FormatCoordinate(-93.6031d), GetQueryValue(request, "east"));
+            Assert.Equal(FormatCoordinate(41.5917d), GetQueryValue(request, "north"));
             Assert.DoesNotContain("fetch envelope expanded", stdout, StringComparison.Ordinal);
 
             string sourceJsonPath = Path.Combine(tempDirectory.FullName, "terrain.source.json");
@@ -464,10 +464,10 @@ public sealed class CliFetchAndRunCommandTests
             JsonElement fetchEnvelope = sidecar.RootElement.GetProperty("acquisition").GetProperty("fetchEnvelope");
             Assert.False(fetchEnvelope.GetProperty("expanded").GetBoolean());
             Assert.Equal(110d, fetchEnvelope.GetProperty("minimumSideMeters").GetDouble());
-            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("west").GetDouble());
-            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("south").GetDouble());
-            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("east").GetDouble());
-            Assert.Equal([withheld]d, fetchEnvelope.GetProperty("north").GetDouble());
+            Assert.Equal(-93.6045d, fetchEnvelope.GetProperty("west").GetDouble());
+            Assert.Equal(41.5906d, fetchEnvelope.GetProperty("south").GetDouble());
+            Assert.Equal(-93.6031d, fetchEnvelope.GetProperty("east").GetDouble());
+            Assert.Equal(41.5917d, fetchEnvelope.GetProperty("north").GetDouble());
         }
         finally
         {
@@ -481,8 +481,8 @@ public sealed class CliFetchAndRunCommandTests
         DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
         try
         {
-            const double centerLongitude = [withheld]d;
-            const double centerLatitude = [withheld]d;
+            const double centerLongitude = -93.603806d;
+            const double centerLatitude = 41.591194d;
             double halfWidthDegrees = 20d / Wgs84Ellipsoid.MetersPerDegreeLongitude(centerLatitude);
             double halfHeightDegrees = 20d / Wgs84Ellipsoid.MetersPerDegreeLatitude(centerLatitude);
             string tinyBbox = string.Join(
@@ -1030,15 +1030,15 @@ public sealed class CliFetchAndRunCommandTests
 
     /// <summary>
     /// A GeoTIFF metadata response matching <c>example-site-synthetic.asc</c>'s header exactly (3x3, cellsize 1,
-    /// lower-left corner ([withheld], [withheld]), NODATA -32768): PixelIsArea, so the tiepoint's model-space
-    /// coordinate is directly the upper-left corner ([withheld], [withheld] + 3*1 = [withheld]), and EPSG:26915.
+    /// lower-left corner (449674, 4604563), NODATA -32768): PixelIsArea, so the tiepoint's model-space
+    /// coordinate is directly the upper-left corner (449674, 4604563 + 3*1 = 4604566), and EPSG:26915.
     /// </summary>
     private static byte[] BuildHybridTiffBytes() =>
         new TiffBuilder(bigEndian: false)
             .WithShort(256, 3)
             .WithShort(257, 3)
             .WithDoubles(33550, 1d, 1d, 0d)
-            .WithDoubles(33922, 0d, 0d, 0d, [withheld], [withheld], 0d)
+            .WithDoubles(33922, 0d, 0d, 0d, 449674d, 4604566d, 0d)
             .WithAscii(42113, "-32768")
             .WithGeoKeyDirectory(
                 (1024, 0, 1, 1),

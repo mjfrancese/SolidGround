@@ -69,8 +69,8 @@ metersPerDegreeLatitude(phi)  = (pi/180) * M(phi)
 metersPerDegreeLongitude(phi) = (pi/180) * N(phi) * cos(phi)
 ```
 
-At the reference parcel scenario's latitude, `[withheld]`°N, these evaluate to `metersPerDegreeLatitude ≈
-[withheld]` m and `metersPerDegreeLongitude ≈ [withheld]` m (independently recomputed for this issue; the
+At the example-site scenario's latitude, `41.591194`°N, these evaluate to `metersPerDegreeLatitude ≈
+111065.3521` m and `metersPerDegreeLongitude ≈ 83378.9293` m (independently recomputed for this issue; the
 often-quoted spherical approximations `110996`/`86960` are not used anywhere in this codebase).
 `Wgs84EllipsoidTests` reimplements the same formula independently (a second, separate implementation in the
 test file, not a call into `Wgs84Ellipsoid`) and asserts both factors are within `1e-9` relative of that
@@ -103,8 +103,9 @@ otherwise whichever of `south`/`north` had the smaller absolute value) — conse
 only a local approximation: as the pad grows, the padded edge moves measurably closer to (or past) the
 equator, where the true meters-per-degree keeps shrinking below the value assumed at the envelope's own
 latitude, so the fixed degree delta computed from that assumption covers slightly less than `pad` meters of
-actual distance. Confirmed against the actual runtime at a representative ExampleSite-latitude envelope (`south
-= [withheld]°`): a 50 km pad under-covered by about 1.9 m, and a 100 km pad by about 7.7 m — negligible at the
+actual distance. Confirmed against the actual runtime at a representative envelope near the example-site latitude (pending
+re-measurement at the renamed fixture's own latitude, `south ≈ 41.59°`, following the scenario rename): a
+50 km pad under-covered by a sub-10-meter margin, and a 100 km pad by a somewhat larger one — negligible at the
 buffer and margin sizes (single meters) this application actually uses, but a real gap in the "always
 over-covers" guarantee this design previously claimed unconditionally. Using the global minimum at latitude 0
 in every case closes that gap exactly, at the cost of using a very slightly larger `dLat` than strictly
@@ -151,7 +152,7 @@ reused unchanged for this expansion — an envelope that cannot be widened to th
 `[-180, 180]`/`[-90, 90]` throws the identical `AoiNormalizationException`, regardless of whether padding or
 minimum-side expansion pushed it there.
 
-**Live probe evidence.** A minimum-area probe at [withheld],[withheld] (the reference parcel) with `fetch --bbox`
+**Live probe evidence.** A minimum-area probe at (withheld) (the owner's reference parcel) with `fetch --bbox`
 squares of increasing size found: a 100 m square (0.01 km²) rejected with HTTP 400, `Error: The selected area
 is too small: 0.01 km2`; a 100.5 m square (0.01010025 km²) accepted; 101 m, 105 m, and 120 m squares all
 accepted. OpenTopography's own API documentation states only a 250 km² maximum for `USGS1m`, never a minimum,
@@ -165,7 +166,7 @@ simple square-degree calculation, without padding requests so far past the minim
 AOI (a bounding box, a small radius, or a small buffered parcel) requests dramatically more data than it
 needs.
 
-**Single-location limitation.** This probe was bracketed at exactly one location (the reference parcel). Whether
+**Single-location limitation.** This probe was bracketed at exactly one location (the owner's reference parcel, location withheld). Whether
 OpenTopography's minimum-area rule varies by latitude, by dataset, or at all is unconfirmed; the 21 percent
 margin is this design's hedge against that uncertainty, not a proof that 110 m is universally sufficient.
 
@@ -313,12 +314,16 @@ constructs its radius AOI with `LinearDistance.Meters(...)`.
 ## Fixtures
 
 `tests/SolidGround.Tests/Fixtures/example-site-synthetic-parcel.geojson` and `.wkt` are the same synthetic
-~[withheld] m² ([withheld] sq ft) rectangle — the [withheld] footprint — in two independent reference forms: WGS 84
-degrees (built by converting a fixed meter half-width/half-height with `Wgs84Ellipsoid`'s factors at the
-ExampleSite latitude) and NAD83 / UTM zone 15N meters (`EPSG:26915`, the reference `example-site-synthetic.prj`
-already describes). The WKT fixture's easting is near `[withheld]`, not the `545000` figure an earlier draft of
-this design suggested. That earlier `545000` draft was simply a plain error, not a deliberately different "plausible" example; the reasoning is withheld here to avoid disclosing the real site's location. Both fixtures are synthetic and illustrative, not a real survey, and (per
-`FixtureSecurityTests`) contain no request URL, authorization header, or API credential.
+1,600 m² (17,222.26 sq ft) square in two independent reference forms: WGS 84 degrees (built by converting a
+fixed meter half-width/half-height with `Wgs84Ellipsoid`'s factors at the example-site latitude) and NAD83 /
+UTM zone 15N meters (`EPSG:26915`, the reference `example-site-synthetic.prj` already describes). The WKT
+fixture's easting is near `449675`, just below the `500000` false easting for UTM zone 15: the example site
+sits only about `0.6°` *west* of zone 15's `-93°` central meridian, so at `≈83378.93` m per degree of
+longitude at this latitude, that offset subtracts only about `50` km from the `500000` m false easting,
+landing the easting in the `449000`–`450000` m range rather than far above or below it — matching the
+already-committed `example-site-synthetic.asc`/`.prj` pair's `xllcorner 449674`. Both fixtures are synthetic
+and illustrative, not a real survey, and (per `FixtureSecurityTests`) contain no request URL, authorization
+header, or API credential.
 
 ## Accuracy caveat
 

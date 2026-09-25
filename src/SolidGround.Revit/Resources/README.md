@@ -38,7 +38,7 @@ incorporated into a deliverable); no PixelLab job ID, download URL, or account i
 in this repository (seeds, where applicable, are recorded in `docs/architecture/revit-ribbon-icons.md` per
 Issue #19's AC5). Every edit was made by Claude agents iterating against measured contrast/silhouette/connectivity
 checks, not human cleanup of generated pixels — there was no generated output to clean up. On 2026-09-24,
-the owner was shown the final pair in chat and replied "go," requesting no change; no separate formal sign-off
+The owner was shown the final pair in chat and replied "go," requesting no change; no separate formal sign-off
 beyond that reply is recorded. The full design lineage (four initial concepts, refinement,
 polish, two rejected revisions, the chosen 32px design, two competing 16px companions, prompt intents,
 seeds, palette, and WCAG contrast evidence) is recorded in `docs/architecture/revit-ribbon-icons.md`.

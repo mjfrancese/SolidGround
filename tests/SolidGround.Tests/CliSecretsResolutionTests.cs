@@ -15,7 +15,7 @@ namespace SolidGround.Tests;
 public sealed class CliSecretsResolutionTests
 {
     private const string FakeKey = "fixture-fake-key-0123456789";
-    private const string Bbox = "[withheld],[withheld],[withheld],[withheld]";
+    private const string Bbox = "-93.6045,41.5906,-93.6031,41.5917";
 
     [Fact]
     public async Task EnvironmentVariableWinsOverAnyUserSecretsFile()

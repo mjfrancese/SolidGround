@@ -13,8 +13,8 @@ public sealed class AaiGridHeaderTests
         const string text = """
             ncols 2
             nrows 3
-            xllcorner [withheld]
-            yllcorner [withheld]
+            xllcorner 449614.000000000000
+            yllcorner 4604506.000340246595
             cellsize 1.000000000000
             NODATA_value -999999
             4 3
@@ -24,8 +24,8 @@ public sealed class AaiGridHeaderTests
 
         Assert.Equal(2, header.ColumnCount);
         Assert.Equal(3, header.RowCount);
-        Assert.Equal([withheld], header.AnchorX);
-        Assert.Equal([withheld], header.AnchorY);
+        Assert.Equal(449614.000000000000d, header.AnchorX);
+        Assert.Equal(4604506.000340246595d, header.AnchorY);
         Assert.Equal(GridAnchorConvention.LowerLeftCorner, header.AnchorConvention);
         Assert.Equal(1.0d, header.CellSize);
         Assert.Equal(-999999d, header.NoDataValue);

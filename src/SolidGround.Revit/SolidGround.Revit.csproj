@@ -8,7 +8,7 @@
     project deliberately inherits TreatWarningsAsErrors, Nullable, ImplicitUsings, LangVersion,
     AnalysisLevel, and RestorePackagesWithLockFile from the root Directory.Build.props instead of
     repeating them here (conventions note section 2, "Adopted for SolidGround.Revit": "inherits the
-    repository's existing root Directory.Build.props rather than repeating the owner's other add-in's per-project
+    repository's existing root Directory.Build.props rather than repeating per-project
     property blocks").
   -->
 
@@ -41,9 +41,8 @@
       Microsoft.VisualBasic 10.1.0.0, conflicting with the net10.0 ref-pack's own 10.0.0.0. Neither this
       project nor any real Revit add-in call site uses Microsoft.VisualBasic; MSBuild already resolves
       the conflict deterministically (the ref-pack copy is chosen), so this only silences the informational
-      MSB3277 report, matching the owner's other add-in add-in's own precedent for the identical conflict
-      (detail about the owner's other add-in withheld)
-      unify here").
+      MSB3277 report, matching a related internal project's own precedent for the identical conflict
+      ("MSB3277... The conflict is benign... there is no runtime binding to unify here").
     -->
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>
@@ -51,18 +50,19 @@
   <!--
     CI-only compile gate. AGENTS.md "Dependency policy": "The Nice3point.Revit.Api.RevitAPI and
     RevitAPIUI packages are acceptable, CI-only, exact-pinned to one 2027.x release, because they let
-    the self-hosted Linux runner compile-check SolidGround.Revit without a licensed Revit
-    install... The agent must never reference these packages from a local build and must never let the
-    shipped add-in depend on them." Conventions note section 10, "Revit reference assemblies for local
-    builds and CI", records the full mechanism this block implements. Activated only by
-    `-p:UseRevitReferenceAssemblies=true`, which only the existing push-to-main self-hosted CI lane
-    passes; nothing in a local or deploy build ever sets it.
+    the repository's dedicated self-hosted Linux runner compile-check SolidGround.Revit without a
+    licensed Revit install... The agent must never reference these packages from a local build and must
+    never let the shipped add-in depend on them." Conventions note section 10, "Revit reference
+    assemblies for local builds and CI", records the full mechanism this block implements. Activated only
+    by `-p:UseRevitReferenceAssemblies=true`, which only the existing push-to-main self-hosted-runner CI
+    lane passes; nothing in a local or deploy build ever sets it.
   -->
   <PropertyGroup Condition="'$(UseRevitReferenceAssemblies)' == 'true'">
     <!--
-      The CI runner is Linux (self-hosted); net10.0-windows otherwise refuses to build there
-      (NETSDK1100). Scoped to this same condition so local/deploy Windows builds never need the opt-in
-      (conventions note section 10, quoting the owner's other add-in's identical rationale).
+      The CI runner is Linux (the repository's dedicated self-hosted runner); net10.0-windows otherwise
+      refuses to build there (NETSDK1100). Scoped to this same condition so local/deploy Windows builds
+      never need the opt-in (conventions note section 10, quoting a related internal project's identical
+      rationale).
     -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!--

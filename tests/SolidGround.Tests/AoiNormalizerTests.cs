@@ -12,8 +12,8 @@ namespace SolidGround.Tests;
 
 public sealed class AoiNormalizerTests
 {
-    private const double ExampleSiteLatitude = [withheld]d;
-    private const double ExampleSiteLongitude = [withheld]d;
+    private const double ExampleSiteLatitude = 41.591194d;
+    private const double ExampleSiteLongitude = -93.603806d;
 
     [Fact]
     public void NormalizeRejectsANullAreaOfInterest()
@@ -24,7 +24,7 @@ public sealed class AoiNormalizerTests
     [Fact]
     public void BoundingBoxWithZeroMarginProducesAValueEqualFetchEnvelope()
     {
-        Wgs84BoundingBoxAoi bbox = new([withheld]d, [withheld]d, [withheld]d, [withheld]d);
+        Wgs84BoundingBoxAoi bbox = new(-93.61d, 41.58d, -93.60d, 41.60d);
 
         NormalizedAoi result = AoiNormalizer.Normalize(bbox);
 
@@ -71,7 +71,7 @@ public sealed class AoiNormalizerTests
         // Wgs84Ellipsoid.MetersPerDegreeLatitude, entirely independently of AoiNormalizer's own PadEnvelope
         // formula — rather than re-deriving the expected value from that same formula, so it would have caught
         // the under-coverage an earlier version of PadEnvelope had.
-        Wgs84BoundingBoxAoi bbox = new([withheld]d, ExampleSiteLatitude, [withheld]d, ExampleSiteLatitude + 0.02d);
+        Wgs84BoundingBoxAoi bbox = new(-93.61d, ExampleSiteLatitude, -93.60d, ExampleSiteLatitude + 0.02d);
         LinearDistance margin = LinearDistance.Meters(50000d);
         AoiNormalizationOptions options = new() { EnvelopeMargin = margin };
 
@@ -147,7 +147,7 @@ public sealed class AoiNormalizerTests
     {
         ParcelGeometryAoi parcelAoi = new(
             ParcelGeometryFormat.Wkt,
-            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
+            "POLYGON ((-93.61 41.58, -93.60 41.58, -93.60 41.60, -93.61 41.60, -93.61 41.58))",
             GeographicReference(),
             LinearDistance.Meters(5d));
         AoiNormalizationOptions options = new() { EnvelopeMargin = LinearDistance.Meters(3d) };
@@ -155,12 +155,12 @@ public sealed class AoiNormalizerTests
         NormalizedAoi result = AoiNormalizer.Normalize(parcelAoi, options);
 
         const double padMeters = 8d; // buffer 5 + margin 3
-        double expectedDLon = padMeters / Wgs84Ellipsoid.MetersPerDegreeLongitude([withheld]d); // larger |lat|
+        double expectedDLon = padMeters / Wgs84Ellipsoid.MetersPerDegreeLongitude(41.60d); // larger |lat|
         double expectedDLat = padMeters / Wgs84Ellipsoid.MetersPerDegreeLatitude(0d); // equator: global minimum, always used
-        Assert.Equal([withheld]d - expectedDLon, result.FetchEnvelope.WestLongitude, 9);
-        Assert.Equal([withheld]d + expectedDLon, result.FetchEnvelope.EastLongitude, 9);
-        Assert.Equal([withheld]d - expectedDLat, result.FetchEnvelope.SouthLatitude, 9);
-        Assert.Equal([withheld]d + expectedDLat, result.FetchEnvelope.NorthLatitude, 9);
+        Assert.Equal(-93.61d - expectedDLon, result.FetchEnvelope.WestLongitude, 9);
+        Assert.Equal(-93.60d + expectedDLon, result.FetchEnvelope.EastLongitude, 9);
+        Assert.Equal(41.58d - expectedDLat, result.FetchEnvelope.SouthLatitude, 9);
+        Assert.Equal(41.60d + expectedDLat, result.FetchEnvelope.NorthLatitude, 9);
         Assert.Equal(FetchEnvelopeBasis.GeographicParcelEnvelope, result.Basis);
         Assert.Equal(LinearDistance.Meters(5d), result.Buffer);
         Assert.Equal(LinearDistance.Meters(3d), result.EnvelopeMargin);
@@ -173,7 +173,7 @@ public sealed class AoiNormalizerTests
     {
         ParcelGeometryAoi parcelAoi = new(
             ParcelGeometryFormat.Wkt,
-            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
+            "POLYGON ((449655.328 4604544.615, 449695.328 4604544.615, 449695.328 4604584.615, 449655.328 4604584.615, 449655.328 4604544.615))",
             ProjectedReference());
 
         AoiNormalizationException exception = Assert.Throws<AoiNormalizationException>(() => AoiNormalizer.Normalize(parcelAoi));
@@ -224,7 +224,7 @@ public sealed class AoiNormalizerTests
     [Fact]
     public void NormalizedAoiRequiresAParcelExactlyWhenItsBasisIsAParcelBasis()
     {
-        Wgs84BoundingBoxAoi bbox = new([withheld]d, [withheld]d, [withheld]d, [withheld]d);
+        Wgs84BoundingBoxAoi bbox = new(-93.61d, 41.58d, -93.60d, 41.60d);
         PolygonalRegion parcel = PolygonalRegion.FromGeometry(ReadWkt("POLYGON ((0 0, 1 0, 1 1, 0 0))"), ProjectedReference());
 
         FetchEnvelopeExpansion noExpansion = new(false, LinearDistance.Zero, LinearDistance.Zero, LinearDistance.Zero, LinearDistance.Zero, LinearDistance.Zero);

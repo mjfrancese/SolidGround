@@ -266,7 +266,7 @@ public sealed class TerrainExportBundleRendererTests
 
     [Theory]
     [InlineData("example-site-synthetic", true)]
-    [InlineData("ExampleSite_Synthetic.v2", true)]
+    [InlineData("Example_Site.v2", true)]
     [InlineData("a", true)]
     [InlineData("123-fixture_v1", true)]
     [InlineData("", false)]

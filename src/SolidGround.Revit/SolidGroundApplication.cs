@@ -126,8 +126,8 @@ public sealed class SolidGroundApplication : IExternalApplication
     /// <summary>
     /// Loads one of the two embedded ribbon icon PNGs. Non-fatal by contract: a missing or corrupt
     /// resource logs a warning and returns null, which degrades the button to text-only rather than
-    /// failing ribbon creation (conventions note section 4, matching the owner's other add-in add-in's own
-    /// LoadRibbonIcon contract). <see cref="BitmapCacheOption.OnLoad"/> forces the complete decode while
+    /// failing ribbon creation (conventions note section 4, matching a related internal project's own
+    /// ribbon-icon-loading contract). <see cref="BitmapCacheOption.OnLoad"/> forces the complete decode while
     /// the manifest-resource stream is still open; the frame is then frozen so it is safe to hand to the
     /// ribbon across threads.
     /// </summary>

@@ -14,8 +14,8 @@ namespace SolidGround.Tests;
 /// </summary>
 public sealed class HorizontalCoordinateTransformReversalTests
 {
-    private static readonly Coordinate2D FixtureUtmPoint = new([withheld], [withheld]);
-    private static readonly Coordinate2D FixtureLonLatPoint = new([withheld]d, [withheld]d);
+    private static readonly Coordinate2D FixtureUtmPoint = new(449655.327630d, 4604544.615466d);
+    private static readonly Coordinate2D FixtureLonLatPoint = new(-93.603806d, 41.591194d);
 
     [Fact]
     public void ReverseRejectsNull()
@@ -83,7 +83,7 @@ public sealed class HorizontalCoordinateTransformReversalTests
     [Fact]
     public void NormalizingAProjectedParcelWithAReversedTransformProducesAWgs84EnvelopeContainingEveryOriginalVertex()
     {
-        // Arrange: the real ExampleSite WGS 84 parcel fixture, and the real ProjNET-backed transform this issue
+        // Arrange: the real example-site WGS 84 parcel fixture, and the real ProjNET-backed transform this issue
         // builds from Wgs84WellKnownText to the example-site-synthetic.prj fixture (geographic source, projected
         // target -- Create's own fixed orientation).
         string wgs84GeoJsonText = ReadFixture("example-site-synthetic-parcel.geojson");
@@ -125,7 +125,8 @@ public sealed class HorizontalCoordinateTransformReversalTests
                 $"Vertex latitude {vertex.Y} was outside the fetch envelope latitude range [{normalized.FetchEnvelope.SouthLatitude}, {normalized.FetchEnvelope.NorthLatitude}].");
         }
 
-        // ... and is not absurdly large: each side under 0.01 degrees for this ~[withheld] m^2 lot [withheld] plus the 2 m buffer used above.
+        // ... and is not absurdly large: each side under 0.01 degrees for this 1,600 m^2 example-site area
+        // (40 m by 40 m) plus the 2 m buffer used above.
         double widthDegrees = normalized.FetchEnvelope.EastLongitude - normalized.FetchEnvelope.WestLongitude;
         double heightDegrees = normalized.FetchEnvelope.NorthLatitude - normalized.FetchEnvelope.SouthLatitude;
         Assert.True(widthDegrees < 0.01d, $"Fetch envelope width {widthDegrees} deg was not under 0.01 deg.");
@@ -137,7 +138,7 @@ public sealed class HorizontalCoordinateTransformReversalTests
     // TargetReference against parcelAoi.HorizontalReference -- it only null-checks parcelToWgs84 and then
     // calls .Forward on every vertex, trusting the caller to supply the correctly oriented transform. Confirmed
     // with a throwaway spike (not committed): feeding the un-reversed transform's .Forward the fixture's own
-    // UTM point ([withheld], [withheld]) does not throw at the ProjNET layer at all -- it silently returns
+    // UTM point (449655.327630, 4604544.615466) does not throw at the ProjNET layer at all -- it silently returns
     // a finite but nonsensical pseudo-coordinate (X=-174844493.76014572, Y=156563873.98870513, observed against
     // the pinned ProjNET 2.1.0 package), which is not a validation failure so much as ProjNET's Transverse
     // Mercator series evaluating at a degrees-as-if-lon/lat input many orders of magnitude outside its normal

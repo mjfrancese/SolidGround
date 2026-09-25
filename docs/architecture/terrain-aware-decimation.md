@@ -246,7 +246,8 @@ AGENTS.md frames SolidGround as a site-form tool, not a survey instrument, and t
 that. `CurvatureMagnitude` and `ElevationResidual` (and the diagnostics built from them) are generalization-quality
 proxies for how much local relief a budget-constrained selection left out — they are not a certified geometric
 error bound, an RMSE figure, or a substitute for the QL2 bare-earth lidar accuracy limits AGENTS.md already
-documents (roughly 10 cm vertical RMSE in favorable conditions, worse under mature canopy such as the reference parcel fixture). A low `MeanRemovedElevationResidual` means the retained points reproduce the *simplified* surface's
+documents (roughly 10 cm vertical RMSE in favorable conditions, worse under mature canopy such as the owner's
+reference parcel). A low `MeanRemovedElevationResidual` means the retained points reproduce the *simplified* surface's
 local shape well; it says nothing about how well that surface reproduces the true ground beneath the canopy.
 
 ## Boundary: what #8 and #9 still own

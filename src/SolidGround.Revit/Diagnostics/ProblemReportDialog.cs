@@ -9,7 +9,8 @@ namespace SolidGround.Revit.Diagnostics;
 /// <remarks>
 /// A Revit <see cref="Autodesk.Revit.UI.TaskDialog"/> auto-sizes to its content and does not scroll, so an
 /// unbounded problem list can grow the dialog past the screen and take its own close button with it
-/// (the owner's other add-in's own recorded 2026-08-04 incident, adopted here as the reason for a hard cap). This caps the
+/// (a lesson learned from a related internal project's own incident, adopted here as the reason for a
+/// hard cap). This caps the
 /// dialog body at <see cref="MaxInlineProblems"/> lines and always writes the complete list to a file in
 /// the log folder, naming that file's path in the returned text, so a long list is capped in the dialog but
 /// never actually lost (AGENTS.md "Revit add-in conventions" section 6).

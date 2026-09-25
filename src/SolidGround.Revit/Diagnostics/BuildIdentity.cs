@@ -5,8 +5,8 @@ namespace SolidGround.Revit.Diagnostics;
 
 /// <summary>
 /// Best-effort identity of the loaded SolidGround.Revit assembly: informational version, MVID, and a
-(detail about the owner's other add-in withheld)
-/// field is captured independently so one unavailable value cannot suppress the others, and capture never
+/// SHA-256 of the assembly file on disk. Mirrors an established pattern from a related internal project's
+/// own build-identity capture: every field is captured independently so one unavailable value cannot suppress the others, and capture never
 /// throws. Owner decision 7 (2026-09-20, docs/architecture/revit-add-in-conventions.md) adds these three
 /// fields to the eventual Extensible Storage provenance entity (Issue #16); this milestone only logs them
 /// at startup (AGENTS.md "Revit add-in conventions" section 6, decisions D6/D8).

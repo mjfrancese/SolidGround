@@ -47,10 +47,10 @@ public sealed class RasterSourceSidecarIoTests
             "responseByteCount": 12345,
             "metadataRequest": null,
             "fetchEnvelope": {
-              "west": [withheld],
-              "south": [withheld],
-              "east": [withheld],
-              "north": [withheld],
+              "west": -93.6045,
+              "south": 41.5906,
+              "east": -93.6031,
+              "north": 41.5917,
               "minimumSideMeters": 110.0,
               "expanded": false,
               "widthBeforeMeters": 121.8,
@@ -152,5 +152,5 @@ public sealed class RasterSourceSidecarIoTests
             "PrjSidecar",
             12345,
             null,
-            new RasterSourceFetchEnvelope([withheld], [withheld], [withheld], [withheld], 110.0, false, 121.8, 154.8, 121.8, 154.8)));
+            new RasterSourceFetchEnvelope(-93.6045, 41.5906, -93.6031, 41.5917, 110.0, false, 121.8, 154.8, 121.8, 154.8)));
 }

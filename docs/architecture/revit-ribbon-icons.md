@@ -68,9 +68,9 @@ source:
   .GetManifestResourceStream(logicalResourceName)` → `BitmapFrame.Create(stream, BitmapCreateOptions.None,
   BitmapCacheOption.OnLoad)` → `.Freeze()` on success; any exception except `OutOfMemoryException`/
   `StackOverflowException` logs an `AddInLog.Warning` and returns `null`, which degrades the button to
-  text-only rather than failing ribbon creation — matching the owner's other add-in's own non-fatal contract
-  (`docs/architecture/revit-add-in-conventions.md`'s basis paragraph, citing the owner's other add-in's shipped
-  (detail about the owner's other add-in withheld)
+  text-only rather than failing ribbon creation — matching the same non-fatal contract used in the
+  owner's other Revit add-in
+  (`docs/architecture/revit-add-in-conventions.md`'s basis paragraph).
 - `scripts/Deploy-RevitAddIn.ps1` has no icon-specific code path: because the two PNGs are embedded resources
   compiled into `SolidGround.Revit.dll`, replacing their bytes only changes that one assembly's own hash,
   which the deploy script's dependency-closure hashing already tracks generically.
@@ -105,10 +105,10 @@ absence). A working per-theme icon is therefore only reachable by an add-in reas
 `blog.autodesk.io`, "Dark Theme Possibility Looming," Jan 2023: subscribe to `ThemeChanged`, read
 `UIThemeManager.CurrentTheme`, reassign `Image`/`LargeImage`; community add-ins such as `ricaun.Revit.UI`
 implement the same pattern) — but it is new code with no precedent anywhere in `SolidGround.Revit` today
-(`grep` for `UITheme`/`ThemeChanged`/`CurrentTheme` under `src/` returns nothing) and none in the owner's other add-in's own
-(detail about the owner's other add-in withheld)
-(detail about the owner's other add-in withheld)
-black/white; dark variants only if the dark-ribbon mock fails)."**
+(`grep` for `UITheme`/`ThemeChanged`/`CurrentTheme` under `src/` returns nothing) and none in the owner's
+other Revit add-in's own shipped ribbon icons either: that add-in's own icon code has zero runtime
+theme-branching code, and its own frozen design-source rule states the rule explicitly — **"one
+theme-robust set (no pure black/white; dark variants only if the dark-ribbon mock fails)."**
 
 Issue #19 adopts the same rule: one PNG per size, no `ThemeChanged` subscription, no runtime image swap
 anywhere in `SolidGround.Revit`, and `ToolTipImage` stays unset. Theme robustness for this milestone is a
@@ -138,9 +138,9 @@ BitmapCacheOption.OnLoad)`, then `.Freeze()`) — confirms the practical effect:
 chunk loads at `DpiX = 96` and `Width` exactly equal to its pixel count (16 or 32); the placeholders, with
 their inexact `pHYs` chunk, loaded at `DpiX ≈ 95.9866` and `Width ≈ 16.0022` / `32.0045` device-independent
 units instead — a sub-half-percent size drift that Revit does not warn about but that is exactly the hazard
-(detail about the owner's other add-in withheld)
-a code comment: "the 32x32 files deliberately carry NO pHYs chunk so WPF decodes them at exactly 96 DPI, and
-any re-encode silently reintroduces one and breaks icon sizing"). Issue #19 follows the owner's other add-in's rule rather than
+an equivalent design-source rule in the owner's other Revit add-in exists to prevent (that project's own
+icon files deliberately carry no `pHYs` chunk so WPF decodes them at exactly 96 DPI, since any re-encode can
+silently reintroduce one and break icon sizing). Issue #19 follows the same rule rather than
 inheriting the placeholders' inexact chunk: the throwaway `icontool` renderer's `render` command (not
 committed) — the only tool that ever wrote a deliverable PNG's bytes anywhere in the design record — emits
 only `IHDR`/`IDAT`/`IEND` by construction, and this note independently re-parsed the current V1/V2/V3 candidate files (see "Design
@@ -156,7 +156,7 @@ final PNG bytes also lands a companion test-file change strengthening that check
 `RibbonIconHasATransparentBackgroundBehindAnOpaqueGlyph` (line 377) assert colour type 6, bit depth 8, the
 exact three-chunk list, and real corner transparency, using the same dependency-free raw-byte parsing style
 the old test already used (now `ReadPngIhdr`, line 777), so `SolidGround.Tests` keeps running on the
-Revit-free `self-hosted` CI runner with no new package dependency. `dotnet test` against the final
+Revit-free self-hosted CI runner with no new package dependency. `dotnet test` against the final
 bytes this note documents: **950 tests, 949 passing, 1 skipped** (the online-only OpenTopography test,
 unrelated to this issue), **0 failed**.
 
@@ -696,8 +696,9 @@ independent review personas judged both sizes legible and distinguishable in bot
   32px and 16px grid text — see "Design process" above. Nothing in this repository uses or depends on Python.
 - The 16×16 `Image` slot has now been observed rendering in a real Revit 2027 session, but only on the
   probe's own three stacked ribbon buttons (a panel-coloured surface); Quick Access Toolbar placement, a
-  chrome-coloured surface, has still never been observed for either `SolidGround.Revit` or the owner's other add-in's own
-  shipped icons (the owner's other add-in deferred, and apparently never wired, its own 16×16 asset). This matters because the
+  chrome-coloured surface, has still never been observed for either `SolidGround.Revit` or the owner's
+  other Revit add-in's own shipped icons (that add-in deferred, and apparently never wired, its own 16×16
+  asset). This matters because the
   light-chrome silhouette score is a structural 0% (see "Background colours and the contrast ceiling" and
   "Evidence" above) — a real finding only if a 16 px icon ever lands on a chrome-coloured surface, which
   remains unobserved.
@@ -717,8 +718,8 @@ independent review personas judged both sizes legible and distinguishable in bot
   evidence of the tests' own noise rather than smoothing it into one confident number. All of them were used
   as one input alongside the orchestrator's own direct review of every candidate's rendered, mocked,
   simulated, and (for the final pair) live-captured output, not as a substitute for it.
-- the owner's review of the final pair is an informal chat reply, not a separate formal sign-off record: on
-  2026-09-24, before the Revit evidence session, he was shown the final pair (ribbon mocks at 1x and 4x on
+- The owner's review of the final pair is an informal chat reply, not a separate formal sign-off record: on
+  2026-09-24, before the Revit evidence session, the owner was shown the final pair (ribbon mocks at 1x and 4x on
   the four backgrounds), was told a different look could be requested cheaply, and replied "go," requesting
   no change (see "What this note does not do").
 
@@ -744,8 +745,8 @@ independent review personas judged both sizes legible and distinguishable in bot
   and "Back Again to Unit Test Icons, Viewports and More" (Jan 2025) — the manual per-theme image-swap
   pattern and the multi-frame-TIFF high-DPI pattern, both corroborating, not contradicting, this note's own
   reflection-confirmed API findings.
-- (detail about the owner's other add-in withheld)
-  (detail about the owner's other add-in withheld)
+- The owner's other Revit add-in (read-only reference per AGENTS.md): its own equivalent ribbon-icon
+  design-source rule (frozen v1) and icon-loading code (internal paths not reproduced here).
 - The Issue #19 design record (not committed to this repository; produced by Claude Sonnet subagents
   orchestrated by Claude Fable, 2026-09-23 to 2026-09-24): four round-1 concept designers and a two-lens
   judge pass; three round-2 refinement treatments and a three-lens judges2 panel; a three-round

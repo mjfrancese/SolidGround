@@ -187,7 +187,7 @@ committed `example-site-synthetic-parcel.geojson` parcel Forward into that proje
 `AoiNormalizer.Normalize` with `HorizontalCoordinateTransforms.Reverse(transform)` as the injected
 `parcelToWgs84` argument. It asserts the call succeeds (no `AoiNormalizationException`), that the resulting
 WGS 84 fetch envelope contains every original geographic parcel vertex, and that the envelope is not
-absurdly large (each side under 0.01°, for this ~[withheld] m² lot plus a 2 m buffer).
+absurdly large (each side under 0.01°, for this ~1,600 m² parcel plus a 2 m buffer).
 
 `AoiNormalizer.NormalizeProjectedParcel` itself still performs no validation of `parcelToWgs84.Definition`'s
 `SourceReference`/`TargetReference` against the parcel's own declared reference — it only null-checks
@@ -196,8 +196,9 @@ it the un-reversed transform instead does not fail inside ProjNET itself (confir
 throwaway spike, not asserted as a committed test, since the outcome below is an incidental side effect of
 unrelated numeric range validation rather than a contract this issue or that seam owns): `Forward` on an
 already-projected easting/northing pair, misread as degrees, silently returns some finite but nonsensical
-pseudo-coordinate (ProjNET's Transverse Mercator series has no domain check — the fixture's own UTM point
-`([withheld], [withheld])` comes back as `(-174844493.76014572, 156563873.98870513)`). Fed onward with a
+pseudo-coordinate (ProjNET's Transverse Mercator series has no domain check — feeding the fixture's own UTM
+point through `Forward` this way returns a pseudo-coordinate many orders of magnitude outside any real
+longitude/latitude range). Fed onward with a
 nonzero buffer or margin, a value that far out of range is large enough to fail `Wgs84Ellipsoid`'s own
 latitude-range check while padding the envelope, surfacing as an `ArgumentOutOfRangeException` far from the
 real `Forward`/`Inverse` mismatch that caused it — exactly the confusing failure mode the orientation contract
@@ -355,19 +356,19 @@ earlier single `HorizontalRoundTripTolerance = LinearDistance.Meters(1d)` design
 (below) showed a tighter, still generously-margined constant was warranted. `GeographicRoundTripToleranceDegrees`
 bounds the opposite-direction round trip, `Inverse(Forward(lonLatPoint))`, in decimal degrees.
 
-**Measured basis** (ProjNET 2.1.0, fixture `PROJCS NAD_1983_UTM_Zone_15N` / `example-site-synthetic.prj`,
-2026-09-19). The fixture-scale figures below were independently reproduced against the pinned package for
-this implementation; the wider zone-wide sweep (301 points, latitude 0–84° in 2° steps, longitude offsets 0,
-±1.5, ±3.0, ±3.5° from the zone's central meridian −93°) is the orchestrator's own reported measurement and
-was not independently re-run point-for-point here:
+**Measured basis** (ProjNET 2.1.0, fixture `PROJCS NAD_1983_UTM_Zone_15N` / `example-site-synthetic.prj`).
+The wider zone-wide sweep (301 points, latitude 0–84° in 2° steps, longitude offsets 0, ±1.5, ±3.0, ±3.5°
+from the zone's central meridian −93°) does not depend on the fixture's own location and is unchanged from
+the original 2026-09-19 measurement. The fixture-footprint-specific figures below were originally measured
+on 2026-09-19 against the repository's former, address-tied fixture; they are marked pending re-measurement
+against the renamed fixture rather than restated as if they had been re-verified at the new site:
 
-- Round-trip proj→geo→proj (`Forward(Inverse(x))`): max **8.633e-3 m** at the ExampleSite fixture's own footprint
-  (six UTM points spanning it — independently reproduced exactly) and **9.292e-3 m** across the zone-wide
+- Round-trip proj→geo→proj (`Forward(Inverse(x))`): max (pending re-measurement against the renamed fixture)
+  at the fixture's own footprint (six UTM points spanning it) and **9.292e-3 m** across the zone-wide
   sweep (worst case at latitude 46°, offset −1.5°).
-- Geo→proj→geo (`Inverse(Forward(x))`): max **7.776e-8 deg** at the fixture (independently reproduced exactly,
-  including against all four real corners of the committed `example-site-synthetic-parcel.geojson` fixture, whose
-  own worst case is likewise **7.776e-8 deg**) and **8.362e-8 deg** across the zone-wide sweep (worst case at
-  latitude 46°, offset 0°).
+- Geo→proj→geo (`Inverse(Forward(x))`): max (pending re-measurement against the renamed fixture) at the
+  fixture, including against all four real corners of the committed `example-site-synthetic-parcel.geojson`
+  fixture, and **8.362e-8 deg** across the zone-wide sweep (worst case at latitude 46°, offset 0°).
 
 Per-10-degree-latitude-band maximum residual for the projected leg (metres), from the same zone-wide sweep
 (orchestrator-reported, not independently re-run point-for-point here):
@@ -402,20 +403,21 @@ SolidGround is a site-form tool, not a survey instrument.
 
 In addition to ProjNET's own golden values (asserted to a tight, same-engine tolerance in
 `ProjNetHorizontalCoordinateTransformFactoryTests.ForwardTransformsTheExampleSiteCentroidToItsMeasuredUtmCoordinate`),
-`ForwardAgreesWithAnIndependentProjEngineReferenceValue` checks `Forward([withheld], [withheld])` against a
-reference value computed by a **completely independent implementation**, PROJ (via `pyproj`'s `Transformer`,
-`EPSG:4269 -> EPSG:26915`, `always_xy=True`), on 2026-09-19:
+`ForwardAgreesWithAnIndependentProjEngineReferenceValue` checks `Forward(-93.603806, 41.591194)` against a
+reference value computed by a **completely independent implementation** — a hand-coded Snyder/Krüger-series
+forward transverse-Mercator implementation (GRS80 ellipsoid), used because no PROJ/`pyproj` installation was
+available in the environment that re-verified this fixture. A PROJ/`pyproj` run (`EPSG:4269 -> EPSG:26915`,
+`always_xy=True`) against the same point would reproduce the original test's exact rigor if `pyproj` becomes
+available:
 
 | Engine | Easting (m) | Northing (m) |
 | --- | --- | --- |
-| PROJ (`pyproj`, EPSG:4269→EPSG:26915) | [withheld] | [withheld] |
-| ProjNET 2.1.0 (this adapter, `Wgs84WellKnownText` → fixture) | [withheld] | [withheld] |
+| Hand-coded Krüger-series transverse Mercator (GRS80, independent of ProjNET's own source) | 449675.3275973967 | 4604564.6109847911 |
+| ProjNET 2.1.0 (this adapter, `Wgs84WellKnownText` → fixture) | 449675.3276299497 | 4604564.6154660825 |
 
-The difference is about **4.4 mm**, mostly in northing — plausible given PROJ's reference pair uses the
-geodetically-correct NAD83 ellipsoid (GRS80) while this adapter's `Wgs84WellKnownText` constant uses the WGS84
-ellipsoid (a sub-millimeter-scale flattening difference from GRS80) under the accepted zero-datum-shift
-approximation above, combined with each engine's own Transverse Mercator series-expansion implementation. The
-test asserts Euclidean distance within `0.01 m`, comfortably wider than the observed 4.4 mm, and is documented
+The difference is about **4.5 mm** (dE=0.033 mm, dN=4.481 mm) — the same order of magnitude as the original
+PROJ-vs-ProjNET cross-check this table previously recorded, corroborating both implementations. The
+test asserts Euclidean distance within `0.01 m`, comfortably wider than the observed difference, and is documented
 in the test itself as an independent-engine agreement check — the kind of check that catches an axis swap or a
 grossly misread projection parameter, which a same-engine golden value alone cannot catch (a bug that swaps
 `Forward`'s inputs or flips a sign would fail this check by many meters, not millimeters). Per the
@@ -468,7 +470,7 @@ under net10.0 (0 build warnings):
 
 | Concern | Owner | Notes |
 | --- | --- | --- |
-| Wiring `Create`/`PolygonalRegionReprojection`/`LocalOriginSnapping`/`HorizontalCoordinateTransforms.Reverse` into `AoiNormalizer`/`GridClipper`, or the CLI | Issue #9 | This issue adds the building blocks only; no `AoiNormalizer.cs`, `GridClipper.cs`, or `src/SolidGround.Cli/Program.cs` line changes. **See "Reversing a transform" above:** `AoiNormalizer.NormalizeProjectedParcel`'s existing `parcelToWgs84.Forward` call needs the projected-to-geographic direction, served by `HorizontalCoordinateTransforms.Reverse(Create(wgs84Wkt, parcelWkt))` (or, equivalently for a whole region, `PolygonalRegionReprojection.Reproject(region, transform, HorizontalTransformDirection.Inverse)`); `HorizontalCoordinateTransformReversalTests`'s integration test already proves a real transform built this way succeeds end to end for the ExampleSite fixture, but Issue #9 still owns actually constructing and injecting it from the CLI/host. |
+| Wiring `Create`/`PolygonalRegionReprojection`/`LocalOriginSnapping`/`HorizontalCoordinateTransforms.Reverse` into `AoiNormalizer`/`GridClipper`, or the CLI | Issue #9 | This issue adds the building blocks only; no `AoiNormalizer.cs`, `GridClipper.cs`, or `src/SolidGround.Cli/Program.cs` line changes. **See "Reversing a transform" above:** `AoiNormalizer.NormalizeProjectedParcel`'s existing `parcelToWgs84.Forward` call needs the projected-to-geographic direction, served by `HorizontalCoordinateTransforms.Reverse(Create(wgs84Wkt, parcelWkt))` (or, equivalently for a whole region, `PolygonalRegionReprojection.Reproject(region, transform, HorizontalTransformDirection.Inverse)`); `HorizontalCoordinateTransformReversalTests`'s integration test already proves a real transform built this way succeeds end to end for the example-site fixture, but Issue #9 still owns actually constructing and injecting it from the CLI/host. |
 | A generic raw-WKT field on `IElevationSource`/`ElevationAcquisition`/`ElevationData`, or on `ParcelGeometryAoi` for a caller-declared parcel CRS | Future issue (not #6) | Deliberately not added — see "The WKT flow" above and Disagreement 4 in the original design synthesis (a generic, always-reachable raw-WKT carrier risked re-exposing a redacted CRS-name substring). |
 | Choosing which point becomes a local origin (southwest corner, centroid, or otherwise) | Issue #9 | `LocalOriginSnapping` only snaps a caller-supplied candidate; it never chooses one. |
 | Decimation / simplification | Issue #7 | Operates upstream of any local-frame conversion, in source-CRS terms; a NODATA cell structurally cannot become a `TerrainSample`, since `Coordinate3D`'s constructor already requires every ordinate finite (unchanged, pre-existing). |

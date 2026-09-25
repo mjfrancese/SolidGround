@@ -47,12 +47,12 @@ public sealed class TerrainProcessingPipelineTests
     {
         Fixture fixture = LoadFixture();
 
-        // Covers only the grid's west two columns (UTM X in [[withheld], [withheld]), Y in [[withheld], [withheld]]): column
-        // 2's cell centers sit at X=[withheld], half a metre past this box's east edge, so they -- including the
+        // Covers only the grid's west two columns (UTM X in [449674, 449676), Y in [4604563, 4604566]): column
+        // 2's cell centers sit at X=449676.5, half a metre past this box's east edge, so they -- including the
         // one NODATA cell, itself in column 2 -- are excluded before the grid even reaches GridClipper's own
         // NODATA accounting. 6 of the remaining 6 cells (both retained columns, all three rows) are valid.
-        Coordinate2D sw = fixture.Transform.Inverse(new Coordinate2D([withheld], [withheld]));
-        Coordinate2D ne = fixture.Transform.Inverse(new Coordinate2D([withheld], [withheld]));
+        Coordinate2D sw = fixture.Transform.Inverse(new Coordinate2D(449674d, 4604563d));
+        Coordinate2D ne = fixture.Transform.Inverse(new Coordinate2D(449676d, 4604566d));
         Wgs84BoundingBoxAoi bbox = new(sw.X, sw.Y, ne.X, ne.Y);
 
         TerrainProcessingOutcome outcome = await RunPipelineAsync(fixture, bbox, LocalSouthwestOrigin(), TestContext.Current.CancellationToken);
@@ -68,8 +68,8 @@ public sealed class TerrainProcessingPipelineTests
         Fixture fixture = LoadFixture();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
-        LocalOriginRequest originA = new(LocalOriginKind.Explicit, [withheld], [withheld], 183d);
-        LocalOriginRequest originB = new(LocalOriginKind.Explicit, [withheld], [withheld], 180d);
+        LocalOriginRequest originA = new(LocalOriginKind.Explicit, 449674d, 4604563d, 183d);
+        LocalOriginRequest originB = new(LocalOriginKind.Explicit, 449667d, 4604558d, 180d);
 
         TerrainProcessingOutcome outcomeA = await RunPipelineAsync(fixture, aoi: null, originA, cancellationToken);
         TerrainProcessingOutcome outcomeB = await RunPipelineAsync(fixture, aoi: null, originB, cancellationToken);
@@ -110,7 +110,7 @@ public sealed class TerrainProcessingPipelineTests
         TerrainProcessingPipeline.RunAsync(
             fixture.Grid, fixture.Transform, fixture.VerticalReference,
             new ReferenceOrigins(ReferenceOrigin.Operator, ReferenceOrigin.Operator),
-            new ElevationSourceMetadata("ExampleSite synthetic fixture", "example-site-synthetic"),
+            new ElevationSourceMetadata("Example-site synthetic fixture", "example-site-synthetic"),
             aoi, origin, LengthUnit.Meter, SimplificationMethod.CurvatureAware, GenerousBudget, DefaultCoverageFloor, cancellationToken);
 
     private static Fixture LoadFixture()

@@ -22,10 +22,10 @@ public sealed class OpenTopographyUsgs1mSourceTests
         var handler = new FakeHttpMessageHandler((_, _) => EmptyResponse(HttpStatusCode.NoContent));
         using var httpClient = new HttpClient(handler);
         OpenTopographyUsgs1mSource source = CreateSource(httpClient, "fake-test-key-value");
-        const double west = -90.5;
-        const double south = 38.5;
-        const double east = [withheld];
-        const double north = 38.6;
+        const double west = -93.7;
+        const double south = 41.5;
+        const double east = -93.6;
+        const double north = 41.6;
         var request = new ElevationSourceRequest(new Wgs84BoundingBoxAoi(west, south, east, north));
 
         await Assert.ThrowsAsync<OpenTopographyNoDataException>(() => source.AcquireAsync(request, TestContext.Current.CancellationToken).AsTask());
@@ -46,7 +46,7 @@ public sealed class OpenTopographyUsgs1mSourceTests
         var handler = new FakeHttpMessageHandler((_, _) => throw new InvalidOperationException("must not send a request"));
         using var httpClient = new HttpClient(handler);
         OpenTopographyUsgs1mSource source = CreateSource(httpClient, FakeKey);
-        var request = new ElevationSourceRequest(new Wgs84RadiusAoi(38.7, [withheld], LinearDistance.Meters(100d)));
+        var request = new ElevationSourceRequest(new Wgs84RadiusAoi(41.59, -93.60, LinearDistance.Meters(100d)));
 
         OpenTopographyRequestValidationException error = await Assert.ThrowsAsync<OpenTopographyRequestValidationException>(
             () => source.AcquireAsync(request, TestContext.Current.CancellationToken).AsTask());
@@ -1176,15 +1176,15 @@ public sealed class OpenTopographyUsgs1mSourceTests
     }
 
     [Fact]
-    public async Task HybridFlowWithTheObservedLiveGridDimensionsPassesTheCornerAgreementTolerance()
+    public async Task HybridFlowWithConsistentGridDimensionsPassesTheCornerAgreementTolerance()
     {
-        // Reconstructs the live the reference parcel scenario's AAIGrid header and GeoTIFF tiepoint (Issue #21
-        // setup facts): the AAIGrid's yllcorner ([withheld]) and the corner derived from the
-        // GeoTIFF's tiepoint ([withheld] minus 117 rows of 1-unit cells = [withheld]) disagree
-        // by roughly 4e-10, which must still pass GridAgreementTolerance (1e-6).
+        // Reconstructs a representative AAIGrid header and GeoTIFF tiepoint for the example-site scenario,
+        // deliberately not bit-identical: the AAIGrid's yllcorner (4604506.000340246595) and the corner
+        // derived from the GeoTIFF's tiepoint (4604623.000340247 minus 117 rows of 1-unit cells =
+        // 4604506.000340247) disagree by roughly 4e-10, which must still pass GridAgreementTolerance (1e-6).
         string data = string.Join(' ', Enumerable.Repeat("0", 124 * 117));
         string aaiGridText =
-            "ncols 124\nnrows 117\nxllcorner [withheld]\nyllcorner [withheld]\n" +
+            "ncols 124\nnrows 117\nxllcorner 449614.000000000000\nyllcorner 4604506.000340246595\n" +
             $"cellsize 1.000000000000\nNODATA_value -999999\n{data}\n";
         TiffScenario scenario = HappyPathScenario with
         {
@@ -1192,8 +1192,8 @@ public sealed class OpenTopographyUsgs1mSourceTests
             ImageLength = 117,
             ScaleX = 1d,
             ScaleY = 1d,
-            TiepointX = [withheld],
-            TiepointY = [withheld],
+            TiepointX = 449614d,
+            TiepointY = 4604623.000340247d,
             NoDataText = "-999999",
         };
         byte[] tiffBytes = BuildTiffBytes(scenario);
@@ -1688,7 +1688,7 @@ public sealed class OpenTopographyUsgs1mSourceTests
         new(httpClient, new StaticOpenTopographyApiKeyProvider(new OpenTopographyApiKey(apiKeyValue)), options);
 
     private static ElevationSourceRequest SmallRequest() =>
-        new(new Wgs84BoundingBoxAoi([withheld], [withheld], [withheld], [withheld]));
+        new(new Wgs84BoundingBoxAoi(-93.604506, 41.590494, -93.603106, 41.591894));
 
     private static string ReadFixture(string fileName) =>
         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName));

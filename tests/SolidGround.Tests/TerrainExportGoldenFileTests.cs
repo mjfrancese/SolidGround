@@ -30,7 +30,7 @@ namespace SolidGround.Tests;
 /// buffer call for entirely (confirmed directly against GridClipper.BuildEffectiveRegion: it returns
 /// ClipRegion.Region unchanged whenever ClipRegion.Buffer.Value == 0d). So the golden bytes depend only on
 /// IEEE add/multiply/divide/compare, managed number formatting, and SHA-256, never on a transcendental
-/// function whose last bit could differ between the Windows workstation and the Linux solidground-pve2
+/// function whose last bit could differ between the Windows workstation and the Linux self-hosted CI
 /// runner. The real-parcel pipeline below intentionally does call ProjNET's forward transform and an NTS
 /// geometric buffer, so it is asserted deterministic only within one process, never byte-compared to a
 /// committed golden.
@@ -43,13 +43,13 @@ public sealed class TerrainExportGoldenFileTests
 
     // A fixed candidate inside both clip regions below, in the grid's own source (projected metre, NAVD88
     // metre) units; LocalOriginSnapping floors each axis independently to a deterministic grid-aligned origin
-    // ([withheld], [withheld], 183).
-    private static readonly Coordinate3D GoldenOriginCandidate = new([withheld], [withheld], 183.9d);
+    // (449675, 4604564, 183).
+    private static readonly Coordinate3D GoldenOriginCandidate = new(449675.7d, 4604564.3d, 183.9d);
 
     // A second, different candidate (still inside the golden clip region) that snaps to a different whole-number
-    // origin ([withheld], [withheld], 184), used only to prove ToSource reversibility does not depend on which origin
+    // origin (449674, 4604565, 184), used only to prove ToSource reversibility does not depend on which origin
     // was chosen.
-    private static readonly Coordinate3D AlternateOriginCandidate = new([withheld], [withheld], 184.1d);
+    private static readonly Coordinate3D AlternateOriginCandidate = new(449674.6d, 4604565.2d, 184.1d);
 
     [Fact]
     public async Task GoldenPipelineRendersBytesIdenticalToTheCommittedGoldenFiles()
@@ -252,15 +252,15 @@ public sealed class TerrainExportGoldenFileTests
     /// An irregular (non-regular) pentagon: a rectangle spanning roughly the grid's middle two-thirds, fractional-
     /// metre on every side so no edge passes through a cell centre (which sit only on whole-plus-one-half metre
     /// coordinates), with its southwest corner cut off by two more fractional-metre points. The uncut northeast
-    /// portion still reaches past the synthetic NODATA cell's centre ([withheld], [withheld]), so the region cuts
+    /// portion still reaches past the synthetic NODATA cell's centre (449676.5, 4604565.5), so the region cuts
     /// across that hole instead of excluding it outright; the cut southwest corner instead excludes the
-    /// ([withheld], [withheld]) cell's centre, so the clip is neither the whole grid nor a trivial single cell.
+    /// (449674.5, 4604563.5) cell's centre, so the clip is neither the whole grid nor a trivial single cell.
     /// </summary>
     private static PolygonalRegion BuildGoldenClipPentagon(HorizontalReference reference)
     {
         Geometry geometry = ReadWkt(
-            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], " +
-            "[withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))");
+            "POLYGON ((449675.11 4604563.19, 449676.79 4604563.19, 449676.79 4604565.87, " +
+            "449674.24 4604565.87, 449674.24 4604564.02, 449675.11 4604563.19))");
         return PolygonalRegion.FromGeometry(geometry, reference);
     }
 
@@ -300,7 +300,7 @@ public sealed class TerrainExportGoldenFileTests
             GoldenSourceMetadata(), fixture.Transform.Definition, fixture.VerticalReference,
             new ReferenceOrigins(ReferenceOrigin.Operator, ReferenceOrigin.Operator), localFrame, clipResult.Grid, simplification);
 
-        return TerrainExportBundleRenderer.Render(payload, "ExampleSite-real-parcel");
+        return TerrainExportBundleRenderer.Render(payload, "example-site-real-parcel");
     }
 
     // ---- shared low-level helpers ----

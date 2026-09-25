@@ -20,7 +20,7 @@ namespace SolidGround.Tests;
 public sealed class OpenTopographyLiveTests
 {
     [Fact]
-    public async Task FetchesASmallRealAreaAroundTheExampleSiteLaneScenario()
+    public async Task FetchesASmallRealAreaAroundTheExampleSiteScenario()
     {
         string? liveFlag = Environment.GetEnvironmentVariable("SOLIDGROUND_OPENTOPOGRAPHY_LIVE");
         string? apiKey = Environment.GetEnvironmentVariable("OPENTOPOGRAPHY_API_KEY");
@@ -31,8 +31,8 @@ public sealed class OpenTopographyLiveTests
 
         using var httpClient = new HttpClient();
         var source = new OpenTopographyUsgs1mSource(httpClient, new EnvironmentOpenTopographyApiKeyProvider());
-        const double centerLatitude = [withheld];
-        const double centerLongitude = [withheld];
+        const double centerLatitude = 41.591194;
+        const double centerLongitude = -93.603806;
         const double delta = 0.0007;
         var request = new ElevationSourceRequest(new Wgs84BoundingBoxAoi(
             centerLongitude - delta,

@@ -133,8 +133,8 @@ public sealed class PolygonalRegionReprojectionTests
 
         // Self-consistent Forward-then-Inverse round trip only, bounded by the documented geographic
         // reversibility tolerance (see docs/architecture/coordinate-transformation-and-units.md); this never
-        // compares against the independently-authored example-site-synthetic-parcel.wkt fixture (which the
-        // fixtures' own README already warns is not expected to be a bit-for-bit reprojection of this one).
+        // compares against the separately-loaded example-site-synthetic-parcel.wkt fixture at all (see
+        // Fixtures/README.md for how that fixture relates to this one).
         IReadOnlyList<Coordinate2D> originalShell = parcel.Polygons.Single().Shell;
         IReadOnlyList<Coordinate2D> roundTrippedShell = roundTripped.Polygons.Single().Shell;
         Assert.Equal(originalShell.Count, roundTrippedShell.Count);

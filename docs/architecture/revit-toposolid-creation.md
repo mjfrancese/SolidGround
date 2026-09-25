@@ -250,7 +250,7 @@ planar. An early version of this design sourced the one constant `Z` from the re
 `Elevation` instead, which does not solve the problem: it reintroduces the identical failure one level
 removed, because `LocalOriginFactory`'s `Southwest`/`Centroid` origin computation hardcodes the origin's own
 elevation to `0d`, so under the shipped default local origin every retained sample's local `Z` is its full,
-un-rebased absolute source elevation (roughly 600 ft for the ExampleSite fixture), while `Level.Elevation` on a
+un-rebased absolute source elevation (hundreds of feet for the owner's reference parcel, as for any real terrain far from sea level), while `Level.Elevation` on a
 fresh or default project sits at or near `0` — the same hundreds-of-feet gap, with `Level.Elevation`
 substituted for a literal source-datum zero.
 
@@ -533,7 +533,7 @@ A `fetch`-mode settings file (not the shipped template) sets `"mode": "fetch"`, 
 populates `areaOfInterest.boundingBox` or `.radius` instead of `.parcel` — `process` is never read once
 `mode` is `"fetch"`, but a present-and-non-null `process` object is not itself rejected.
 
-### The live ExampleSite dependency on `OPENTOPOGRAPHY_API_KEY`
+### The live fetch-mode dependency on `OPENTOPOGRAPHY_API_KEY`
 
 `fetch` mode resolves the key through `SolidGround.Core.Sources.OpenTopography.EnvironmentOpenTopographyApiKeyProvider`
 — strictly `Environment.GetEnvironmentVariable("OPENTOPOGRAPHY_API_KEY")`, trimmed, empty-after-trim treated
@@ -740,7 +740,7 @@ serializer.
     "roundTripDelta": 0.0
   },
   "localOrigin": {
-    "sourceX": [withheld], "sourceY": [withheld], "sourceElevation": 183.10,
+    "sourceX": 449674.0, "sourceY": 4604563.0, "sourceElevation": 183.10,
     "horizontalReference": "PROJCS[...]",
     "verticalReference": { "datum": "NAVD88", "unit": "meter", "geoidModel": null }
   },
@@ -855,8 +855,8 @@ of this same Issue #16 commit, alongside the hook-wiring edit in the same file
 
 All three steps below run first in **`process` mode** against the committed
 `tests/SolidGround.Tests/Fixtures/example-site-synthetic.*` fixtures — offline, deterministic, no key needed. The
-live ExampleSite `fetch`-mode run is attempted once `OPENTOPOGRAPHY_API_KEY` is present in the Revit process
-environment (see "The live ExampleSite dependency" above); it is reported as the remaining acceptance item if
+live `fetch`-mode run is attempted once `OPENTOPOGRAPHY_API_KEY` is present in the Revit process
+environment (see "The live fetch-mode dependency" above); it is reported as the remaining acceptance item if
 still absent when this plan is executed, rather than skipped silently. A prepared, read-only-by-default
 harness already exists outside this repository for exactly this plan (scripts to launch/close Revit 2027,
 find and capture dialogs, click both WPF ribbon controls and native `TaskDialog` buttons, read
@@ -881,7 +881,7 @@ it is a separate, throwaway add-in — it never runs `CreateToposolidCommand`/`S
 Steps 5, 7, and 8a's "**Evidence.**" paragraphs below are accordingly filled in from that session
 (`EVIDENCE-PROBES.md`, outside this repository).
 
-Step 8b (the live ExampleSite fetch) and the shipped add-in's own end-to-end scenarios are now **fully
+Step 8b (the live fetch) and the shipped add-in's own end-to-end scenarios are now **fully
 settled**, including the live fetch's own server-side authorization, as of five 2026-09-21 sessions against
 `EVIDENCE-E2E.md` (also outside this repository). Run 1 built, hash-verified, and deployed the shipped `main`
 `c80af6a` build, then stopped before launching Revit 2027 at all, because a Revit 2026/pyRevit process was
@@ -1092,7 +1092,7 @@ was already respected (the ordinary case, since Preflight itself already enforce
 instead of blaming a setting that was not the cause. AGENTS.md's conservative ~15,000 application
 default is unchanged; this finding motivates the new Preflight guard, not a different default.
 
-### Step 8 — ExampleSite end to end, Option A/B probe, unit round trip (settles verification items 15, 16), plus the orphan check
+### Step 8 — end-to-end acquisition, Option A/B probe, unit round trip (settles verification items 15, 16), plus the orphan check
 
 Split to conserve OpenTopography's finite daily quota.
 
@@ -1257,9 +1257,9 @@ evidence plan's introduction above for that distinction.
 **8b — live acceptance (fetch mode, exactly one run).**
 
 1. Precondition: `OPENTOPOGRAPHY_API_KEY` visible to the **Revit.exe process itself** — see "The live
-   ExampleSite dependency on `OPENTOPOGRAPHY_API_KEY`" above.
-2. `settings.json`: `"mode": "fetch"`, an AOI centered on `[withheld], [withheld]` (the reference parcel), sized like
-   the existing synthetic parcel (approximately [withheld] sq ft), the creation strategy left at whatever 8a
+   fetch-mode dependency on `OPENTOPOGRAPHY_API_KEY`" above.
+2. `settings.json`: `"mode": "fetch"`, an AOI centered on (withheld) (the owner's reference parcel), sized like
+   the existing synthetic parcel (approximately (withheld) sq ft), the creation strategy left at whatever 8a
    settled.
 3. Run once. Confirm the full pipeline end to end: acquisition, clip, simplify, export bundle, boundary
    build, transaction, creation, post-create verification, commit, placement record, success dialog; and that
@@ -1336,8 +1336,8 @@ the created toposolid's bounding box was populated immediately after the real `d
 this design uses, not only in Step 8a's harder no-`Regenerate()` probe condition (see appendix item 6 below).
 The placement record (`exports\B\terrain.revit-placement.json`) recorded `elementId 317345`, `levelName
 "Level 1"`, `toposolidTypeName "Toposolid 1"`, `metersPerOutputUnit 0.3048006096012192`, `roundTripDelta 0`,
-`localOrigin.sourceX/Y [withheld]/[withheld]`, `constantZInternal 544.760498687664`, matching
-`cli-reference/REFERENCE.md` scenario B's independently computed Revit-internal-foot Z-min (`544.760499`) to
+`localOrigin.sourceX/Y` (withheld), `constantZInternal` (withheld), matching
+`cli-reference/REFERENCE.md` scenario B's independently computed Revit-internal-foot Z-min to
 under `2e-6` ft — well inside the requested 0.01 ft tolerance — and, since the two pipelines' export hashes
 are byte-identical (below), proof that the full X/Y/Z bounding box agrees to the same precision as the CSV;
 this was not independently re-measured through Revit's own UI, since no RevitLookup/API console is permitted
@@ -1374,7 +1374,7 @@ Toposolid" log line, and no new committed element:
 | # | Settings change | Headline | Detail | Notes |
 | --- | --- | --- | --- | --- |
 | D1 | `parcel.path` -> nonexistent file | SolidGround Preflight found a problem. | "Could not read '...\does-not-exist-parcel.geojson': Could not find file '...'." | |
-| D2 | `parcel.path` -> bow-tie polygon | **SolidGround could not acquire terrain data.** | "The parcel geometry is not a valid simple polygon: Self-intersection near ([withheld], [withheld])." | same self-intersection point as the CLI's own D2, but caught at the **Acquisition** stage here, not Doc Preflight — `AoiSettingsFactory.Build` does not itself validate polygon simplicity; that only runs once the clip region is built during acquisition |
+| D2 | `parcel.path` -> bow-tie polygon | **SolidGround could not acquire terrain data.** | "The parcel geometry is not a valid simple polygon: Self-intersection near (TODO — not yet re-verified against the renamed fixture)." | same self-intersection point as the CLI's own D2, but caught at the **Acquisition** stage here, not Doc Preflight — `AoiSettingsFactory.Build` does not itself validate polygon simplicity; that only runs once the clip region is built during acquisition. **Outstanding:** unlike every other row in this table, this row's own self-intersection coordinate has not been re-observed since the fixture rename to `example-site-synthetic-parcel.*` — the fixture rename left no committed bow-tie variant and the original value lived only in this session's external, non-repository evidence, so it cannot be reconstructed here. A future live Revit 2027 session must re-run this scenario against the renamed fixture (per the harness described above) and replace this placeholder with the real observed coordinate before this row is cited as verified evidence. |
 | D3 | `parcel.path` -> tiny polygon inside the NODATA hole | SolidGround could not acquire terrain data. | "The candidate set has no valid elevation: every cell handed to the simplifier is NODATA, and NODATA cells are excluded from export." | exact text match to the CLI's own D3 |
 | D4 | `parcel.path` -> polygon outside the grid | SolidGround could not acquire terrain data. | "The clip region covers no cell of the grid." | exact text match to the CLI's own D4 |
 | D5 | `pointBudget: 60000` | SolidGround Preflight found a problem. | "simplification.pointBudget must be between 1 and 50000 inclusive." | confirms the schema range is enforced independently of the machine's own `Revit.ini` value |
@@ -1427,8 +1427,8 @@ retained, no rollback dialog this time (`R4-D11-03-dialog-controls.txt`/`R4-D11-
 safely under the ~20,007-vertex silent cap D10 observed, since this time SolidGround's own decimation (not an
 undecimated 24912-point handoff) produced the supplied count.
 
-*Scenario E — live ExampleSite fetch (Run 3).* `settings.json` in `fetch` mode, radius AOI centered `[withheld],
-[withheld]`, `radiusMeters 30`, `pointBudget 15000`, Revit launched with `OPENTOPOGRAPHY_API_KEY` injected
+*Scenario E — live fetch (Run 3).* `settings.json` in `fetch` mode, radius AOI centered (withheld),
+`radiusMeters 30`, `pointBudget 15000`, Revit launched with `OPENTOPOGRAPHY_API_KEY` injected
 into its own process environment via `Start-Revit2027.ps1 -EnvironmentVariable`. The result dialog appeared
 essentially immediately (0 s on the first poll — the server responded fast enough that no perceptible Revit
 freeze occurred) (`R3-E-03-dialog-controls.txt`/`R3-E-04-dialog.png`):
@@ -1484,7 +1484,7 @@ launched Revit 2027 (deployed `main` `3831522`, `SolidGround.Revit.dll` SHA-256
 `D16F880FF5C742AA57471044EB7FC8321EBF233639185C653BF1C3A00CAC8846`, `SolidGround.Core.dll` SHA-256
 `D5D1BC58AC5068F9C602ED29EF2D887DDEF701362BCD138311E3849F8CB4B27D`, versioned folder
 `20260921-134414-d16f880f`, `-Verify` **OK**) with the re-entered key injected only into that process's own
-environment, and reran the identical Scenario E settings (radius AOI centered `[withheld], [withheld]`,
+environment, and reran the identical Scenario E settings (radius AOI centered (withheld),
 `radiusMeters 30`, `pointBudget 15000`). **The fetch succeeded on the first of two budgeted attempts** — no
 retry was needed. The result dialog was observed present between **t=13 s and t=17 s** of polling
 (`R5-A-03-poll-log.txt`), well inside the documented 300-second ceiling and not a perceptible multi-minute
@@ -1498,7 +1498,7 @@ stall:
 > ActiveProjectLocation, the project base point, the survey point, or site location during this run.
 
 The log recorded the redacted request line: `Fetch mode acquisition request (succeeded):
-'https://portal.opentopography.org/API/usgsdem?datasetName=USGS1m&south=[withheld]&north=[withheld]&west=[withheld]&east=[withheld]&outputFormat=AAIGrid&API_Key=REDACTED'.`
+'https://portal.opentopography.org/API/usgsdem?datasetName=USGS1m&south=(withheld)&north=(withheld)&west=(withheld)&east=(withheld)&outputFormat=AAIGrid&API_Key=REDACTED'.`
 Horizontal reference `EPSG:26915` (NAD83 / UTM zone 15N) was resolved from the GeoTIFF GeoKeys of the paired
 metadata request, matching the CLI recheck's own value; vertical reference `NAVD88` (meters) was declared
 from dataset documentation, per AGENTS.md, since neither OpenTopography response carries one. One toposolid
@@ -1508,7 +1508,7 @@ Toposolid'`; `PostCreationVerification` passed implicitly (no rollback dialog); 
 placement record were both written; and Undo was confirmed enabled afterward. A seven-file secret-absence
 check (`.Contains(realKeyValue)` against the main log, the placement record, the export solidground.json,
 the export points CSV, the settings copy, the live ProgramData settings.json, and the newest journal)
-returned `False` for every file. **The live ExampleSite
+returned `False` for every file. **The live OpenTopography
 fetch that successfully creates a toposolid is therefore no longer pending** — all five of Issue #15's
 acceptance items now have direct 2026-09-21 evidence; see "Decisions recorded from evidence" and "What this
 note does not do" below.
@@ -1580,11 +1580,11 @@ note does not do" below.
   fallback to a coarser dataset — is confirmed. Run 5, with the owner's re-entered key (confirmed known-good
   first by an independent CLI recheck), succeeded outright on the identical AOI and settings: element id
   317345, 2810 of 2810 points retained, `EPSG:26915`/`NAVD88` references, and the redacted
-  `API_Key=REDACTED` request line logged. A full live ExampleSite creation is therefore confirmed too. See
+  `API_Key=REDACTED` request line logged. A full live creation is therefore confirmed too. See
   Step 8b above.
 - **Nothing still pending.** Every item the Manual evidence plan tracked — Steps 5, 7, 8a, and 8b's
   own Scenarios A-E — now carries real evidence from either the 2026-09-21 probe session or the 2026-09-21
-  end-to-end sessions (Runs 3-5), including the live OpenTopography ExampleSite fetch that successfully creates
+  end-to-end sessions (Runs 3-5), including the live OpenTopography fetch that successfully creates
   a toposolid (Run 5: element id 317345, 2810 of 2810 points retained).
 
 ## Revit API members used
@@ -1815,7 +1815,7 @@ entries and part of the "Decisions recorded from evidence" subsection from a rea
 a first end-to-end deploy session; a second 2026-09-21 documentation pass filled in Step 8b's
 own "Evidence" entry, the rest of "Decisions recorded from evidence," and the appendix items it settles, from
 two further end-to-end sessions (Run 3 on `c80af6a`, Run 4 on `796a6a5`); a third 2026-09-21 documentation
-pass (this update) recorded Run 5's live ExampleSite fetch on `main` `3831522`, the one item Step 8b's evidence
+pass (this update) recorded Run 5's live fetch on `main` `3831522`, the one item Step 8b's evidence
 had left open — none of which this note performed itself. It does not begin Issue #16 (Extensible Storage
 provenance; the extension point above is the only
 thing Issue #15 leaves for it to change), Issue #17 (signing, packaging, or a clean-install validation), or
@@ -1831,7 +1831,7 @@ one entry (Scenario B/B4/C); **(3)** the `Revit.ini` point-budget guard and its 
 backstop both work as designed, pre-emptively and after the fact (D10 vs. D10-guard vs. D11); **(4)** an
 acquisition or authorization failure is surfaced accurately, with the key redacted everywhere, and never
 silently downgraded to a coarser dataset (Run 3's Scenario E, D2-D4); and **(5)** a complete live
-OpenTopography ExampleSite fetch successfully creates a toposolid — Run 5's Scenario E, with a re-entered key:
+OpenTopography fetch successfully creates a toposolid — Run 5's Scenario E, with a re-entered key:
 element id 317345, Level 1, Toposolid 1, 2810 of 2810 points retained, `EPSG:26915`/`NAVD88` references, the
 redacted request line logged, and the key confirmed absent from the log, placement record, export files,
 settings copy, and journal. Issue #16 step 9 (attaching Extensible Storage provenance to a created toposolid)

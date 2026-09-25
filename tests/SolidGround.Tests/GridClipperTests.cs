@@ -343,14 +343,14 @@ public sealed class GridClipperTests
     }
 
     [Fact]
-    public void TheExampleSiteSizeSyntheticRectangleRetainsTheExpectedCellCountAndABufferGrowsIt()
+    public void ASyntheticRectangleRetainsTheExpectedCellCountAndABufferGrowsIt()
     {
-        // A ~[withheld] m^2 ([withheld] sq ft) rectangle, the same footprint as the [withheld] fixture, placed within a
-        // 60x60 1 m synthetic grid.
-        const double minX = 15d;
-        const double maxX = 45d;
-        const double minY = 7.554625536d;
-        const double maxY = 52.445374464d;
+        // A 2,000 m^2 (40 m by 50 m) illustrative rectangle -- deliberately not the size of any real
+        // parcel -- placed within a 60x60 1 m synthetic grid.
+        const double minX = 10d;
+        const double maxX = 50d;
+        const double minY = 5d;
+        const double maxY = 55d;
         ElevationGrid grid = UniformGrid(rowCount: 60, columnCount: 60, elevation: 100d, rowOrder: GridRowOrder.SouthToNorth);
         ClipRegion region = SquareClipRegion(minX, minY, maxX, maxY);
         ClipRegion bufferedRegion = SquareClipRegion(minX, minY, maxX, maxY, buffer: LinearDistance.Meters(3d));
@@ -358,11 +358,11 @@ public sealed class GridClipperTests
         GridClipResult result = GridClipper.Clip(grid, region, new GridClipOptions { CropToRegionEnvelope = false });
         GridClipResult bufferedResult = GridClipper.Clip(grid, bufferedRegion, new GridClipOptions { CropToRegionEnvelope = false });
 
-        Assert.InRange(result.IncludedCellCount, 1300, 1400);
+        Assert.InRange(result.IncludedCellCount, 1950, 2050);
         Assert.True(
             bufferedResult.IncludedCellCount > result.IncludedCellCount,
             "A 3 m buffer must retain strictly more cells than the unbuffered rectangle.");
-        Assert.InRange(bufferedResult.IncludedCellCount, 1650, 1950);
+        Assert.InRange(bufferedResult.IncludedCellCount, 2450, 2700);
     }
 
     private static HashSet<(int Row, int Column)> IncludedCells(GridClipResult result)

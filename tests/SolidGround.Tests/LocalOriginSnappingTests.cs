@@ -27,22 +27,22 @@ public sealed class LocalOriginSnappingTests
     [Fact]
     public void SnapToWholeSourceUnitFloorsEachAxisIndependently()
     {
-        Coordinate3D candidate = new([withheld], [withheld], 183.99);
+        Coordinate3D candidate = new(449674.6, 4604563.9, 183.99);
 
         Coordinate3D snapped = LocalOriginSnapping.SnapToWholeSourceUnit(candidate, ProjectedReference(), VerticalReference());
 
-        Assert.Equal([withheld], snapped.X);
-        Assert.Equal([withheld], snapped.Y);
+        Assert.Equal(449674d, snapped.X);
+        Assert.Equal(4604563d, snapped.Y);
         Assert.Equal(183d, snapped.Elevation);
     }
 
     [Fact]
     public void SnapToWholeSourceUnitProducesAnIntegerValuedDoubleInMetres()
     {
-        // Deliberately near a whole-number boundary ([withheld], one part in 1e10 below [withheld]) to prove
+        // Deliberately near a whole-number boundary (449999.9999999, one part in 1e10 below 450000) to prove
         // the snapped result is genuinely an exact whole number in the projected reference's own metres, not
         // merely "close to one" with a residual floating-point fraction.
-        Coordinate3D candidate = new([withheld], [withheld], 183.5);
+        Coordinate3D candidate = new(449999.9999999, 4604563.00000001, 183.5);
 
         Coordinate3D snapped = LocalOriginSnapping.SnapToWholeSourceUnit(candidate, ProjectedReference(), VerticalReference());
 
@@ -52,8 +52,8 @@ public sealed class LocalOriginSnappingTests
     }
 
     [Theory]
-    [InlineData([withheld], [withheld], 183.99)]
-    [InlineData([withheld], [withheld], 183d)]
+    [InlineData(449674.6, 4604563.9, 183.99)]
+    [InlineData(449674d, 4604563d, 183d)]
     [InlineData(-10.25, -20.75, -5.5)]
     public void SnapToWholeSourceUnitNeverMovesPastTheCandidateOnAnyAxis(double x, double y, double elevation)
     {
@@ -69,7 +69,7 @@ public sealed class LocalOriginSnappingTests
     [Fact]
     public void SnapToWholeSourceUnitIsIdempotent()
     {
-        Coordinate3D candidate = new([withheld], [withheld], 183.99);
+        Coordinate3D candidate = new(449674.6, 4604563.9, 183.99);
         Coordinate3D snappedOnce = LocalOriginSnapping.SnapToWholeSourceUnit(candidate, ProjectedReference(), VerticalReference());
 
         Coordinate3D snappedTwice = LocalOriginSnapping.SnapToWholeSourceUnit(snappedOnce, ProjectedReference(), VerticalReference());
@@ -80,10 +80,10 @@ public sealed class LocalOriginSnappingTests
     [Fact]
     public void SnappedOriginFeedsLocalCoordinateFrameForABitExactRoundTrip()
     {
-        Coordinate3D candidate = new([withheld], [withheld], 183.99);
+        Coordinate3D candidate = new(449674.6, 4604563.9, 183.99);
         Coordinate3D snappedOrigin = LocalOriginSnapping.SnapToWholeSourceUnit(candidate, ProjectedReference(), VerticalReference());
         LocalCoordinateFrame frame = new(snappedOrigin, ProjectedReference(), VerticalReference(), LengthUnit.UsSurveyFoot);
-        Coordinate3D source = new([withheld], [withheld], 190d);
+        Coordinate3D source = new(449727d, 4604638d, 190d);
 
         LocalCoordinate local = frame.ToLocal(source);
         Coordinate3D roundTripped = frame.ToSource(local);

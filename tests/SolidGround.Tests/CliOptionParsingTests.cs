@@ -55,7 +55,7 @@ public sealed class CliOptionParsingTests
     [InlineData("abc")]
     public async Task OutOfRangeTimeoutExitsWithUsageError(string timeout) =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["fetch", "--bbox", "[withheld],[withheld],[withheld],[withheld]", "--output", dir, "--timeout", timeout],
+            dir => ["fetch", "--bbox", "-93.6045,41.5906,-93.6031,41.5917", "--output", dir, "--timeout", timeout],
             "--timeout",
             TestContext.Current.CancellationToken);
 
@@ -94,7 +94,7 @@ public sealed class CliOptionParsingTests
     [Fact]
     public async Task CenterWithoutRadiusExitsWithUsageError() =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["process", "--asc", "dummy.asc", "--output", dir, "--center", "38.7,[withheld]"], "--center", TestContext.Current.CancellationToken);
+            dir => ["process", "--asc", "dummy.asc", "--output", dir, "--center", "41.59,-93.60"], "--center", TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task RadiusWithoutCenterExitsWithUsageError() =>
@@ -104,14 +104,14 @@ public sealed class CliOptionParsingTests
     [Fact]
     public async Task BboxTogetherWithParcelExitsWithUsageError() =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["process", "--asc", "dummy.asc", "--output", dir, "--bbox", "-90.5,38.5,[withheld],38.6", "--parcel", "lot.geojson"],
+            dir => ["process", "--asc", "dummy.asc", "--output", dir, "--bbox", "-93.7,41.5,-93.6,41.6", "--parcel", "lot.geojson"],
             "--bbox",
             TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task BufferTogetherWithBboxExitsWithUsageError() =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["process", "--asc", "dummy.asc", "--output", dir, "--bbox", "-90.5,38.5,[withheld],38.6", "--buffer", "5"],
+            dir => ["process", "--asc", "dummy.asc", "--output", dir, "--bbox", "-93.7,41.5,-93.6,41.6", "--buffer", "5"],
             "--buffer",
             TestContext.Current.CancellationToken);
 
@@ -145,21 +145,21 @@ public sealed class CliOptionParsingTests
     [Fact]
     public async Task RunRejectsVerticalDatumAsAProcessOnlyOption() =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["run", "--bbox", "-90.5,38.5,[withheld],38.6", "--output", dir, "--vertical-datum", "NAVD88"],
+            dir => ["run", "--bbox", "-93.7,41.5,-93.6,41.6", "--output", dir, "--vertical-datum", "NAVD88"],
             "--vertical-datum",
             TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task RunRejectsSourceNameAsAProcessOnlyOption() =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["run", "--bbox", "-90.5,38.5,[withheld],38.6", "--output", dir, "--source-name", "Foo"],
+            dir => ["run", "--bbox", "-93.7,41.5,-93.6,41.6", "--output", dir, "--source-name", "Foo"],
             "--source-name",
             TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task FetchRejectsUnitAsAProcessOnlyOption() =>
         await AssertUsageErrorAndNoOutputFilesAsync(
-            dir => ["fetch", "--bbox", "-90.5,38.5,[withheld],38.6", "--output", dir, "--unit", "meter"], "--unit", TestContext.Current.CancellationToken);
+            dir => ["fetch", "--bbox", "-93.7,41.5,-93.6,41.6", "--output", dir, "--unit", "meter"], "--unit", TestContext.Current.CancellationToken);
 
     // ---- collection period ---------------------------------------------------------------------------------
 

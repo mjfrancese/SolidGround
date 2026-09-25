@@ -67,7 +67,7 @@ public sealed class CliCancellationTests
             CliHost host = new(name => name == "OPENTOPOGRAPHY_API_KEY" ? "fixture-fake-key-0123456789" : null, () => handler, stdout, stderr);
 
             int exitCode = await CliApplication.RunAsync(
-                ["fetch", "--bbox", "[withheld],[withheld],[withheld],[withheld]", "--output", tempDirectory.FullName],
+                ["fetch", "--bbox", "-93.6045,41.5906,-93.6031,41.5917", "--output", tempDirectory.FullName],
                 host,
                 cts.Token);
 
@@ -100,7 +100,7 @@ public sealed class CliCancellationTests
             cts.Cancel();
 
             int exitCode = await CliApplication.RunAsync(
-                ["run", "--bbox", "[withheld],[withheld],[withheld],[withheld]", "--output", tempDirectory.FullName],
+                ["run", "--bbox", "-93.6045,41.5906,-93.6031,41.5917", "--output", tempDirectory.FullName],
                 host,
                 cts.Token);
 

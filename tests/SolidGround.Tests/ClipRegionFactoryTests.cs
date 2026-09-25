@@ -16,8 +16,8 @@ namespace SolidGround.Tests;
 /// </summary>
 public sealed class ClipRegionFactoryTests
 {
-    private const double Latitude = [withheld]d;
-    private const double Longitude = [withheld]d;
+    private const double Latitude = 41.591194d;
+    private const double Longitude = -93.603806d;
 
     [Fact]
     public void BuildFetchEnvelopeForABoundingBoxAreaOfInterestAppliesTheMinimumSideExpansion()
@@ -51,7 +51,7 @@ public sealed class ClipRegionFactoryTests
     public void BuildForARadiusAreaOfInterestProducesACircleInTheGridReference()
     {
         IHorizontalCoordinateTransform transform = LoadExampleSiteTransform();
-        Coordinate2D center = transform.Inverse(new Coordinate2D([withheld], [withheld]));
+        Coordinate2D center = transform.Inverse(new Coordinate2D(449675.5d, 4604564.5d));
         Wgs84RadiusAoi radius = new(center.Y, center.X, LinearDistance.Meters(2d));
 
         ClipRegion region = ClipRegionFactory.Build(radius, transform);
@@ -103,17 +103,17 @@ public sealed class ClipRegionFactoryTests
     }
 
     /// <summary>
-    /// A small rectangle (in the grid's own 3x3, 1 m cellsize ExampleSite fixture) covering the whole grid's
+    /// A small rectangle (in the grid's own 3x3, 1 m cellsize example-site fixture) covering the whole grid's
     /// cell-corner envelope, built by inverse-transforming its four UTM corners into WGS 84 through
     /// <paramref name="transform"/> -- so it is guaranteed to land exactly on the grid this fixture describes,
     /// with no hand-picked geographic coordinates to keep in sync with the fixture file.
     /// </summary>
     private static string ExampleSiteParcelWkt(IHorizontalCoordinateTransform transform)
     {
-        Coordinate2D sw = transform.Inverse(new Coordinate2D([withheld], [withheld]));
-        Coordinate2D se = transform.Inverse(new Coordinate2D([withheld], [withheld]));
-        Coordinate2D ne = transform.Inverse(new Coordinate2D([withheld], [withheld]));
-        Coordinate2D nw = transform.Inverse(new Coordinate2D([withheld], [withheld]));
+        Coordinate2D sw = transform.Inverse(new Coordinate2D(449674d, 4604563d));
+        Coordinate2D se = transform.Inverse(new Coordinate2D(449677d, 4604563d));
+        Coordinate2D ne = transform.Inverse(new Coordinate2D(449677d, 4604566d));
+        Coordinate2D nw = transform.Inverse(new Coordinate2D(449674d, 4604566d));
         return FormattableString.Invariant(
             $"POLYGON (({sw.X} {sw.Y}, {se.X} {se.Y}, {ne.X} {ne.Y}, {nw.X} {nw.Y}, {sw.X} {sw.Y}))");
     }

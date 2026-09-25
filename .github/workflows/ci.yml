@@ -26,7 +26,7 @@ jobs:
       DOTNET_NOLOGO: "1"
 
     steps:
-      - name: Assert trusted the infrastructure project routing
+      - name: Assert trusted runner routing
         shell: bash
         run: |
           set -euo pipefail
@@ -48,7 +48,7 @@ jobs:
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        # The infrastructure project runner pod is unprivileged, so the SDK must install under the runner's writable temp directory instead of /usr/share/dotnet.
+        # The self-hosted runner pod is unprivileged, so the SDK must install under the runner's writable temp directory instead of /usr/share/dotnet.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:

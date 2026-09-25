@@ -78,7 +78,7 @@ public static class ExtensibleStorageProvenanceSchema
     public const int CurrentVersion = 1;
 
     /// <summary>
-    /// The schema's own name, underscores only and no punctuation: the owner's other add-in's own <c>SchemaBuilder.SetSchemaName</c>
+    /// The schema's own name, underscores only and no punctuation: the owner's other add-in's <c>SchemaBuilder.SetSchemaName</c>
     /// call sites never pass a dotted name, and no source states <c>AcceptableName</c>'s exact rule, so a
     /// dotted display name is avoided here as a real rejection risk (design record §2's "Schema-name rationale").
     /// </summary>

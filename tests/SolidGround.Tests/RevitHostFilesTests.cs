@@ -13,7 +13,7 @@ namespace SolidGround.Tests;
 /// mechanics, both restore lock files, the solution file, the two ribbon icons, and the CI
 /// workflow's trigger surface. These tests read plain text, XML, JSON, and raw PNG header bytes only;
 /// they never load <c>SolidGround.Revit.dll</c>, never reference <c>SolidGround.Revit</c> from this test
-/// project, and never require Revit, so they run unmodified on the Linux solidground-pve2 CI runner.
+/// project, and never require Revit, so they run unmodified on the Linux self-hosted CI runner.
 /// </summary>
 public sealed class RevitHostFilesTests
 {
@@ -223,7 +223,7 @@ public sealed class RevitHostFilesTests
 
         // Path.IsPathRooted disagrees with itself across platforms (a Windows drive-letter or
         // backslash-rooted path is not "rooted" by Unix's own rules), and this suite also runs on the
-        // Linux solidground-pve2 CI runner, so a plain string check is used instead of that BCL method.
+        // Linux self-hosted CI runner, so a plain string check is used instead of that BCL method.
         Assert.False(include.StartsWith('/') || include.StartsWith('\\'), $"EmbeddedResource Include '{include}' must be relative, not rooted.");
         Assert.False(Regex.IsMatch(include, "^[A-Za-z]:"), $"EmbeddedResource Include '{include}' must not contain a drive letter.");
         Assert.Equal($@"Resources\{fileName}", include);
@@ -535,8 +535,8 @@ public sealed class RevitHostFilesTests
     // (j) SolidGround Issue #15's 2026-09-21 redacted-request-URI logging addendum
     // ------------------------------------------------------------------------------------------------
     //
-    // Same kind of falsifiable, plain-text regression backstop as (i) above. The live ExampleSite HTTP 401
-    // diagnosis (docs/architecture/revit-toposolid-creation.md's Manual evidence plan, Step 8b) found the
+    // Same kind of falsifiable, plain-text regression backstop as (i) above. A live HTTP 401
+    // diagnosis session (docs/architecture/revit-toposolid-creation.md's Manual evidence plan, Step 8b) found the
     // add-in's fetch-mode log never recorded which request an acquisition failure belonged to -- and neither
     // did the CLI's own --verbose FetchCommand output, whose "request '<uri>'." line only prints after a
     // successful acquisition (FetchCommand.PrintAcquisitionEvidence; CliApplication's top-level catch clauses

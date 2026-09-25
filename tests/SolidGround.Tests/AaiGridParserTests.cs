@@ -104,8 +104,8 @@ public sealed class AaiGridParserTests
         Assert.Equal(3, grid.RowCount);
         Assert.Equal(184.20d, grid.GetElevation(0, 0));
         Assert.Null(grid.GetElevation(0, 2));
-        Assert.Equal(new Core.Geometry.Coordinate2D([withheld], [withheld]), grid.GetCellCenter(0, 0));
-        Assert.Equal(new Core.Geometry.Coordinate2D([withheld], [withheld]), grid.GetCellCenter(2, 0));
+        Assert.Equal(new Core.Geometry.Coordinate2D(449674.5d, 4604565.5d), grid.GetCellCenter(0, 0));
+        Assert.Equal(new Core.Geometry.Coordinate2D(449674.5d, 4604563.5d), grid.GetCellCenter(2, 0));
     }
 
     [Fact]

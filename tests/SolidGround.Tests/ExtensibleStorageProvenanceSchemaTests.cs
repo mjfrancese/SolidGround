@@ -82,8 +82,8 @@ public sealed class ExtensibleStorageProvenanceSchemaTests
     [Fact]
     public void SchemaNameContainsNoPunctuationRevitMightReject()
     {
-        // the owner's other add-in's own SchemaBuilder.SetSchemaName call sites never pass a dotted name; no source states
-        // AcceptableName's exact rule, so this locks the underscores-only convention design record §2 chose
+        // A related internal project's own SchemaBuilder.SetSchemaName call sites never pass a dotted name;
+        // no source states AcceptableName's exact rule, so this locks the underscores-only convention design record §2 chose
         // instead of the dotted display name a losing proposal used.
         //
         // The exact-literal assertion below also guards the character loop itself: an empty or all-whitespace

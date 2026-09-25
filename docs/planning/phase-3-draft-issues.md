@@ -24,15 +24,15 @@ Per decision 13, the "Proposed AGENTS.md amendment" section below was a proposal
 ## Owner decisions (2026-09-21, final)
 
 1. **Geocoder default.** Census Bureau Geocoder, keyless, default. Geocodio and Esri `forStorage=true` are keyed opt-ins (`GEOCODIO_API_KEY`, `ARCGIS_API_KEY`), off unless set.
-2. **Parcels.** A pluggable `IParcelBoundarySource` with a per-county registry keyed by Census GEOID; the area County's `AGS_Parcels` is the first entry. Never the county's Esri geocode proxy; never auto-wire Nominatim.
-3. **Commercial parcel slot.** Not a keyed API: a vendor-neutral local parcel-file source reads a user-purchased county file from disk, GeoJSON first. The Regrid Data Store the area County Standard Schema purchase ($300 one-time, one-year term, internal-tools use) is the reference purchase; Regrid's live API, ATTOM, LightBox, Cotality, Living Atlas, and ReportAll all fail on self-serve storage, derivation, or price terms (PH3-2/PH3-8). Models/exports stay internal, but third-party terms are still recorded.
-4. **Regrid trial.** A trial token authenticated but is fixed to seven non-the area counties, so it cannot exercise the ExampleSite fixture; a trial-county query confirmed the Standard schema's field shape (PH3-2).
+2. **Parcels.** A pluggable `IParcelBoundarySource` with a per-county registry keyed by Census GEOID; the researched county's `AGS_Parcels` is the first entry. Never the county's Esri geocode proxy; never auto-wire Nominatim.
+3. **Commercial parcel slot.** Not a keyed API: a vendor-neutral local parcel-file source reads a user-purchased county file from disk, GeoJSON first. The Regrid Data Store Standard Schema purchase for the researched county ($300 one-time, one-year term, internal-tools use) is the reference purchase; Regrid's live API, ATTOM, LightBox, Cotality, Living Atlas, and ReportAll all fail on self-serve storage, derivation, or price terms (PH3-2/PH3-8). Models/exports stay internal, but third-party terms are still recorded.
+4. **Regrid trial.** A trial token authenticated but is fixed to seven counties outside the researched state, so it cannot exercise the example-site fixture; a trial-county query confirmed the Standard schema's field shape (PH3-2).
 5. **Boundary in Revit.** `PropertyLine.Create(Document, IList<CurveLoop>)` in the same transaction as the toposolid.
 6. **Shared coordinates.** An explicit dialog option, default off; Preflight refuses to write when the model already has shared coordinates set.
 7. **Provenance.** `TerrainProvenance` moves to schema v3 with an optional address/parcel record; Issue #16's Extensible Storage entity gains matching fields in its own later schema version.
 8. **AOI plumbing.** Resolves into today's parcel GeoJSON/WKT AOI shape; no new `AreaOfInterestKind`.
 9. **Dialog.** The full content model ships in the first milestone.
-10. **Fixture.** A stripped the reference parcel/[withheld] parcel from the county's open layer may be committed, carrying the county's no-warranty notice verbatim, after a fixture-security test passes.
+10. **Fixture.** A stripped example-site parcel from the researched county's open layer may be committed, carrying the county's no-warranty notice verbatim, after a fixture-security test passes.
 11. **MVVM.** Adopt `CommunityToolkit.Mvvm` 8.4.2 now; the dialog stays pure code-behind, no XAML/BAML; `UseWPF` turns on there.
 12. **Redaction.** Extract a shared, provider-agnostic HTTP redaction/key-resolution helper into Core as its own issue (PH3-0), before the geocoder issue.
 13. **Process.** The research note is documentation; this file is the record of the issues as created; Phase 3 implementation still needs its own explicit task; the AGENTS.md sentence below is proposed, never applied.
@@ -61,9 +61,9 @@ Let an operator enter a street address, choose among geocode and parcel candidat
 ### Acceptance criteria
 
 - [ ] Every child issue closes with citations against current provider/API documentation, matching Phase 2's evidence standard.
-- [ ] The reference parcel fixture resolves end-to-end: address -> geocoded point -> matched parcel -> Toposolid + PropertyLine created in Revit 2027, reproducible offline through the CLI.
+- [ ] The example-site fixture resolves end-to-end: address -> geocoded point -> matched parcel -> Toposolid + PropertyLine created in Revit 2027, reproducible offline through the CLI.
 - [ ] Every shipped source's license/attribution obligation is documented and, where required, shown in the dialog and stored in provenance, including the Regrid purchase's one-year term.
-- [ ] No AGENTS.md text changes except through a separate owner-accepted amendment (PH3-7); the owner accepts the Revit 2027 end-to-end result for at least one real the area County address.
+- [ ] No AGENTS.md text changes except through a separate owner-accepted amendment (PH3-7); the owner accepts the Revit 2027 end-to-end result for at least one real address.
 
 ### Relationships
 
@@ -134,7 +134,7 @@ Turn a street address into WGS84 coordinates through a pluggable Core abstractio
 
 ### Acceptance criteria
 
-- [ ] `GeocodeAsync` returns ranked candidates with coordinates, matched address, and attribution for the reference parcel fixture, for Census; Geocodio and Esri each pass an equivalent contract test under `FakeHttpMessageHandler`.
+- [ ] `GeocodeAsync` returns ranked candidates with coordinates, matched address, and attribution for the example-site fixture, for Census; Geocodio and Esri each pass an equivalent contract test under `FakeHttpMessageHandler`.
 - [ ] Selecting Geocodio or Esri without its key set produces a caught, actionable error before any HTTP call; Census needs no key end to end.
 - [ ] All three redact query strings and resolve keys only through PH3-0's helper; none duplicates its own redaction logic.
 - [ ] Default runs make no live network call; an opt-in live test needs a flag plus a key for keyed providers, and skips rather than fails without one.
@@ -160,18 +160,18 @@ Repository contract: [AGENTS.md](https://github.com/mjfrancese/SolidGround/blob/
 
 ### Outcome
 
-Obtain a parcel's boundary and identifying attributes through a pluggable Core abstraction with two implementations: a per-county REST registry keyed by GEOID (the area County's `AGS_Parcels` as the first entry), and a vendor-neutral local parcel-file reader for a user-purchased export, with the Regrid Data Store purchase as the reference purchase (decisions 2-4, 10).
+Obtain a parcel's boundary and identifying attributes through a pluggable Core abstraction with two implementations: a per-county REST registry keyed by GEOID (the researched county's `AGS_Parcels` as the first entry), and a vendor-neutral local parcel-file reader for a user-purchased export, with the Regrid Data Store purchase as the reference purchase (decisions 2-4, 10).
 
 ### Scope
 
 - New `IParcelBoundarySource` interface in `SolidGround.Core`, mirroring `IElevationSource`.
-- **County registry**: keyed by the Census Geocoder's `returntype=geographies` GEOID (the area County = `[withheld]`), supplied by the caller so this source stays independently testable of PH3-1, against a small registry (base URL, layer index, field map) with `AGS_Parcels` `MapServer/0` as the first entry, queryable by point-in-polygon and `PROP_ADD` substring. Surface `SUBDIVISION`, `LOTNUM`, `LOCATOR`, acreage, `LEGAL`; label `DEEDBKPG`/`ASRBKPG` as unconfirmed book/page proxies (no literal plat-book field exists here). An unregistered county is an actionable error, never silent-empty. Never the county's Esri geocode proxy or Nominatim (PH3-1).
-- **Local parcel-file source** (the commercial slot, not a keyed API): reads a user-purchased county file from a configured disk path, no network call, GeoJSON-only unless a reader already in the dependency set (NetTopologySuite/ProjNet) parses GeoPackage/Shapefile without a new package. Field map targets Regrid's Standard schema (`parcelnumb`, `address`, `legaldesc`, `subdivision`, `zoning`, `ll_gisacre`, `ll_uuid` — all confirmed present in the 2026-09-21 Dallas County trial response; `lot`/`block`/`plat`/`book`/`page` are documented in Regrid's schema reference but were not returned for that parcel and must be treated as optional/nullable); owner/mailing fields and `enhanced_ownership` are read only to be dropped. Reference purchase: Regrid's Data Store, the area County Standard Schema, $300 one-time, distinct from Regrid's restrictive live-API terms (details in PH3-8).
+- **County registry**: keyed by the Census Geocoder's `returntype=geographies` GEOID (the researched county's own GEOID), supplied by the caller so this source stays independently testable of PH3-1, against a small registry (base URL, layer index, field map) with `AGS_Parcels` `MapServer/0` as the first entry, queryable by point-in-polygon and `PROP_ADD` substring. Surface `SUBDIVISION`, `LOTNUM`, `LOCATOR`, acreage, `LEGAL`; label `DEEDBKPG`/`ASRBKPG` as unconfirmed book/page proxies (no literal plat-book field exists here). An unregistered county is an actionable error, never silent-empty. Never the county's Esri geocode proxy or Nominatim (PH3-1).
+- **Local parcel-file source** (the commercial slot, not a keyed API): reads a user-purchased county file from a configured disk path, no network call, GeoJSON-only unless a reader already in the dependency set (NetTopologySuite/ProjNet) parses GeoPackage/Shapefile without a new package. Field map targets Regrid's Standard schema (`parcelnumb`, `address`, `legaldesc`, `subdivision`, `zoning`, `ll_gisacre`, `ll_uuid` — all confirmed present in the 2026-09-21 Dallas County trial response; `lot`/`block`/`plat`/`book`/`page` are documented in Regrid's schema reference but were not returned for that parcel and must be treated as optional/nullable); owner/mailing fields and `enhanced_ownership` are read only to be dropped. Reference purchase: Regrid's Data Store, the researched county's Standard Schema, $300 one-time, distinct from Regrid's restrictive live-API terms (details in PH3-8).
 - Label every returned boundary a cadastral/assessor tax-map representation, not a survey.
 
 ### Acceptance criteria
 
-- [ ] `FindAsync` resolves the reference parcel/[withheld] parcel by point and by address against a committed offline fixture, area matching ~[withheld] sq ft within tolerance.
+- [ ] `FindAsync` resolves the example-site parcel by point and by address against a committed offline fixture, area matching ~17,222 sq ft within tolerance.
 - [ ] A fixture-security test asserting the absence of `OWNER_NAME`, `OWN_ADD`, `OWN_CITY`, `OWN_STATE`, `OWN_ZIP`, `CAREOF`, and any other owner field passes before the fixture is committed; the fixture carries the county's no-warranty notice verbatim.
 - [ ] The local-file source's tests use a synthetic, fabricated fixture shaped like Regrid's schema, never real purchased data, since the licence restricts use to internal tools.
 - [ ] A documented registry format lets a second county be added without an interface change; no commercial vendor's live-API data is a fixture or reachable by default, and the local-file source never calls the network.
@@ -238,7 +238,7 @@ Replace today's file/settings-only AOI input with one modal, code-behind-only WP
 
 ### Scope
 
-- One modal `SolidGroundDialog`, zero `.xaml`/BAML files — avoiding the confirmed isolated-context XAML double-load bug (Nice3point/RevitToolkit#7, dotnet/wpf#1700, both open) — matching the owner's other add-in; UI is built in code, so "code-behind only" means no markup, not no MVVM helpers.
+- One modal `SolidGroundDialog`, zero `.xaml`/BAML files — avoiding the confirmed isolated-context XAML double-load bug (Nice3point/RevitToolkit#7, dotnet/wpf#1700, both open) — matching a pattern already used in the owner's other Revit add-in; UI is built in code, so "code-behind only" means no markup, not no MVVM helpers.
 - Add `CommunityToolkit.Mvvm` `8.4.2` (exact-pinned, MIT, 2026-03-25) as an unconditional `PackageReference` in `SolidGround.Revit.csproj` only, never `Core`; its `net8.0` asset under `net10.0-windows` adds zero transitive dependencies, no native code. Both lock files gain the entry.
 - Sections, in order: address entry -> geocode candidates -> parcel candidates with legal-description preview -> AOI buffer -> point budget (`Revit.ini` guard warning) -> unit choice (the two AGENTS.md foot definitions) -> level/toposolid-type -> a shared-coordinates opt-in checkbox, default off (PH3-3) -> provenance/accuracy preview -> Preflight summary with Create/Cancel.
 - Owned via `WindowInteropHelper` against `commandData.Application.MainWindowHandle`; shown from inside `CreateToposolidCommand.Execute`, before today's Preflight/transaction — no new command or ribbon entry (PH3-7). Any network call runs through the existing synchronous `Task.Run(...).GetAwaiter().GetResult()` bridge; no Revit API off the Revit thread. Read `UIThemeManager.CurrentTheme` once at construction; defer `ThemeChanged` (modal only).
@@ -391,9 +391,7 @@ Document the attribution/license text Phase 3 must surface for every shipped sou
 ### Scope
 
 - Census Geocoder: public-domain federal data; whether the Data API's general attribution line applies to the separate keyless geocoder endpoint is unconfirmed and should be checked directly. Geocodio: storable "permanently without restrictions." Esri: needs the `premium:user:geocode:stored` privilege, made explicit by `forStorage=true`.
-- Reproduce the area County's `AGS_Parcels` license text verbatim wherever used, parallel to existing OpenTopography attribution:
-
-  > "the area County makes no warranty for fitness of use for a particular purpose express or implied... further agrees to hold the area County Government harmless... Copyright 2019 the area County. All rights reserved."
+- Reproduce the researched county's `AGS_Parcels` license text verbatim wherever used, parallel to existing OpenTopography attribution. The disclaimer follows the typical shape of a county open-data no-warranty notice (no warranty for fitness of use, a hold-the-county-harmless clause, and a copyright line); this repository does not name the specific county originally researched for this note, so the exact wording must be re-fetched from whichever county is actually selected when Phase 3 implementation begins.
 
 - Regrid Data Store License (PH3-2's reference purchase): one-time export, no updates, a one-year Term after which the licensee must cease use or delete the data, permission to load into internal tools, and a public-webpage attribution credit — inapplicable given internal-only use, but recorded for any future reader (decision 3).
 - Never-default list, each with citation: the county's `GeocodeServer` proxy (no published terms; risks its paid credits); public Nominatim (bars a silent default); Regrid's live API without written consent (bars caching/derivatives, unlike the Data Store); ATTOM (evaluation-only, 24-hour cap); LightBox (no production tier); Cotality (bars derivatives, assigns any created to CoreLogic); Living Atlas "USA Parcels" (republishes Regrid's own restricted data). Any provider beyond these three needs its own documentation before it ships.
@@ -424,7 +422,7 @@ Repository contract: [AGENTS.md](https://github.com/mjfrancese/SolidGround/blob/
 
 ## Notes for the owner
 
-Unresolved gaps to track, not assume away: the county Locator Number and [withheld] [withheld]'s recorded book/page were never obtained (behind a paid Tapestry/Laredo search or an in-person Recorder request); `DEEDBKPG`/`ASRBKPG` semantics remain unconfirmed as a book/page equivalent; no rate limit is published for the keyless Census geocoder; Google's point-in-polygon restriction stays unresolved but moot, since PH3-1 does not adopt Google. Confirm the Regrid export's file format at purchase against PH3-2's GeoJSON-first requirement. ReportAll's cheaper $200 file was found licensing-ambiguous (its storage right seems to need a sales-arranged tier; no archived analysis of the Data Store product itself resolves this); Regrid's $300 purchase was chosen as the more confidently-licensed pick (decision 3).
+Unresolved gaps to track, not assume away: the target parcel's Locator Number and recorded plat book/page were never obtained (behind a paid Tapestry/Laredo search or an in-person Recorder request); `DEEDBKPG`/`ASRBKPG` semantics remain unconfirmed as a book/page equivalent; no rate limit is published for the keyless Census geocoder; Google's point-in-polygon restriction stays unresolved but moot, since PH3-1 does not adopt Google. Confirm the Regrid export's file format at purchase against PH3-2's GeoJSON-first requirement. ReportAll's cheaper $200 file was found licensing-ambiguous (its storage right seems to need a sales-arranged tier; no archived analysis of the Data Store product itself resolves this); Regrid's $300 purchase was chosen as the more confidently-licensed pick (decision 3).
 
 ---
 
@@ -436,7 +434,7 @@ Retrieved 2026-09-21 unless noted. See the research note's own Sources section f
 2. [Esri findAddressCandidates (`forStorage`)](https://developers.arcgis.com/rest/geocode/find-address-candidates); [Esri geocoding credits](https://doc.arcgis.com/en/arcgis-online/reference/geocode.htm)
 3. [Geocodio storage terms](https://www.geocod.io/geocoding-terms-of-use-comparison); [Geocodio pricing](https://www.geocod.io/pricing)
 4. [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/); [OSMF Geocoding Guideline](https://osmfoundation.org/wiki/Licence/Community_Guidelines/Geocoding_-_Guideline)
-5. [the area County `AGS_Parcels`](https://maps.[withheld]/hosting/rest/services/Maps/AGS_Parcels/MapServer/0); [item metadata/license](https://www.arcgis.com/sharing/rest/content/items/fd4893ca99244279adb2ffa206e09ec7?f=json); [Assessor Real Estate Search](https://assessor.[withheld]/realestate/searchinput.aspx); [Recorder Deed Search](https://[withheld]/the area-county-departments/revenue/recorder-of-deeds/deed-search/); [Open Data Disclaimer](https://[withheld]/open-data/)
+5. The researched county's parcel GIS service (an ArcGIS `MapServer` "AGS_Parcels" layer), its item metadata/license page, its assessor real-estate search, its recorder deed search, and its open-data disclaimer page (URLs omitted from this repository; all retrieved 2026-09-21).
 6. [Regrid API ToS](https://regrid.com/terms/api); [Regrid Data Store License](https://app.regrid.com/store/license); [trial coverage](https://support.regrid.com/reference/list-of-restricted-counties); [trial limits](https://support.regrid.com/reference/getting-started-with-your-api); [parcel schema](https://support.regrid.com/docs/regrid-parcel-schemas); [ownership fields](https://support.regrid.com/docs/ownership); [legal-description fields](https://support.regrid.com/docs/legal-description-subdivision)
 7. [ATTOM legal terms](https://api.developer.attomdata.com/legal); [ATTOM parcel boundaries](https://www.attomdata.com/data/boundaries-data/parcel-boundaries/)
 8. [LightBox MSA (PDF)](https://www.lightboxre.com/wp-content/uploads/2026/08/2026.04.01-Master-Services-Agreement-SECURED.pdf); [LightBox trial terms](https://developer.lightboxre.com/terms)

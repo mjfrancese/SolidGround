@@ -218,11 +218,11 @@ public sealed class ParcelGeometryParserTests
 
         PolygonalRegion region = ParcelGeometryParser.Parse(
             ParcelGeometryFormat.Wkt,
-            "POLYGON (([withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld], [withheld] [withheld]))",
+            "POLYGON ((41.58 -93.61, 41.58 -93.60, 41.60 -93.60, 41.60 -93.61, 41.58 -93.61))",
             latitudeLongitude);
 
         PolygonRings polygon = Assert.Single(region.Polygons);
-        Assert.Equal(new Coordinate2D([withheld], [withheld]), polygon.Shell[0]);
+        Assert.Equal(new Coordinate2D(-93.61, 41.58), polygon.Shell[0]);
     }
 
     [Fact]

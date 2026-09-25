@@ -83,5 +83,5 @@ public sealed class VerticalReferenceResolutionTests
             nameof(OpenTopographyReferenceSource.PrjSidecar),
             12345,
             MetadataRequest: null,
-            new RasterSourceFetchEnvelope([withheld], [withheld], [withheld], [withheld], 110.0, false, 121.8, 154.8, 121.8, 154.8)));
+            new RasterSourceFetchEnvelope(-93.6045, 41.5906, -93.6031, 41.5917, 110.0, false, 121.8, 154.8, 121.8, 154.8)));
 }

@@ -5,7 +5,7 @@ namespace SolidGround.Tests;
 
 public sealed class Wgs84EllipsoidTests
 {
-    private const double ExampleSiteLatitude = [withheld]d;
+    private const double ExampleSiteLatitude = 41.591194d;
 
     [Fact]
     public void MetersPerDegreeLatitudeMatchesAnIndependentReimplementationAndTheDocumentedReferenceValue()
@@ -14,7 +14,7 @@ public sealed class Wgs84EllipsoidTests
         double actual = Wgs84Ellipsoid.MetersPerDegreeLatitude(ExampleSiteLatitude);
 
         AssertRelativelyClose(expected, actual, 1e-9);
-        AssertRelativelyClose([withheld], actual, 0.0001d);
+        AssertRelativelyClose(111065.3521d, actual, 0.0001d);
     }
 
     [Fact]
@@ -24,7 +24,7 @@ public sealed class Wgs84EllipsoidTests
         double actual = Wgs84Ellipsoid.MetersPerDegreeLongitude(ExampleSiteLatitude);
 
         AssertRelativelyClose(expected, actual, 1e-9);
-        AssertRelativelyClose([withheld], actual, 0.0001d);
+        AssertRelativelyClose(83378.9293d, actual, 0.0001d);
     }
 
     [Fact]

@@ -30,7 +30,7 @@ supported host. Its six acceptance criteria:
 | # | Acceptance criterion |
 | --- | --- |
 | AC1 | A clean supported workstation can install and load SolidGround in Revit 2027 using documented steps. |
-| AC2 | The ExampleSite scenario creates a bounded Toposolid and retains readable reversible provenance after save/reopen. |
+| AC2 | The example-site scenario creates a bounded Toposolid and retains readable reversible provenance after save/reopen. |
 | AC3 | The reviewed 16×16 and 32×32 icons render correctly in the supported Revit ribbon contexts. |
 | AC4 | No native geospatial binaries or Autodesk assemblies are committed or bundled unlawfully. |
 | AC5 | README retains the site-form accuracy limit and does not claim survey-grade output. |
@@ -44,7 +44,7 @@ scope.
 
 ## Decisions
 
-the owner and the orchestrator made the following decisions and rulings on 2026-09-24, before any of this
+The owner and the orchestrator made the following decisions and rulings on 2026-09-24, before any of this
 issue's implementation work began. They are the accepted direction this note and the shipped scripts follow;
 nothing below revisits them.
 
@@ -57,11 +57,11 @@ nothing below revisits them.
 | Ruling | All-user install stays out of scope; any all-user path still comes from the runtime API, never hardcoded. | No new all-user code path exists anywhere in this issue's scripts; the existing `NoRevitProjectOrScriptFileHardcodesAnAllUserAddInPath` guardrail already scans every new script. |
 | Ruling | Ship `THIRD-PARTY-NOTICES` (NetTopologySuite BSD-3-Clause, ProjNET LGPL-2.1-or-later) without outside counsel review. | Drafted at the repository root; see "Notices, license, install guide" below. |
 | R1 | Mint → sign → package order; the packaging/install signature gate fails closed only on `NotSigned`/`HashMismatch`/`NotSupportedFileFormat`/`Incompatible`/a signer-hash mismatch — a deny list, never an allow list restricted to `Valid`/`NotTrusted` (see "Signature verification gates" below for why that allow list does not actually work). | "Signature verification gates" below. |
-| R2 | Certificate minting is ordinary, D1-authorized, non-elevated work; the elevated trust import is orchestrator-run with the owner approving the UAC prompt himself (a secure-desktop prompt cannot be automated). | "Who mints, who imports trust, and when" below. |
+| R2 | Certificate minting is ordinary, D1-authorized, non-elevated work; the elevated trust import is orchestrator-run with the owner approving the UAC prompt personally (a secure-desktop prompt cannot be automated). | "Who mints, who imports trust, and when" below. |
 | R3 | The clean-machine snapshot covers all five relevant certificate stores, not registry state alone. | "Manual evidence plan," Stage 1.2. |
 | R4 | The untrusted-first-launch dialog is required, live-evidenced runbook content, sequenced before trust import; one unified button rule everywhere: "Load Once" if offered, else "Do Not Load," never "Always Load." | "Manual evidence plan," Stages 2.2–2.5; `docs/revit-install-guide.md`. |
 | R5 | Both Preflight failure paths (missing key, over-threshold `pointBudget`) are exercised together in one `fetch`-mode launch, because `RunDocumentPreflight` already accumulates every problem into one list before returning. | "Manual evidence plan," Stage 2.10. |
-| R6 | The ExampleSite demonstration is a live `fetch`-mode OpenTopography call, with a documented CLI/process-mode fallback on a 401/403. | "Manual evidence plan," Stage 2.7. |
+| R6 | The example-site demonstration is a live `fetch`-mode OpenTopography call, with a documented CLI/process-mode fallback on a 401/403. | "Manual evidence plan," Stage 2.7. |
 | R7 | The reader add-in used for the provenance read-back is a throwaway `Type="Command"` add-in with its own `VendorId`; that manifest claim is verified against a primary Revit 2027 source before the add-in is built. | "Manual evidence plan," Stage 1.5. |
 | R8 | Release output goes to `artifacts/release/` (a subfolder of the pre-existing, already git-ignored `artifacts/` bucket); no xUnit test may ever shell out to PowerShell. | "Release package" below; "Tests and offline verification" below. |
 | R9 | Fail-closed Authenticode timestamping (the legacy Authenticode/PKCS#7 protocol — confirmed **not** RFC 3161) for release packages, using `http://timestamp.digicert.com` and explicit `-HashAlgorithm SHA256`; best-effort for dev-loop signing. | "Timestamp decision" below. |
@@ -131,18 +131,19 @@ New-SelfSignedCertificate `
     -FriendlyName "SolidGround Revit Add-in Signing"
 ```
 
-- **Subject**: `CN=SolidGround Revit Add-in Signing` — distinct from, but mirroring, the sibling the owner's other add-in
-  (detail about the owner's other add-in withheld)
+- **Subject**: `CN=SolidGround Revit Add-in Signing` — distinct from, but mirroring, the same subject-naming
+  convention already used for the owner's other Revit add-in's own code-signing certificate.
 - **`KeyExportPolicy = NonExportable`** is D1's own explicit instruction and the deliberate divergence from
-  the owner's other add-in's portable-`.pfx` pattern: only the owner's own Windows profile on this one workstation can ever sign
-  a new SolidGround release with this key. See "Key loss, rotation, and revocation" below.
+  the portable-`.pfx` pattern used by the owner's other Revit add-in: only the owner's own Windows profile on
+  this one workstation can ever sign a new SolidGround release with this key. See "Key loss, rotation, and
+  revocation" below.
 - **`-Type CodeSigningCert`** is documented by Microsoft Learn's `New-SelfSignedCertificate` reference to set
   the Code Signing EKU (`1.3.6.1.5.5.7.3.3`), corroborated rather than guaranteed by that page alone — so
   `-NewCertificate` re-reads the freshly minted certificate's own `EnhancedKeyUsageList` and
   `BasicConstraints.CertificateAuthority` and throws, rather than pinning an unexpected certificate, if either
   is not what was requested (`Sign-RevitAddIn.ps1`'s own post-mint checks).
-- **RSA 2048 / SHA-256** and a **10-year validity** match the owner's other add-in's own already-working choice on this
-  machine. The CA/Browser Forum's 2023-06-01 hardware-token requirement for code-signing certificates
+- **RSA 2048 / SHA-256** and a **10-year validity** match the same already-working choice already used for
+  the owner's other Revit add-in. The CA/Browser Forum's 2023-06-01 hardware-token requirement for code-signing certificates
   (Baseline Requirements §6.2.7.4.2) binds only publicly-trusted, CA-issued certificates and does not reach a
   self-signed certificate that is never submitted to a public CA.
 
@@ -292,7 +293,7 @@ the resulting thumbprint and SHA-256 hash. `Import-SigningTrust.ps1` is differen
 elevation the orchestrator's own shell does not have: it checks
 `[Security.Principal.WindowsPrincipal]::IsInRole(Administrator)` and fails closed with a clear message if not
 elevated, rather than silently self-elevating. **The orchestrator runs this command; the resulting UAC
-elevation prompt is approved by the owner himself**, since a UAC consent prompt renders on the secure desktop
+elevation prompt is approved by the owner personally**, since a UAC consent prompt renders on the secure desktop
 and cannot be automated by any agent (ruling R2). This is the whole authorization model: not "who types the
 command," but "who clicks Allow/Yes on the one prompt Windows itself renders."
 
@@ -318,7 +319,7 @@ store by thumbprint first and skipping, not erroring, if already present. This e
 pair (not `CurrentUser`, which Autodesk's own "Making Your Own Certificate for Testing and Internal Use" page
 names via `CertMgr.msc` — a **CurrentUser**-scoped tool by default) is the only mechanism this project's own
 research has found durably suppresses Revit's add-in security dialog, and is already a proven, operating
-pattern on this workstation for the sibling the owner's other add-in project's own certificate.
+pattern for the owner's other Revit add-in's own certificate.
 
 **Removal** is a documented manual two-line reverse (`Remove-Item Cert:\LocalMachine\Root\<thumbprint>`, same
 under `TrustedPublisher`, both requiring elevation), not a switch this script implements — matching this
@@ -352,9 +353,9 @@ None needed: there is no `.pfx`, no password, no Azure credential, no hardware t
 construction (`NonExportable`), never leaves the OS-managed CNG key store and is never written to a file this
 project's tooling could accidentally commit, log, or copy. Signing only ever runs locally, on this Windows
 workstation, against a real Revit 2027 SDK build — never in `.github/workflows/ci.yml`, whose seven steps
-(confirmed by direct read) add no signing step and need no change. None of the nine the infrastructure project conditions in
-`AGENTS.md`'s "Build and CI" section, and nothing on its never-list, is affected: no new secret, no new
-action, no new trigger.
+(confirmed by direct read) add no signing step and need no change. None of the nine self-hosted-runner
+conditions in `AGENTS.md`'s "Build and CI" section, and nothing on its never-list, is affected: no new
+secret, no new action, no new trigger.
 
 ## Release package
 
@@ -584,7 +585,7 @@ repoints the manifest — documented in the install guide as the simplest downgr
 
 ## Tests and offline verification
 
-`.github/workflows/ci.yml` runs `self-hosted`, a **Linux** self-hosted runner: any new test that must
+`.github/workflows/ci.yml` runs on a dedicated self-hosted runner, a **Linux** machine: any new test that must
 pass in CI cannot call a Windows-only API (`X509Store`, `Set-AuthenticodeSignature`) or shell out to
 PowerShell — ruling R8 makes this a hard rule for this project's test suite, not a contingency. New file
 `tests/SolidGround.Tests/ReleasePackagingTests.cs` (a sibling to `RevitHostFilesTests.cs`) covers, reading
@@ -613,7 +614,7 @@ The offline package-install-verify-uninstall dry run (build → sign → package
 folder → install → `Deploy-RevitAddIn.ps1 -Verify` → uninstall → confirm empty) is a documented local
 procedure, run once per release before the live Revit session, never a new `[Fact]` — exercising it end to
 end needs a real Windows PowerShell host and a real Release build with the Revit SDK present, neither of
-which exists on the Linux `self-hosted` runner. No workflow-file edit, and no new `PackageReference`, is
+which exists on the Linux self-hosted runner. No workflow-file edit, and no new `PackageReference`, is
 needed for any of the above: every new test is pure BCL/reflection/XML/text, matching
 `RevitHostFilesTests.cs`'s own footprint.
 
@@ -751,7 +752,7 @@ invocation is non-interactive, so `-Confirm:$false` is required — without it, 
 cannot show its own confirmation prompt and throws instead; see "Trust-import procedure per workstation"
 below); cross-check its printed thumbprint and SHA-256 hash against the values pinned in
 `scripts/signing-certificate.json` and this note. The orchestrator runs the command; **the owner approves the
-resulting UAC elevation prompt himself.** *Pass:* the command exits 0; both printed hash values match the
+resulting UAC elevation prompt personally.** *Pass:* the command exits 0; both printed hash values match the
 pinned values exactly. If the owner declines the prompt, this step and the session stop and escalate.
 *Evidence: Pending the live Revit 2027 session.*
 
@@ -767,15 +768,15 @@ then close Revit — needed before 2.7's key-bearing relaunch, since the OpenTop
 into a fresh child process.
 *Evidence: Pending the live Revit 2027 session.*
 
-**2.7** The ExampleSite scenario, live `fetch` mode (ruling R6). Relaunch with `OPENTOPOGRAPHY_API_KEY` injected
+**2.7** The example-site scenario, live `fetch` mode (ruling R6). Relaunch with `OPENTOPOGRAPHY_API_KEY` injected
 only through the launcher's own `-EnvironmentVariable` parameter — never written to `settings.json`, never
-logged. Point `settings.json` at `"mode": "fetch"`, the ExampleSite parcel-polygon AOI, `pointBudget` 15000, and
+logged. Point `settings.json` at `"mode": "fetch"`, the example-site parcel-polygon AOI, `pointBudget` 15000, and
 U.S. survey foot. Run "Create Toposolid." This is a real, live OpenTopography request, expected to cost two
 API calls against the daily quota (the bare AAIGrid body, then a second GTiff-only GeoKeys request). *Maps
 to:* AC2 (first half). *Pass:* success, no error-catalogue row fires, both API calls are accounted for. **On a
 401/403**: run one fetch through `SolidGround.Cli`'s own `fetch` command, outside Revit, with the same key,
 before concluding the add-in is at fault; if the CLI fetch also fails, the key itself is the problem and this
-step falls back to `"mode": "process"` against the already-committed ExampleSite fixture set — AC2 is still met
+step falls back to `"mode": "process"` against the already-committed example-site fixture set — AC2 is still met
 via the process-mode path, but the live-fetch demonstration did not complete this session, and that limitation
 is recorded plainly rather than smoothed over.
 *Evidence: Pending the live Revit 2027 session.*
@@ -854,7 +855,7 @@ in only after a real Revit 2027 session runs the plan above, matching the discip
 | # | Acceptance criterion | Status | Notes |
 | --- | --- | --- | --- |
 | AC1 | A clean supported workstation can install and load SolidGround in Revit 2027 using documented steps. | **Gap** | The scripts, the install guide, and the manual evidence plan (Stages 2.1–2.5, 2.11) exist and are ready to run; no live Revit 2027 session has exercised them yet. |
-| AC2 | The ExampleSite scenario creates a bounded Toposolid and retains readable reversible provenance after save/reopen. | **Gap for this release path; the underlying capability is already evidenced** | Issue #15 and Issue #16 already live-evidenced toposolid creation and Extensible Storage provenance directly (not through this release zip); Stages 2.7–2.9 above re-demonstrate the same capability through the packaged, signed, installed release specifically, and have not run yet. |
+| AC2 | The example-site scenario creates a bounded Toposolid and retains readable reversible provenance after save/reopen. | **Gap for this release path; the underlying capability is already evidenced** | Issue #15 and Issue #16 already live-evidenced toposolid creation and Extensible Storage provenance directly (not through this release zip); Stages 2.7–2.9 above re-demonstrate the same capability through the packaged, signed, installed release specifically, and have not run yet. |
 | AC3 | The reviewed 16×16 and 32×32 icons render correctly in the supported Revit ribbon contexts. | **Met (by Issue #19)** | `docs/architecture/revit-ribbon-icons.md`'s own Evidence section already carries a 2026-09-24 Revit 2027 session finding both sizes pixel-exact in both ribbon themes; Stage 2.6 above is only a light re-confirmation, not new evidence this issue depends on. |
 | AC4 | No native geospatial binaries or Autodesk assemblies are committed or bundled unlawfully. | **Gap** | Nothing native or Autodesk-owned is committed to this repository today (unaffected by this issue), and `New-ReleasePackage.ps1`'s own preconditions 2 and 9 are designed to fail closed on a missing/incomplete `THIRD-PARTY-NOTICES`, a native binary, or a `runtimes\` folder — but a real packaging run that actually exercises those checks against a built zip has not happened yet (Stage 1.1). |
 | AC5 | README retains the site-form accuracy limit and does not claim survey-grade output. | **Met** | `README.md`'s `## Accuracy` section is untouched by this issue's own edits (see `docs/revit-install-guide.md`'s own `## Accuracy` section, which points at it rather than repeating or paraphrasing it, and `README.md` itself); this note adds no claim of survey-grade output anywhere. |
@@ -866,7 +867,7 @@ in only after a real Revit 2027 session runs the plan above, matching the discip
   `Import-SigningTrust.ps1` will still see Revit's own per-session security prompt for SolidGround builds,
   documented as a supported, lower-trust alternative rather than a defect.
 - The trust-import mechanism (`LocalMachine\Root`/`LocalMachine\TrustedPublisher`) is already a proven,
-  operating pattern on this workstation for the sibling the owner's other add-in project's own certificate, but has never yet
+  operating pattern for the owner's other Revit add-in's own certificate, but has never yet
   been exercised for a SolidGround-signed build; the central "durably suppresses the dialog" claim (Stage 2.5
   above) is the single most important unevidenced claim in this design.
 - Whether Revit's "Always Load" persistence choice, on the 2-choice signed-but-not-yet-trusted-publisher
@@ -903,8 +904,8 @@ in only after a real Revit 2027 session runs the plan above, matching the discip
   which does not reach a self-signed certificate).
 - `understand/05-revit2027-signing-install-research.md` (not committed to this repository) — the read-only
   research pass this note's citations above are drawn from, including the local, non-secret system inspection
-  confirming the exact `LocalMachine\Root`/`LocalMachine\TrustedPublisher` pattern is already operating on
-  this workstation for the sibling the owner's other add-in project.
+  confirming the exact `LocalMachine\Root`/`LocalMachine\TrustedPublisher` pattern is already operating for
+  the owner's other Revit add-in.
 - `design-record.md` (Draft 4; not committed to this repository) — Issue #17's own multi-proposal, four-review
   design record; the source for the owner decisions and rulings quoted above, the manual evidence plan's
   numbered steps, and the reasoning behind the `install.cmd` zip-placement correction.

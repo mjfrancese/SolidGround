@@ -52,11 +52,11 @@ public sealed class LocalOriginFactoryTests
         // Deliberately fractional, unlike TestGrid's whole-number corners above: Explicit is the one kind
         // LocalOriginFactory never routes through LocalOriginSnapping, so these exact fractional values must
         // survive unchanged.
-        LocalOriginRequest selection = new(LocalOriginKind.Explicit, [withheld], [withheld], 184.1d);
+        LocalOriginRequest selection = new(LocalOriginKind.Explicit, 50.6d, 60.2d, 184.1d);
 
         Coordinate3D origin = LocalOriginFactory.ComputeOrigin(selection, TestGrid, ProjectedReference(), VerticalReference());
 
-        Assert.Equal(new Coordinate3D([withheld], [withheld], 184.1d), origin);
+        Assert.Equal(new Coordinate3D(50.6d, 60.2d, 184.1d), origin);
     }
 
     private static ElevationGrid BuildGrid(int rowCount, int columnCount, double cellSize, Coordinate2D anchor)

@@ -17,8 +17,8 @@ namespace SolidGround.Tests;
 /// </summary>
 public sealed class AoiNormalizerMinimumFetchEnvelopeSideTests
 {
-    private const double Latitude = [withheld]d;
-    private const double Longitude = [withheld]d;
+    private const double Latitude = 41.591194d;
+    private const double Longitude = -93.603806d;
     private static readonly LinearDistance DefaultMinimum = LinearDistance.Meters(110d);
 
     [Fact]
@@ -93,7 +93,7 @@ public sealed class AoiNormalizerMinimumFetchEnvelopeSideTests
     {
         // ~121.8 m x 154.8 m, the same fixed CLI test box (CliFetchAndRunCommandTests.Bbox): already at or
         // above the 110 m minimum on both axes, so normalizing it must be a no-op.
-        Wgs84BoundingBoxAoi bbox = new([withheld]d, [withheld]d, [withheld]d, [withheld]d);
+        Wgs84BoundingBoxAoi bbox = new(-93.6045d, 41.5906d, -93.6031d, 41.5917d);
 
         NormalizedAoi result = AoiNormalizer.Normalize(bbox);
 
@@ -131,7 +131,7 @@ public sealed class AoiNormalizerMinimumFetchEnvelopeSideTests
         // but far too small on both axes at this extreme latitude for AoiNormalizer to widen to the default
         // 110 m minimum without leaving the supported range -- proving the new expansion step reuses the
         // identical guard PadAroundLatitudes already enforces, rather than skipping validation for itself.
-        Wgs84BoundingBoxAoi bbox = new([withheld]d, 89.9994d, [withheld]d, 89.9998d);
+        Wgs84BoundingBoxAoi bbox = new(-93.6042d, 89.9994d, -93.6032d, 89.9998d);
 
         AoiNormalizationException exception = Assert.Throws<AoiNormalizationException>(() => AoiNormalizer.Normalize(bbox));
         Assert.Contains("pole", exception.Message, StringComparison.OrdinalIgnoreCase);
