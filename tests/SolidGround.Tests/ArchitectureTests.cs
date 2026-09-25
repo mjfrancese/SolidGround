@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Xml.Linq;
 
 namespace SolidGround.Tests;
 
@@ -495,5 +496,38 @@ public sealed class ArchitectureTests
         Assert.DoesNotContain(
             references,
             reference => string.Equals(reference.Name, "SolidGround.Revit", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void DirectoryBuildPropsDeclaresThePinnedVersion()
+    {
+        // SolidGround Issue #17 (design record §2): a single <Version> in the root Directory.Build.props
+        // pins the value that flows into every project's AssemblyVersion/FileVersion/
+        // AssemblyInformationalVersion. This is deliberately pinned to the literal, hardcoded value below
+        // -- the same style RevitHostFilesTests.cs's own ExpectedAddInId constant already uses -- rather
+        // than self-adapting the way CliHelpTextTests.cs's ExpectedVersionText() reads the running
+        // assembly's own version back, so an accidental revert or deletion of <Version> is caught
+        // immediately instead of silently reverting to the SDK's implicit "1.0.0" default.
+        string path = Path.Combine(FindRepositoryRoot(), "Directory.Build.props");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+
+        XDocument document = XDocument.Load(path);
+        XElement root = document.Root ?? throw new InvalidOperationException($"'{path}' has no root element.");
+
+        XElement version = Assert.Single(root.Descendants("Version"));
+        Assert.Equal("0.1.0", version.Value);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "SolidGround.slnx")))
+            {
+                return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException($"Could not locate SolidGround.slnx by walking up from '{AppContext.BaseDirectory}'.");
     }
 }
