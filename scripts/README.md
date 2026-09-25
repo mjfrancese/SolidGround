@@ -362,13 +362,22 @@ from a per-user Revit 2027 Add-Ins folder. Deliberately a new, small, self-conta
 `Deploy-RevitAddIn.ps1` itself is never modified). Run `Get-Help .\Uninstall-SolidGround.ps1 -Full` for the
 complete parameter and example reference.
 
-Refuses outright while any `Revit.exe` process is running, of any version — a simpler, always-refuse check
-than `Deploy-RevitAddIn.ps1`'s own `-AllowOtherRevitVersions` path-matching nuance, matching the safer
-default a destructive operation should have.
+Refuses outright while a `Revit.exe` process under `-RevitInstallDir` (Revit 2027 by default) is running —
+always, regardless of `-AllowOtherRevitVersions`, since that is the exact version this uninstaller's own
+per-user Addins folder belongs to. By default (no `-AllowOtherRevitVersions`) it also refuses while any
+*other* `Revit.exe` process runs, anywhere — the original, simpler, always-refuse default. Pass
+`-AllowOtherRevitVersions` if you intentionally keep a different Revit version open for other work (for
+example Revit 2026 kept open while you uninstall the Revit 2027 add-in); the script then refuses only when a
+`Revit.exe` whose path is under `-RevitInstallDir` is running — matching `Deploy-RevitAddIn.ps1`'s own switch
+of the same name and identical path-matching semantics (Issue #17 follow-up: this uninstaller originally had
+no such override, so simply keeping an older Revit version open — common — blocked removing the Revit 2027
+add-in even though this script only ever touches the 2027 per-user Addins folder).
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `-AddinsDirectory` | `%APPDATA%\Autodesk\Revit\Addins\2027` | Same default as `Deploy-RevitAddIn.ps1`. Never point this at an all-user path. |
+| `-RevitInstallDir` | `C:\Program Files\Autodesk\Revit 2027` | Same default as `Deploy-RevitAddIn.ps1`. Used only to recognize a Revit 2027 process for the running-Revit check. |
+| `-AllowOtherRevitVersions` | off | Narrows the running-Revit refusal (see above). |
 | `-RemoveSettingsAndLogs` | off | Also removes `%ProgramData%\SolidGround\Revit\settings.json` and its `Logs\` folder. |
 | `-Force` | off | Suppresses this destructive operation's interactive confirmation prompt (`ConfirmImpact 'High'`). |
 | `-WhatIf` / `-Confirm` | — | `SupportsShouldProcess`. |

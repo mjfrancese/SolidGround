@@ -578,12 +578,28 @@ changes.
 New, small, deliberately self-contained rather than a `-Uninstall` switch bolted onto the already-proven
 `Deploy-RevitAddIn.ps1` — mixing "publish" and "remove" into that script would raise the risk of a mistake
 reaching its existing, working behavior. Parameters: `-AddinsDirectory` (same default as
-`Deploy-RevitAddIn.ps1`), `-RemoveSettingsAndLogs` (opt-in, off by default), `-Force`, plus
-`-WhatIf`/`-Confirm` (`SupportsShouldProcess`, `ConfirmImpact 'High'`).
+`Deploy-RevitAddIn.ps1`), `-RevitInstallDir` (same default as `Deploy-RevitAddIn.ps1`,
+`C:\Program Files\Autodesk\Revit 2027`), `-AllowOtherRevitVersions`, `-RemoveSettingsAndLogs` (opt-in, off by
+default), `-Force`, plus `-WhatIf`/`-Confirm` (`SupportsShouldProcess`, `ConfirmImpact 'High'`).
 
-Refuses outright while any `Revit.exe` process is running, of any version — a simpler, always-refuse check
-than `Deploy-RevitAddIn.ps1`'s own `-AllowOtherRevitVersions` path-matching nuance, matching the safer default
-a destructive operation should have. Removes the live `SolidGround.addin` manifest and the **entire**
+**Issue #17 follow-up (2026-09-25).** The uninstaller originally refused outright while *any* `Revit.exe`
+process ran, anywhere, with no override — unlike `Deploy-RevitAddIn.ps1`'s own `-AllowOtherRevitVersions`/
+`-RevitInstallDir` pair. In practice this meant an operator who simply kept an older Revit version open (a
+common habit) could never uninstall the Revit 2027 add-in, even though this script only ever touches the
+2027 per-user Addins folder. The uninstaller now carries the identical `-AllowOtherRevitVersions`/
+`-RevitInstallDir` pair as `Deploy-RevitAddIn.ps1`, with byte-for-byte identical path-matching semantics
+(duplicated in the uninstaller's own `Assert-RevitNotRunningForUninstall`, not dot-sourced from
+`Deploy-RevitAddIn.ps1` — that script is a full top-level script whose own deploy/verify actions would run
+unconditionally if dot-sourced, which an uninstall script must never trigger as a side effect;
+`Deploy-RevitAddIn.ps1` itself remains unchanged, matching ruling R10). The default stays strict: without
+`-AllowOtherRevitVersions`, any running `Revit.exe` of any version still blocks, matching the safer default a
+destructive operation should have. With `-AllowOtherRevitVersions`, only a `Revit.exe` process whose path is
+confirmed under `-RevitInstallDir` blocks — a Revit 2027 process always blocks regardless of the switch,
+since that is the exact version this uninstaller's own Addins folder belongs to — and a process whose path
+cannot be determined is still treated as blocking either way, since it cannot be proven to be a different
+version.
+
+Removes the live `SolidGround.addin` manifest and the **entire**
 versioned `SolidGround\` folder tree (every retained version, not only the live one). **Leaves by default**:
 `%ProgramData%\SolidGround\Revit\` (`settings.json` and `Logs\`) — useful diagnostic history, and so an
 operator who reinstalls later does not lose their configured area of interest; `-RemoveSettingsAndLogs`
@@ -630,6 +646,8 @@ plain text/JSON only:
   staging and before the signing block — the fail-closed local-machine-path scan backstop.
 - `docs/revit-install-guide.md` exists and contains every operator-topic marker this note's own outline
   requires.
+- `scripts/Uninstall-SolidGround.ps1` declares the `-AllowOtherRevitVersions` switch and its supporting
+  `-RevitInstallDir` parameter (Issue #17 follow-up, above).
 
 `ArchitectureTests.cs` gains `DirectoryBuildPropsDeclaresThePinnedVersion` (above); no change is needed to
 `NoRevitProjectOrScriptFileHardcodesAnAllUserAddInPath`, which already recursively scans all of `scripts/`.

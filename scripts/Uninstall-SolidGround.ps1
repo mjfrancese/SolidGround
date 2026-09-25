@@ -23,9 +23,16 @@
     add-in uninstaller should clear as a side effect; removing or rotating trust is
     Import-SigningTrust.ps1's own, separately-invoked job.
 
-    Refuses outright while any Revit.exe process is running, anywhere -- a simpler, always-refuse
-    check than Deploy-RevitAddIn.ps1's own -AllowOtherRevitVersions path-matching nuance, matching
-    the safer default a destructive operation like this one should have.
+    Refuses outright while a Revit.exe process under -RevitInstallDir (Revit 2027 by default) is
+    running -- always, regardless of -AllowOtherRevitVersions, since that is the exact version this
+    uninstaller's own per-user Addins\2027 folder belongs to. By default (no -AllowOtherRevitVersions)
+    it also refuses while any *other* Revit.exe process runs, anywhere -- the original, simpler,
+    always-refuse default. Pass -AllowOtherRevitVersions to tolerate a different Revit version kept
+    open for unrelated work (for example Revit 2026), matching Deploy-RevitAddIn.ps1's own switch of
+    the same name and identical path-matching semantics (Issue #17 follow-up: this uninstaller
+    originally had no such override, which meant a user who simply kept an older Revit version open --
+    common -- could not remove the Revit 2027 add-in even though this script only ever touches the
+    2027 per-user Addins folder).
 
     Prints exactly what was removed and what was deliberately left, by path -- no silent surprises.
 
@@ -37,6 +44,17 @@
     The per-user Revit 2027 Add-Ins folder to remove SolidGround from. Default:
     $env:APPDATA\Autodesk\Revit\Addins\2027 (matching Deploy-RevitAddIn.ps1's own default). Never
     point this at an all-user location.
+
+.PARAMETER RevitInstallDir
+    The Revit 2027 install directory used to recognize a running Revit 2027 process, which always
+    blocks uninstall regardless of -AllowOtherRevitVersions. Default:
+    C:\Program Files\Autodesk\Revit 2027 (matching Deploy-RevitAddIn.ps1's own default).
+
+.PARAMETER AllowOtherRevitVersions
+    Relaxes the running-Revit refusal so only a Revit.exe whose path is under -RevitInstallDir blocks
+    uninstall, instead of any running Revit.exe. Use this when a different Revit version is
+    intentionally kept open for other work. Matches Deploy-RevitAddIn.ps1's own switch of the same
+    name and identical semantics, including its "path unavailable" fail-closed behavior.
 
 .PARAMETER RemoveSettingsAndLogs
     Also removes %ProgramData%\SolidGround\Revit\settings.json and its Logs\ folder. Off by default.
@@ -60,6 +78,11 @@
     .\Uninstall-SolidGround.ps1 -WhatIf -AddinsDirectory 'C:\Scratch\Addins\2027'
     Reports what would be removed from a scratch Add-Ins folder without writing anything.
 
+.EXAMPLE
+    .\Uninstall-SolidGround.ps1 -AllowOtherRevitVersions
+    Uninstalls even though a different Revit version (for example Revit 2026) is open, refusing only
+    if Revit 2027 itself is running.
+
 .NOTES
     Follows docs/architecture/revit-release-packaging-and-signing.md section 5. Owned entirely under
     scripts/; see scripts/README.md.
@@ -68,6 +91,10 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [string]$AddinsDirectory = (Join-Path $env:APPDATA 'Autodesk\Revit\Addins\2027'),
+
+    [string]$RevitInstallDir = 'C:\Program Files\Autodesk\Revit 2027',
+
+    [switch]$AllowOtherRevitVersions,
 
     [switch]$RemoveSettingsAndLogs,
 
@@ -99,22 +126,74 @@ $SolidGroundFolderName = 'SolidGround'
 
 function Assert-RevitNotRunningForUninstall {
     <#
-        A simpler, always-refuse check than Deploy-RevitAddIn.ps1's own Assert-RevitNotRunning: any
-        running Revit.exe process, of any version, blocks this destructive operation. There is no
-        -AllowOtherRevitVersions equivalent here by design.
+        Identical semantics to Deploy-RevitAddIn.ps1's own Assert-RevitNotRunning: without
+        -AllowOtherRevitVersions, any running Revit.exe process (of any version) blocks; with it, only
+        a Revit.exe process whose path is confirmed under -RevitInstallDir blocks, and a process whose
+        path cannot be determined is still treated as blocking either way (it cannot be proven to be a
+        different version). This logic is duplicated here, not dot-sourced from Deploy-RevitAddIn.ps1,
+        because that script is a full top-level script whose own deploy/verify actions would run
+        unconditionally if dot-sourced -- something an uninstall script must never trigger as a side
+        effect. Deploy-RevitAddIn.ps1 itself is never modified by this script or in support of it.
     #>
-    $processes = @(Get-Process -Name 'Revit' -ErrorAction SilentlyContinue)
-    if ($processes.Count -eq 0) { return }
+    param(
+        [Parameter(Mandatory)][string]$RevitInstallDir,
+        [switch]$AllowOtherRevitVersions
+    )
 
-    $ids = ($processes | ForEach-Object { "PID $($_.Id)" }) -join ', '
-    throw "Refusing to uninstall while a Revit.exe process is running ($ids). Close every Revit session (any version) first."
+    $processes = Get-Process -Name 'Revit' -ErrorAction SilentlyContinue
+    if (-not $processes) { return }
+
+    $normalizedInstallDir = $RevitInstallDir.TrimEnd('\', '/')
+    $blocking = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($proc in $processes) {
+        $procPath = $null
+        $pathKnown = $true
+        try {
+            $procPath = $proc.Path
+        } catch {
+            $pathKnown = $false
+        }
+        if ([string]::IsNullOrEmpty($procPath)) { $pathKnown = $false }
+
+        if (-not $AllowOtherRevitVersions) {
+            $suffix = if ($pathKnown) { " at $procPath" } else { ' (path unavailable)' }
+            [void]$blocking.Add("PID $($proc.Id)$suffix")
+            continue
+        }
+
+        if (-not $pathKnown) {
+            [void]$blocking.Add("PID $($proc.Id) (path unavailable; cannot confirm this is a different Revit version)")
+            continue
+        }
+        # See Deploy-RevitAddIn.ps1's own identical comment: a plain StartsWith would also match an
+        # unrelated sibling install whose directory name merely shares $normalizedInstallDir as a
+        # literal text prefix, which is not actually "under" that directory. Require either an exact
+        # match or a path-separator boundary right after the prefix so only a genuine child path counts.
+        $isExactMatch = $procPath.Equals($normalizedInstallDir, [System.StringComparison]::OrdinalIgnoreCase)
+        $isUnderInstallDir = $procPath.StartsWith(
+            $normalizedInstallDir + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase)
+        if ($isExactMatch -or $isUnderInstallDir) {
+            [void]$blocking.Add("PID $($proc.Id) at $procPath")
+        }
+    }
+
+    if ($blocking.Count -gt 0) {
+        $reason = if ($AllowOtherRevitVersions) {
+            "a Revit.exe process under '$RevitInstallDir' is running"
+        } else {
+            'a Revit.exe process is running (pass -AllowOtherRevitVersions to tolerate a different Revit version, for example Revit 2026 kept open for other work)'
+        }
+        throw "Refusing to uninstall: $reason.`n$($blocking -join "`n")"
+    }
 }
 
 # ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
 
-Assert-RevitNotRunningForUninstall
+Assert-RevitNotRunningForUninstall -RevitInstallDir $RevitInstallDir -AllowOtherRevitVersions:$AllowOtherRevitVersions
 
 $removed = [System.Collections.Generic.List[string]]::new()
 $left = [System.Collections.Generic.List[string]]::new()

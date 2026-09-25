@@ -286,6 +286,26 @@ public sealed class ReleasePackagingTests
     }
 
     [Fact]
+    public void UninstallScriptDeclaresAllowOtherRevitVersionsSwitchMatchingDeployScript()
+    {
+        // Issue #17 follow-up: Uninstall-SolidGround.ps1 originally refused outright whenever ANY
+        // Revit.exe ran, anywhere, with no override -- unlike Deploy-RevitAddIn.ps1's own
+        // -AllowOtherRevitVersions/-RevitInstallDir pair. That meant an operator who simply kept an
+        // older Revit version open (common) could never uninstall the Revit 2027 add-in, even though
+        // the uninstaller only ever touches the 2027 per-user Addins folder. This is a static,
+        // file-content-only assertion that the switch and its supporting parameter exist with the same
+        // default install directory as Deploy-RevitAddIn.ps1; the default behavior stays strict (see
+        // the script's own Assert-RevitNotRunningForUninstall).
+        string uninstallScriptPath = Path.Combine(ScriptsDirectory, "Uninstall-SolidGround.ps1");
+        Assert.True(File.Exists(uninstallScriptPath), $"Missing file: {uninstallScriptPath}");
+        string content = File.ReadAllText(uninstallScriptPath);
+
+        Assert.Contains("[switch]$AllowOtherRevitVersions", content, StringComparison.Ordinal);
+        Assert.Contains("[string]$RevitInstallDir", content, StringComparison.Ordinal);
+        Assert.Contains(@"C:\Program Files\Autodesk\Revit 2027", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InstallGuideExistsAndCoversEveryOperatorTopic()
     {
         // Coarse but falsifiable (design-record.md §7): a guard against silently dropping a whole topic

@@ -20,7 +20,7 @@ A copy of this guide, `INSTALL.md`, ships inside every release zip; the two are 
 
 ## 1. Download and verify
 
-Download the release zip and its two checksum files from the Releases page:
+Download the release zip and its checksum file from the Releases page:
 
 - `SolidGround-Revit2027-v<version>.zip` — the release itself.
 - `SolidGround-Revit2027-v<version>.zip.sha256` — a one-line SHA-256 hash of the zip, for verifying the
@@ -85,6 +85,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-SolidGround.ps1
 `-ExecutionPolicy Bypass` here only affects this one command; it does not change any setting on your
 computer. (If your organization enforces PowerShell execution policy through Group Policy, that policy can
 still block this — contact your administrator in that case.)
+
+**If Windows shows an "Open File - Security Warning"** that says "The publisher could not be verified. Are
+you sure you want to run this software?", with Publisher "Unknown Publisher" and Type "Windows Command
+Script": this is Windows' standard prompt for a downloaded `.cmd` file. A `.cmd` file cannot carry a digital
+signature, so it always reads "Unknown Publisher", even though the PowerShell scripts and DLLs it runs are
+signed and checked. Click **Run**. (Observed on Windows 11 when `install.cmd` from a downloaded zip was
+opened through the Windows shell.)
 
 **If Windows shows a "Windows protected your PC" SmartScreen warning** when you run `install.cmd`: this is a
 Windows feature that flags newly downloaded, unsigned `.cmd`/`.bat` files with no track record yet — it is
@@ -324,9 +331,16 @@ your `settings.json` and logs in place under `%ProgramData%\SolidGround\Revit\` 
 `-RemoveSettingsAndLogs` to remove those too), and it never touches the certificate-trust registry value
 Revit itself maintains — removing trust is a separate, manual step (see
 [`docs/architecture/revit-release-packaging-and-signing.md`](architecture/revit-release-packaging-and-signing.md)'s
-"Trust-import procedure per workstation" if you also want to remove that). It refuses to run while any
-version of Revit is open; close Revit first. It prints exactly what it removed and what it deliberately left
-in place.
+"Trust-import procedure per workstation" if you also want to remove that). It refuses to run while Revit 2027
+itself is open; close Revit 2027 first. **If you keep another Revit version open** (for example Revit 2026,
+for unrelated work), add `-AllowOtherRevitVersions`:
+
+```powershell
+.\Uninstall-SolidGround.ps1 -AllowOtherRevitVersions
+```
+
+Without that switch, the uninstaller refuses while *any* Revit version is running, even one that has nothing
+to do with SolidGround. It prints exactly what it removed and what it deliberately left in place.
 
 ## Accuracy
 
