@@ -327,20 +327,31 @@ Never modifies `Deploy-RevitAddIn.ps1`; always forwards to it. Never self-elevat
 
 The double-click entry point for [`Install-SolidGround.ps1`](#install-solidgroundps1) — a bare `.ps1` opens
 in an editor rather than running when double-clicked, which does not work for a non-developer extracting a
-release zip. Forwards every argument to the sibling `Install-SolidGround.ps1` with a process-scoped
+release zip. Always passes `-AllowOtherRevitVersions` to `Install-SolidGround.ps1` (placed before `%*`, so a
+caller-supplied argument can still be added after it), then forwards every argument, with a process-scoped
 `-ExecutionPolicy Bypass` (this invocation only; never changes your machine's persistent execution policy,
-and needs no administrator rights), then captures PowerShell's own exit code and pauses before the window
+and needs no administrator rights); then captures PowerShell's own exit code and pauses before the window
 closes, so a non-developer who double-clicked this file can actually read the result — or an error — instead
 of watching the window vanish immediately:
 
 ```bat
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SolidGround.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SolidGround.ps1" -AllowOtherRevitVersions %*
 set "SOLIDGROUND_INSTALL_EXITCODE=%ERRORLEVEL%"
 echo.
 pause
 exit /b %SOLIDGROUND_INSTALL_EXITCODE%
 ```
+
+**Why `-AllowOtherRevitVersions` is on by default here**: the double-click path is used by non-developers who
+routinely keep an older Revit version (for example Revit 2026) open for unrelated work. Without this switch,
+`Deploy-RevitAddIn.ps1`'s own default refuses to run while *any* `Revit.exe` process is running, of any
+version — so simply having a different Revit version open would block installation on step one, with the guide
+never explaining why. The switch narrows that refusal to Revit 2027 specifically (the version this add-in
+targets and the only one `Deploy-RevitAddIn.ps1` ever writes to); it never weakens the refusal while Revit 2027
+itself is running. See [`Deploy-RevitAddIn.ps1`](#deploy-revitaddinps1)'s own "Safety switches" section above
+for the exact matching logic, and `docs/revit-install-guide.md` section 3 and its troubleshooting table for the
+operator-facing explanation.
 
 An automated/non-interactive run should redirect stdin from `NUL` so `pause` returns immediately instead of
 waiting for a keypress: `cmd /c install.cmd < NUL`.

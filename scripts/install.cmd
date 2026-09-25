@@ -12,12 +12,21 @@ REM New-ReleasePackage.ps1 copies this file (scripts/install.cmd in the reposito
 REM zip's own install\ folder, alongside Install-SolidGround.ps1; %~dp0 then resolves to that same
 REM install\ folder at run time, so the relative reference below always finds its sibling.
 REM
+REM This double-click path always passes -AllowOtherRevitVersions to Install-SolidGround.ps1 (and from
+REM there straight through to Deploy-RevitAddIn.ps1), placed before %* so a caller-supplied argument
+REM can still be added after it. Deploy-RevitAddIn.ps1 always refuses outright while Revit 2027 itself
+REM (the version this add-in targets) is running, regardless of this switch -- only its refusal over a
+REM DIFFERENT, unrelated Revit version (for example Revit 2026, left open for other work) is narrowed.
+REM Without this switch, a user who simply keeps an older Revit version open -- common -- would be
+REM blocked on step one with no explanation in this file. See docs/revit-install-guide.md section 3 and
+REM its troubleshooting table for the operator-facing explanation.
+REM
 REM PowerShell's own exit code is captured below and this window pauses before it closes, so a
 REM non-developer who double-clicked this file can actually read the result -- or an error -- rather
 REM than watching the window vanish immediately. An automated/non-interactive run should redirect
 REM stdin from NUL so `pause` returns immediately instead of waiting for a keypress:
 REM   cmd /c install.cmd < NUL
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SolidGround.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SolidGround.ps1" -AllowOtherRevitVersions %*
 set "SOLIDGROUND_INSTALL_EXITCODE=%ERRORLEVEL%"
 echo.
 pause

@@ -181,6 +181,41 @@ public sealed class ReleasePackagingTests
         Assert.Contains("Install-SolidGround.ps1", content, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void InstallCmdPassesAllowOtherRevitVersionsByDefaultBeforeForwardedArguments()
+    {
+        // Issue #17 follow-up (2026-09-25): the documented double-click path
+        // (install.cmd -> Install-SolidGround.ps1 -> Deploy-RevitAddIn.ps1) used to refuse whenever ANY
+        // Revit.exe process ran, anywhere, even an unrelated older version the operator intentionally
+        // kept open for other work -- Deploy-RevitAddIn.ps1 already supports -AllowOtherRevitVersions to
+        // narrow that refusal to Revit 2027 specifically, but nothing in the double-click path passed it.
+        // install.cmd now passes -AllowOtherRevitVersions unconditionally, placed before %* so a
+        // caller-supplied argument can still be appended after it (and so it is never accidentally
+        // suppressed by a caller passing their own arguments). This is a strengthening of the existing
+        // InstallCmdExistsUnderScriptsAndForwardsToInstallSolidGroundWithExecutionPolicyBypass test above,
+        // not a replacement for it.
+        Assert.True(File.Exists(InstallCmdPath), $"Missing file: {InstallCmdPath}");
+        string content = File.ReadAllText(InstallCmdPath);
+
+        Assert.Contains("-AllowOtherRevitVersions", content, StringComparison.Ordinal);
+
+        int invocationIndex = content.IndexOf(
+            "-File \"%~dp0Install-SolidGround.ps1\"", StringComparison.Ordinal);
+        Assert.True(invocationIndex >= 0, $"'{InstallCmdPath}' is missing its expected Install-SolidGround.ps1 invocation.");
+
+        // -AllowOtherRevitVersions also legitimately appears earlier, in this file's own REM commentary
+        // explaining the switch -- search only from the invocation line onward so this checks the actual
+        // forwarded argument, not prose that merely mentions it.
+        int allowOtherRevitVersionsIndex = content.IndexOf("-AllowOtherRevitVersions", invocationIndex, StringComparison.Ordinal);
+        int forwardedArgsIndex = content.IndexOf("%*", invocationIndex, StringComparison.Ordinal);
+
+        Assert.True(allowOtherRevitVersionsIndex >= 0, $"'{InstallCmdPath}' does not pass -AllowOtherRevitVersions as part of its Install-SolidGround.ps1 invocation.");
+        Assert.True(forwardedArgsIndex >= 0, $"'{InstallCmdPath}' does not forward caller-supplied arguments via %* as part of its Install-SolidGround.ps1 invocation.");
+        Assert.True(
+            allowOtherRevitVersionsIndex < forwardedArgsIndex,
+            "-AllowOtherRevitVersions must appear before %* so a caller-supplied argument can still be appended after it.");
+    }
+
     [Theory]
     [InlineData("Sign-RevitAddIn.ps1")]
     [InlineData("Import-SigningTrust.ps1")]

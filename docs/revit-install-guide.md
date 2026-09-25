@@ -74,13 +74,23 @@ yourself.
 
 ## 3. Install
 
+**Close Revit 2027 before installing; other Revit versions can stay open.** The installer always refuses to
+run while Revit 2027 itself is open (add-ins cannot be safely replaced underneath a running session), but it
+no longer needs every other Revit version closed too — if you keep Revit 2026, for example, open for unrelated
+work, the double-click path below still proceeds.
+
 Open the extracted folder's `install\` subfolder and double-click **`install.cmd`**.
 
 If you would rather run it from a terminal, the equivalent command, run from inside the `install\` folder, is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-SolidGround.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-SolidGround.ps1 -AllowOtherRevitVersions
 ```
+
+`-AllowOtherRevitVersions` is what lets this command proceed while a *different* Revit version is open; it
+never overrides the refusal while Revit 2027 itself is running. `install.cmd` already passes this switch for
+you, so the double-click path above needs nothing extra — this terminal command matches it exactly. Omit the
+switch only if you specifically want the stricter behavior of refusing while any Revit version at all is open.
 
 `-ExecutionPolicy Bypass` here only affects this one command; it does not change any setting on your
 computer. (If your organization enforces PowerShell execution policy through Group Policy, that policy can
@@ -301,6 +311,7 @@ written to these logs.
 | "pointBudget ... exceeds this machine's NativeToposolidMaxPointThreshold ..." | Your `settings.json`'s `simplification.pointBudget` is higher than this machine's own `Revit.ini` `NativeToposolidMaxPointThreshold` setting. | Lower `pointBudget` in `settings.json` to at most the value the message names, or raise the `Revit.ini` setting within Autodesk's documented 10,000–50,000 range and restart Revit. |
 | "A starting template was written to '...\settings.json'. Edit it and run this command again." | This is the very first run on this machine; no settings file existed yet. | Not an error. Edit the newly written template (see "settings.json" above) and click **Create Toposolid** again. |
 | Nothing happens when you double-click `install.cmd`, or it closes immediately | PowerShell's execution policy is enforced by Group Policy at a scope `-ExecutionPolicy Bypass` cannot override. | Run `Install-SolidGround.ps1` directly from a PowerShell window to see the actual error, or contact your system administrator about the enforced policy. |
+| "Refusing to deploy: a Revit.exe process is running" (or, via `install.cmd`'s own `-AllowOtherRevitVersions`, "...a Revit.exe process under '...\Revit 2027' is running") | Revit 2027 itself is open. This refusal is never overridden by `-AllowOtherRevitVersions` (which `install.cmd` already passes for you) — it only narrows the check to ignore a *different* Revit version. | Close Revit 2027 fully, then run `install.cmd` again. Other Revit versions (for example Revit 2026) can stay open. |
 | The ribbon button is greyed out or the tab is missing | The add-in did not load — check whether a security prompt was answered "Do Not Load," or whether Revit was ever restarted after installing. | Relaunch Revit; if a prompt appears, follow "First launch" above. |
 
 ## 11. Upgrading

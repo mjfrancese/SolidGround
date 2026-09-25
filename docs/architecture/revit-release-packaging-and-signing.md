@@ -546,7 +546,7 @@ concerns, not developer-source-tree concerns:
 
 ```bat
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SolidGround.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SolidGround.ps1" -AllowOtherRevitVersions %*
 ```
 
 A bare `.ps1` does not run on double-click (Explorer opens it in an editor by default); a non-developer
@@ -559,6 +559,22 @@ workaround. Separately, a downloaded, unsigned-by-a-public-CA `.cmd` file with n
 also trigger Windows SmartScreen's "Windows protected your PC" prompt on its first-ever run — a Windows-shell
 dialog, not a Revit dialog, and a different mechanism entirely from Revit's own add-in security prompt; see
 `docs/revit-install-guide.md` for the exact "More info → Run anyway" handling.
+
+**Issue #17 follow-up (2026-09-25): `-AllowOtherRevitVersions` is passed by default, before `%*`.** The
+documented double-click path forwards through `Install-SolidGround.ps1` to `Deploy-RevitAddIn.ps1`, which by
+default refuses to run while *any* `Revit.exe` process is running, of any version (see "Safety switches" under
+`Deploy-RevitAddIn.ps1` above). A user who simply keeps an older Revit version open for unrelated work — common
+— was blocked on step one with the install guide never telling them what to do; `Deploy-RevitAddIn.ps1` already
+supported `-AllowOtherRevitVersions` to narrow that refusal to Revit 2027 specifically, but nothing in the
+double-click path passed it. `install.cmd` now passes it unconditionally, placed before `%*` so a
+caller-supplied argument can still be appended after it (and, since these are named PowerShell parameters
+bound by `Deploy-RevitAddIn.ps1`, position relative to `%*` does not change how any forwarded argument binds).
+This narrows, but never removes, the refusal: `Deploy-RevitAddIn.ps1`'s own path-matching logic still blocks
+outright whenever a running `Revit.exe`'s path is confirmed under `-RevitInstallDir` (Revit 2027 by default) —
+only a *different* Revit version's process is now tolerated. `docs/revit-install-guide.md` section 3 and its
+troubleshooting table, and `scripts/README.md`'s own `install.cmd` section, document this default and the
+resulting refusal message for Revit 2027 itself. `Install-SolidGround.ps1` itself needed no change: it already
+forwards every argument, including this one, straight through unchanged.
 
 The repository source is `scripts/install.cmd` (not the repository root): `RevitHostFilesTests.cs`'s own
 `EnumerateFilesToScanForHardcodedPaths` scans `scripts/` recursively but never the repository root, so keeping
@@ -648,6 +664,9 @@ plain text/JSON only:
   requires.
 - `scripts/Uninstall-SolidGround.ps1` declares the `-AllowOtherRevitVersions` switch and its supporting
   `-RevitInstallDir` parameter (Issue #17 follow-up, above).
+- `scripts/install.cmd` actually passes `-AllowOtherRevitVersions` to `Install-SolidGround.ps1` (Issue #17
+  follow-up, above); `ReleasePackagingTests.cs`'s existing `install.cmd` test was strengthened, not weakened,
+  to require this alongside its prior `-ExecutionPolicy Bypass`/`Install-SolidGround.ps1` checks.
 
 `ArchitectureTests.cs` gains `DirectoryBuildPropsDeclaresThePinnedVersion` (above); no change is needed to
 `NoRevitProjectOrScriptFileHardcodesAnAllUserAddInPath`, which already recursively scans all of `scripts/`.
