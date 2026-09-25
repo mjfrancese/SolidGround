@@ -1,0 +1,7 @@
+{
+    "subject":  "CN=SolidGround Revit Add-in Signing",
+    "sha256":  "33AE532345DEF1CE3050E1466C3C131BAE2D64C75D595F570405B3DFD18D0AA5",
+    "thumbprint":  "EEEAD0AD06069A56C44E09C1FBB26B59FA902270",
+    "notBefore":  "2026-09-25T02:35:29Z",
+    "notAfter":  "2036-09-25T02:45:29Z"
+}
