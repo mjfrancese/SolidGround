@@ -285,6 +285,21 @@ the design note's precondition 8).
 Reuses `Deploy-RevitAddIn.ps1`'s own `-WhatIf` validation and `Sign-RevitAddIn.ps1` rather than reimplementing
 either's logic; never passes `-p:UseRevitReferenceAssemblies=true` (CI-only) to `dotnet restore`/`build`.
 
+**Always** passes `-p:ContinuousIntegrationBuild=true` to its `dotnet restore`/`build`/`test` calls (Issue #17
+dry-run defect fix). `Directory.Build.props` only turns `<ContinuousIntegrationBuild>` on automatically under
+CI (`'$(CI)' == 'true'`); without this explicit flag, a local packaging run's own `dotnet build` embeds the
+packaging operator's real machine path — including their Windows account name — into
+`SolidGround.Revit.dll`/`.pdb` and `SolidGround.Core.dll`/`.pdb`, instead of mapping it to `/_/` the way
+`Deterministic=true` (already unconditional repository-wide) is meant to. This was found by the Issue #17
+release dry run inspecting the shipped zip's own binaries.
+
+As a fail-closed backstop for that flag — not a substitute for it — the script also scans every staged file
+(after `install\`/`payload\`/root-level staging, before signing or zipping) for the build machine's own
+`$env:USERPROFILE`, the repository's absolute root path, and `\Users\<username>`, decoded both as UTF-8/ASCII
+and UTF-16LE, case-insensitively. Packaging refuses, naming the offending file, if any staged file still
+contains one — whether from a future SDK behavior change, a new staged file type, or a build run without the
+flag above.
+
 ### Not in scope
 
 Does not publish a GitHub Release itself (a separate, `AC6`-gated, orchestrator-run step — see

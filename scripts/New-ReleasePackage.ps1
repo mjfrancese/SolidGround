@@ -19,10 +19,17 @@
       4. HEAD is pushed and canonical: after `git fetch origin main --quiet` (so the objects needed
          to evaluate this are actually present locally), HEAD must be an ancestor of the live
          origin/main tip read via `git ls-remote`, never a possibly-stale local ref.
-      5. `dotnet restore <solution> --locked-mode` (never -p:UseRevitReferenceAssemblies=true -- that
-         flag is CI-only and must never reach a local packaging run).
-      6. `dotnet build <solution> --configuration <Configuration> --no-restore`.
-      7. `dotnet test <tests project> --configuration <Configuration> --no-build`, unless -SkipTests.
+      5. `dotnet restore <solution> --locked-mode -p:ContinuousIntegrationBuild=true` (never
+         -p:UseRevitReferenceAssemblies=true -- that flag is CI-only and must never reach a local
+         packaging run).
+      6. `dotnet build <solution> --configuration <Configuration> --no-restore
+         -p:ContinuousIntegrationBuild=true`. Combined with Directory.Build.props's own
+         Deterministic=true (already unconditional), this makes the .NET SDK map embedded source and
+         PDB paths to /_/ instead of this build machine's own real path -- see precondition 9a below
+         for the fail-closed backstop that catches it if this ever silently stops working.
+      7. `dotnet test <tests project> --configuration <Configuration> --no-build
+         -p:ContinuousIntegrationBuild=true`, unless -SkipTests (the property is inert here since
+         --no-build means no compiler invocation happens, but it is passed for consistency with 5-6).
       8. Deploy-RevitAddIn.ps1 itself is reused, never reimplemented, for its own fail-closed
          dependency-closure and forbidden-file validation: this script dot-sources
          Deploy-RevitAddIn.ps1's own default (non-Verify) code path under -WhatIf against a
@@ -37,6 +44,16 @@
       9. A native-binary / runtimes\ folder / unexplained-extra-file re-check runs directly against
          the real build output directory, using precondition 8's own derived file set as "explained"
          -- never a separately hand-maintained list.
+     9a. After every file is staged (install\ and payload\, plus INSTALL.md/THIRD-PARTY-NOTICES/
+         LICENSE) but before signing or zipping: every staged file's raw bytes, decoded both as
+         UTF-8/ASCII and as UTF-16LE, are scanned case-insensitively for this build machine's own
+         $env:USERPROFILE, this repository's own absolute root path, and the literal '\Users\' plus
+         $env:USERNAME. This is the actual fail-closed backstop for precondition 6's
+         -p:ContinuousIntegrationBuild=true flag: if a future SDK change, a new staged file type, or a
+         build invoked without that flag ever re-embeds the packaging operator's own local path or
+         Windows account name (the defect this precondition was added to close -- found by the Issue
+         #17 dry run in SolidGround.Revit.dll/.pdb and SolidGround.Core.dll/.pdb), packaging refuses
+         and names the offending file instead of silently shipping it.
      10. Unless -Sign:$false: every DLL and first-party script staged for the zip is signed
          (Sign-RevitAddIn.ps1) and independently re-verified here -- fails closed only on
          Authenticode status NotSigned/HashMismatch/NotSupportedFileFormat/Incompatible or a signer
@@ -353,6 +370,66 @@ function Assert-ThirdPartyNoticesCoversLockedPackages {
     }
 }
 
+function Test-StagedFilesForLocalMachinePaths {
+    <#
+        Precondition 9a (Issue #17 dry-run defect fix): a fail-closed backstop for the
+        -p:ContinuousIntegrationBuild=true flag now passed to every dotnet restore/build/test call
+        above. That flag is expected to keep the .NET SDK from embedding this packaging machine's own
+        real path into SolidGround.Revit.dll/.pdb and SolidGround.Core.dll/.pdb (mapped to /_/
+        instead) -- but this scan runs unconditionally regardless, so a future SDK behavior change, a
+        new staged file type, or a build invoked without that flag can never silently ship the
+        packaging operator's own Windows account name in a public release.
+
+        Scans every file already staged under $StagingRoot (install\, payload\, and the root-level
+        INSTALL.md/THIRD-PARTY-NOTICES/LICENSE copies -- called after all of those are in place, never
+        just the payload subset) for three case-insensitive patterns: this machine's own
+        $env:USERPROFILE, this repository's own absolute root ($RepoRoot), and the literal '\Users\'
+        plus $env:USERNAME (a narrower, username-only fallback that also catches a differently-rooted
+        profile). Each file's raw bytes are decoded twice -- as UTF-8/ASCII text (the shape a PE debug
+        directory's CodeView PDB path takes) and as UTF-16LE text (the shape portable-PDB metadata
+        strings take) -- since neither decoding alone is guaranteed to surface a match: a UTF-16LE
+        string re-decoded as UTF-8 typically produces mojibake that no longer contains the plain-ASCII
+        pattern, and vice versa.
+
+        Returns the number of files scanned (for an informational Write-Host at the call site); throws
+        naming every offending file and matched pattern if anything is found.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$StagingRoot,
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $rawPatterns = @($env:USERPROFILE, $RepoRoot, "\Users\$env:USERNAME")
+    $patterns = @($rawPatterns | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($patterns.Count -eq 0) {
+        throw 'Cannot run the local-machine-path scan: $env:USERPROFILE, $RepoRoot, and $env:USERNAME resolved no non-empty pattern.'
+    }
+
+    $stagedFiles = @(Get-ChildItem -LiteralPath $StagingRoot -Recurse -File)
+    $hits = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($file in $stagedFiles) {
+        $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+        $utf8Text = [System.Text.Encoding]::UTF8.GetString($bytes)
+        $utf16Text = [System.Text.Encoding]::Unicode.GetString($bytes)
+
+        foreach ($pattern in $patterns) {
+            $foundInUtf8 = $utf8Text.IndexOf($pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            $foundInUtf16 = $utf16Text.IndexOf($pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($foundInUtf8 -or $foundInUtf16) {
+                $encodingLabel = if ($foundInUtf8) { 'UTF-8/ASCII' } else { 'UTF-16LE' }
+                [void]$hits.Add("'$($file.FullName)' contains a build-machine-local path (pattern '$pattern', found decoded as $encodingLabel).")
+            }
+        }
+    }
+
+    if ($hits.Count -gt 0) {
+        throw "Refusing to package: local-machine path(s) found in staged release file(s) -- these must never ship in a public release:`n$($hits -join [System.Environment]::NewLine)"
+    }
+
+    return $stagedFiles.Count
+}
+
 # ----------------------------------------------------------------------------
 # Resolve version, zip name, and the version-freshness precondition (1) -- runs first because it is
 # the cheapest possible check and needs neither git status nor a build.
@@ -425,11 +502,20 @@ if ($LASTEXITCODE -ne 0) {
 # Preconditions 5-7: restore, build, test
 # ----------------------------------------------------------------------------
 
-Invoke-CheckedProcess -FilePath 'dotnet' -ArgumentList @('restore', $SolutionPath, '--locked-mode')
-Invoke-CheckedProcess -FilePath 'dotnet' -ArgumentList @('build', $SolutionPath, '--configuration', $Configuration, '--no-restore')
+# -p:ContinuousIntegrationBuild=true on every dotnet invocation below (Issue #17 dry-run defect fix):
+# Directory.Build.props only turns this property on automatically under CI ('$(CI)' == 'true'), so an
+# ordinary local packaging run must set it explicitly here. Combined with Directory.Build.props's own
+# unconditional Deterministic=true, this makes the .NET SDK map embedded source/PDB paths to /_/
+# instead of this packaging machine's own real path -- see precondition 9a below (Test-
+# StagedFilesForLocalMachinePaths) for the fail-closed scan that backstops this flag rather than
+# trusting it silently.
+$continuousIntegrationBuildProperty = '-p:ContinuousIntegrationBuild=true'
+
+Invoke-CheckedProcess -FilePath 'dotnet' -ArgumentList @('restore', $SolutionPath, '--locked-mode', $continuousIntegrationBuildProperty)
+Invoke-CheckedProcess -FilePath 'dotnet' -ArgumentList @('build', $SolutionPath, '--configuration', $Configuration, '--no-restore', $continuousIntegrationBuildProperty)
 
 if (-not $SkipTests) {
-    Invoke-CheckedProcess -FilePath 'dotnet' -ArgumentList @('test', '--project', $TestsProjectPath, '--configuration', $Configuration, '--no-build')
+    Invoke-CheckedProcess -FilePath 'dotnet' -ArgumentList @('test', '--project', $TestsProjectPath, '--configuration', $Configuration, '--no-build', $continuousIntegrationBuildProperty)
 } else {
     Write-Warning '-SkipTests set: skipping the offline test suite. Never use this for a real release.'
 }
@@ -508,6 +594,19 @@ try {
         Copy-Item -LiteralPath $src -Destination (Join-Path $payloadStagingDir $name) -Force
     }
 
+    # Root-level files: INSTALL.md (verbatim copy of docs/revit-install-guide.md),
+    # THIRD-PARTY-NOTICES, LICENSE -- one authored source each, copied at package time. Staged here,
+    # before signing, so precondition 9a's scan below covers every file that will ship, not only
+    # install\/payload\.
+    Copy-Item -LiteralPath $InstallGuidePath -Destination (Join-Path $stagingRoot 'INSTALL.md') -Force
+    Copy-Item -LiteralPath $ThirdPartyNoticesPath -Destination (Join-Path $stagingRoot 'THIRD-PARTY-NOTICES') -Force
+    Copy-Item -LiteralPath $LicensePath -Destination (Join-Path $stagingRoot 'LICENSE') -Force
+
+    # Precondition 9a: fail-closed scan of every now-staged file for a build-machine-local path,
+    # before signing spends any time on files this gate might still reject.
+    $localPathScanFileCount = Test-StagedFilesForLocalMachinePaths -StagingRoot $stagingRoot -RepoRoot $RepoRoot
+    Write-Host "Local-machine-path scan: $localPathScanFileCount staged file(s) checked, 0 hit(s)."
+
     # Precondition 10 + 10a: sign, then independently re-verify the staged copies.
     $signResults = @()
     if ($Sign) {
@@ -534,13 +633,10 @@ try {
         Write-Warning '-Sign:$false set: producing an UNSIGNED-DRY-RUN artifact. This must never be published as a release.'
     }
 
-    # Root-level files: INSTALL.md (verbatim copy of docs/revit-install-guide.md),
-    # THIRD-PARTY-NOTICES, LICENSE -- one authored source each, copied at package time.
-    Copy-Item -LiteralPath $InstallGuidePath -Destination (Join-Path $stagingRoot 'INSTALL.md') -Force
-    Copy-Item -LiteralPath $ThirdPartyNoticesPath -Destination (Join-Path $stagingRoot 'THIRD-PARTY-NOTICES') -Force
-    Copy-Item -LiteralPath $LicensePath -Destination (Join-Path $stagingRoot 'LICENSE') -Force
-
     # SHA256SUMS: every shipped file except itself, computed over the final (signed, if -Sign) bytes.
+    # signing-certificate.json (copied into install\ just above, inside the -Sign branch) is included
+    # here too, since it is only ever copied after precondition 9a's scan already ran -- it is data
+    # minted by Sign-RevitAddIn.ps1 -NewCertificate, never a build-machine path.
     $allStagedFiles = @(Get-ChildItem -LiteralPath $stagingRoot -Recurse -File)
     $sumsLines = foreach ($file in ($allStagedFiles | Sort-Object FullName)) {
         $relative = $file.FullName.Substring($stagingRoot.Length + 1).Replace('\', '/')

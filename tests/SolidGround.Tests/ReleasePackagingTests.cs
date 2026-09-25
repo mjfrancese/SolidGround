@@ -235,6 +235,57 @@ public sealed class ReleasePackagingTests
     }
 
     [Fact]
+    public void ReleasePackagingScriptBuildsWithContinuousIntegrationBuildTrueToAvoidEmbeddingLocalPaths()
+    {
+        // Issue #17 dry-run defect fix (docs/architecture/revit-release-packaging-and-signing.md,
+        // "Preconditions," step 6): Directory.Build.props only turns <ContinuousIntegrationBuild> on
+        // automatically under CI ('$(CI)' == 'true'), so a local packaging run must pass
+        // -p:ContinuousIntegrationBuild=true explicitly, or the .NET SDK embeds the packaging
+        // operator's own real build path (including their Windows account name) into
+        // SolidGround.Revit.dll/.pdb and SolidGround.Core.dll/.pdb instead of mapping it to /_/. This
+        // is a static, file-content-only assertion (no PowerShell execution, per ruling R8/R17): it
+        // confirms the source text actually passes the property as a quoted argument, the same shape
+        // ReleasePackagingScriptReusesTheProvenDeployScriptAndNeverRestoresUnderTheCiCondition already
+        // uses to confirm -p:UseRevitReferenceAssemblies is never passed.
+        Assert.True(File.Exists(NewReleasePackageScriptPath), $"Missing file: {NewReleasePackageScriptPath}");
+        string content = File.ReadAllText(NewReleasePackageScriptPath);
+
+        Assert.True(
+            Regex.IsMatch(content, "[\"']-p:ContinuousIntegrationBuild=true[\"']", RegexOptions.IgnoreCase),
+            $"'{NewReleasePackageScriptPath}' must pass -p:ContinuousIntegrationBuild=true as an argument to its dotnet build invocation.");
+    }
+
+    [Fact]
+    public void ReleasePackagingScriptScansStagedFilesForBuildMachineLocalPathsBeforeSigning()
+    {
+        // Issue #17 dry-run defect fix: the fail-closed backstop for the flag asserted above --
+        // New-ReleasePackage.ps1 must scan every staged file for the packaging machine's own
+        // $env:USERPROFILE, the repository's absolute root, and '\Users\' plus $env:USERNAME (in both
+        // UTF-8/ASCII and UTF-16LE decodings) after staging and before signing/zipping, refusing to
+        // package if any staged file still contains one. Static, file-content-only assertion.
+        Assert.True(File.Exists(NewReleasePackageScriptPath), $"Missing file: {NewReleasePackageScriptPath}");
+        string content = File.ReadAllText(NewReleasePackageScriptPath);
+
+        Assert.Contains("function Test-StagedFilesForLocalMachinePaths", content, StringComparison.Ordinal);
+        Assert.Contains("$env:USERPROFILE", content, StringComparison.Ordinal);
+        Assert.Contains("$env:USERNAME", content, StringComparison.Ordinal);
+        Assert.Contains("[System.Text.Encoding]::UTF8", content, StringComparison.Ordinal);
+        Assert.Contains("[System.Text.Encoding]::Unicode", content, StringComparison.Ordinal);
+
+        // The scan call site must appear textually after the payload-staging copy loop and before the
+        // signing block, matching the design's "after staging and before signing/zipping" ordering.
+        int scanCallIndex = content.IndexOf("Test-StagedFilesForLocalMachinePaths -StagingRoot", StringComparison.Ordinal);
+        int payloadCopyIndex = content.IndexOf("Cannot stage release payload:", StringComparison.Ordinal);
+        int signingBlockIndex = content.IndexOf("Precondition 10 + 10a: sign", StringComparison.Ordinal);
+
+        Assert.True(scanCallIndex >= 0, $"'{NewReleasePackageScriptPath}' does not call Test-StagedFilesForLocalMachinePaths.");
+        Assert.True(payloadCopyIndex >= 0, $"'{NewReleasePackageScriptPath}' is missing its expected payload-staging copy loop marker.");
+        Assert.True(signingBlockIndex >= 0, $"'{NewReleasePackageScriptPath}' is missing its expected signing-block marker.");
+        Assert.True(payloadCopyIndex < scanCallIndex, "The local-machine-path scan must run after payload staging.");
+        Assert.True(scanCallIndex < signingBlockIndex, "The local-machine-path scan must run before signing.");
+    }
+
+    [Fact]
     public void InstallGuideExistsAndCoversEveryOperatorTopic()
     {
         // Coarse but falsifiable (design-record.md §7): a guard against silently dropping a whole topic

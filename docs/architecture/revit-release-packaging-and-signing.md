@@ -390,10 +390,20 @@ signing runs last because it signs that same build output.
 4. **HEAD is pushed and canonical** — `git fetch origin main --quiet` first, so the objects needed to
    evaluate this are actually present locally, then `git merge-base --is-ancestor <HEAD> <live origin/main
    tip>` against the freshly fetched tip (never a possibly-stale local ref).
-5. `dotnet restore <solution> --locked-mode` — never `-p:UseRevitReferenceAssemblies=true`; that flag is
-   CI-only and must never reach a local packaging run.
-6. `dotnet build <solution> --configuration <Configuration> --no-restore`.
-7. `dotnet test <tests project> --configuration <Configuration> --no-build` (unless `-SkipTests`).
+5. `dotnet restore <solution> --locked-mode -p:ContinuousIntegrationBuild=true` — never
+   `-p:UseRevitReferenceAssemblies=true`; that flag is CI-only and must never reach a local packaging run.
+6. `dotnet build <solution> --configuration <Configuration> --no-restore -p:ContinuousIntegrationBuild=true`.
+   `Directory.Build.props` only sets `<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>`
+   automatically under `'$(CI)' == 'true'`, so a local packaging run must pass it explicitly here — combined
+   with `Directory.Build.props`'s own unconditional `Deterministic=true`, this is what makes the .NET SDK map
+   embedded source and PDB paths to `/_/` instead of the packaging machine's own real path. **Issue #17
+   dry-run defect, fixed here**: an earlier version of this script omitted the flag, so a real local packaging
+   run (unlike CI) shipped the packaging operator's own Windows account name inside
+   `SolidGround.Revit.dll`/`.pdb` and `SolidGround.Core.dll`/`.pdb`'s embedded debug paths — see precondition
+   9a below for the fail-closed backstop added alongside this fix.
+7. `dotnet test <tests project> --configuration <Configuration> --no-build -p:ContinuousIntegrationBuild=true`
+   (unless `-SkipTests`; the property is inert here since `--no-build` means no compiler invocation happens,
+   but it is passed for consistency with steps 5–6).
 8. **Reuse, never reimplement, `Deploy-RevitAddIn.ps1`'s own validation**: `New-ReleasePackage.ps1`
    dot-sources `Deploy-RevitAddIn.ps1`'s own default (non-`-Verify`) code path under `-WhatIf` against a
    throwaway, disposable `-AddinsDirectory`, inside its own helper function's scope (so
@@ -415,6 +425,16 @@ signing runs last because it signs that same build output.
    build output directory, using step 8's own derived file set as "explained" — never a separately
    hand-maintained list. Every `.dll` in that explained set is independently confirmed to be a managed
    assembly via `[System.Reflection.AssemblyName]::GetAssemblyName`.
+9a. **Local-machine-path scan (Issue #17 dry-run defect fix)** — the fail-closed backstop for step 6's
+    `-p:ContinuousIntegrationBuild=true` flag: after every file is staged (`install\`, `payload\`, and the
+    root-level `INSTALL.md`/`THIRD-PARTY-NOTICES`/`LICENSE` copies) but before signing or zipping, every
+    staged file's raw bytes — decoded both as UTF-8/ASCII and as UTF-16LE, since a PE debug directory's
+    CodeView PDB path and a portable-PDB's own metadata strings take different encodings — are scanned
+    case-insensitively for the packaging machine's own `$env:USERPROFILE`, this repository's own absolute
+    root path, and the literal `\Users\` plus `$env:USERNAME`. Packaging refuses, naming the offending file
+    and matched pattern, if any hit is found — so a future SDK behavior change, a new staged file type, or a
+    build invoked without step 6's flag can never silently ship the packaging operator's own local path or
+    Windows account name.
 10. Unless `-Sign:$false`: every DLL and first-party script staged for the zip is signed
     (`Sign-RevitAddIn.ps1`) and independently re-verified — the same deny-list (never
     `NotSigned`/`HashMismatch`/`NotSupportedFileFormat`/`Incompatible`), pinned-signer-hash gate
@@ -605,6 +625,9 @@ plain text/JSON only:
   `Deploy-RevitAddIn.ps1` by name, and never actually passes `-p:UseRevitReferenceAssemblies=true` as an
   argument (the name itself legitimately appears in this script's own comment-based help, explaining why it
   never does; that flag is CI-only and must never reach a local packaging run).
+- `New-ReleasePackage.ps1`'s source actually passes `-p:ContinuousIntegrationBuild=true` as a quoted argument
+  (Issue #17 dry-run defect fix), and defines `Test-StagedFilesForLocalMachinePaths`, calling it after payload
+  staging and before the signing block — the fail-closed local-machine-path scan backstop.
 - `docs/revit-install-guide.md` exists and contains every operator-topic marker this note's own outline
   requires.
 
@@ -877,6 +900,12 @@ in only after a real Revit 2027 session runs the plan above, matching the discip
 - A dirty working tree's effect (if any) on the SDK's own auto-embedded commit SHA is not yet confirmed by a
   real build; the clean-tree packaging precondition, not the SDK's own git-dirty detection, is what actually
   guarantees a shipped binary's embedded commit hash is truthful either way.
+- **Resolved** (Issue #17 dry-run defect, found and fixed after this note's initial drafting): a real local
+  packaging run originally omitted `-p:ContinuousIntegrationBuild=true` from its `dotnet restore`/`build`/
+  `test` calls, so — unlike CI, which sets it via `'$(CI)' == 'true'` — the packaging operator's own Windows
+  account name shipped inside `SolidGround.Revit.dll`/`.pdb` and `SolidGround.Core.dll`/`.pdb`'s embedded
+  debug paths. Fixed by passing the flag explicitly (step 6 above) plus a fail-closed scan of every staged
+  file for a build-machine-local path (step 9a above) as a backstop that does not depend on the flag alone.
 - All-user installation, a publicly trusted (CA-issued) certificate, and MSI-style packaging remain explicitly
   out of scope for this milestone; see "What this note does not do" below.
 
