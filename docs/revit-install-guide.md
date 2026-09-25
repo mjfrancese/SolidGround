@@ -127,32 +127,43 @@ are not hot-reloaded.
 ## 4. First launch and the security prompt
 
 Because SolidGround is signed with a self-signed certificate rather than one issued by a public certificate
-authority, Revit will show a security prompt the first time it loads a new SolidGround build, unless you have
-already trusted the certificate (next section). Which exact prompt you see depends on whether the build is
-signed at all:
+authority, Revit does not trust it out of the box, unless you have already trusted the certificate (next
+section). Which exact prompt you see depends on whether the build is signed at all — these are two visibly
+different dialogs, not two variants of the same one:
 
 - **Unsigned build** (only during ordinary development, never a real release): a 3-choice prompt —
   **Always Load**, **Load Once**, **Do Not Load**.
-- **Signed release build, certificate not yet trusted**: a 2-choice prompt — **Always Load**, **Do Not
-  Load** (no "Load Once" option on this shape).
+- **Signed release build, certificate not yet trusted** (the normal state on a first install, before you run
+  the trust import below): a dialog titled **"Security - Invalid Signature"**, reading "This signed add-in
+  has a security problem. What do you want to do?", followed by the add-in's Name, Publisher, Location,
+  Issuer, and Date, and "This could mean that this add-in has been tampered with, or that the publisher's
+  certificate has been revoked. We recommend that you do not load it." This dialog has exactly two buttons,
+  **Load** and **Do Not Load** — there is no "Always Load" button here. (Observed on Windows 11 / Revit 2027
+  build 27.0.10.13 against a genuinely signed SolidGround release, before importing trust.)
 
-**What to click:** click **Load Once** if the dialog offers it. If it does not (the 2-choice shape above),
-click **Do Not Load**. Do not click **Always Load** on either shape. We deliberately do not recommend "Always
-Load" here: what it actually persists for a *signed* SolidGround build has not yet been confirmed by a live
-Revit 2027 session (see `docs/architecture/revit-release-packaging-and-signing.md`'s "Known limitations"),
-and clicking it could leave registry state on your machine whose effect we cannot yet describe accurately.
+**What to click:** on the unsigned 3-choice prompt, click **Load Once** if you need to load a development
+build without importing trust; do not click **Always Load** there either, since what it actually persists has
+not been confirmed by a live Revit 2027 session. On the signed "Security - Invalid Signature" dialog, click
+**Do Not Load** unless you specifically want SolidGround to run for that one session anyway — **importing the
+certificate (next section) is the recommended way to stop this dialog from appearing**, rather than answering
+it on every launch.
 
-**The practical consequence of "Do Not Load":** on the signed-but-not-yet-trusted 2-choice prompt, "Do Not
-Load" means SolidGround simply does not load for that Revit session, and you will see the same prompt again
-the next time you launch Revit. This is a real, honestly disclosed limitation of skipping the trust-import
-step below, not a bug — if you want to actually use SolidGround without repeating this decision every launch,
-import trust once as described next.
+**The practical consequence of "Do Not Load":** on the signed "Security - Invalid Signature" dialog, "Do Not
+Load" means SolidGround simply does not load for that Revit session, and you will see the same dialog again
+the next time Revit loads this build. This is a real, honestly disclosed limitation of skipping the
+trust-import step below, not a bug — if you want to actually use SolidGround without repeating this decision
+every launch, import trust once as described next.
+
+**The practical consequence of "Load" instead:** SolidGround loads for that Revit session. Whether choosing
+"Load" also suppresses the dialog the *next* time Revit loads the same build has not been verified in a live
+session — only "Do Not Load" has been directly exercised end to end. Until that is confirmed, treat "Load" as
+a per-session choice only; use the trust import below for a durable fix.
 
 ## 5. Trusting the certificate (optional, one time per workstation)
 
 Importing SolidGround's signing certificate into your machine's trusted-root store is what makes the
-security prompt above stop appearing for SolidGround builds signed by this certificate, on this workstation,
-from then on.
+"Security - Invalid Signature" dialog described above stop appearing for SolidGround builds signed by this
+certificate, on this workstation, from then on.
 
 **What this actually does, in plain terms:** it adds SolidGround's certificate to your computer's
 **systemwide** list of trusted certificate authorities and trusted publishers (`Cert:\LocalMachine\Root` and
@@ -178,10 +189,10 @@ publisher account, since both the zip and the published thumbprint would come fr
 case.
 
 After this runs successfully, fully restart Revit 2027. From then on, SolidGround builds signed by this same
-certificate should load without any security prompt.
+certificate load without the "Security - Invalid Signature" dialog.
 
 **Skipping this step is a fully supported, documented alternative** for anyone unwilling to make a
-systemwide trust change: you simply keep seeing the prompt described in "First launch" above every time
+systemwide trust change: you simply keep seeing the dialog described in "First launch" above every time
 Revit loads a new SolidGround build.
 
 ## 6. Setting your OpenTopography API key
@@ -313,6 +324,7 @@ written to these logs.
 | Nothing happens when you double-click `install.cmd`, or it closes immediately | PowerShell's execution policy is enforced by Group Policy at a scope `-ExecutionPolicy Bypass` cannot override. | Run `Install-SolidGround.ps1` directly from a PowerShell window to see the actual error, or contact your system administrator about the enforced policy. |
 | "Refusing to deploy: a Revit.exe process is running" (or, via `install.cmd`'s own `-AllowOtherRevitVersions`, "...a Revit.exe process under '...\Revit 2027' is running") | Revit 2027 itself is open. This refusal is never overridden by `-AllowOtherRevitVersions` (which `install.cmd` already passes for you) — it only narrows the check to ignore a *different* Revit version. | Close Revit 2027 fully, then run `install.cmd` again. Other Revit versions (for example Revit 2026) can stay open. |
 | The ribbon button is greyed out or the tab is missing | The add-in did not load — check whether a security prompt was answered "Do Not Load," or whether Revit was ever restarted after installing. | Relaunch Revit; if a prompt appears, follow "First launch" above. |
+| Revit closes unexpectedly while opening a document, right after starting up | An intermittent Revit 2027.0.1 (build 27.0.10.13) crash (`ntdll.dll` exception `0xc0000374`, heap corruption) has been observed during document-open at startup. It is not specific to SolidGround or to signing — it has also been seen with SolidGround not loaded at all, and with an unsigned build of the same code. | Simply relaunch Revit; every observed occurrence succeeded on a retry. If it persists, install the latest available Revit 2027 update and try again; report it if it still persists after updating. |
 
 ## 11. Upgrading
 

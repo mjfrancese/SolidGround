@@ -1,20 +1,22 @@
 # Revit release packaging and signing
 
-**Status.** DESIGN-stage and SCRIPTS-stage work is complete. `scripts/Sign-RevitAddIn.ps1 -NewCertificate`
-was run for real on 2026-09-24 local time (2026-09-25T02:35Z) and minted the SolidGround signing certificate;
-see "Certificate creation parameters" and "The signing certificate pin file" below for its recorded identity.
-No release zip has otherwise been built, and no Revit 2027 session has run against this design.
+**Status.** DESIGN-stage, SCRIPTS-stage, and the live Revit 2027 manual evidence plan are all complete.
+`scripts/Sign-RevitAddIn.ps1 -NewCertificate` was run for real on 2026-09-24 local time (2026-09-25T02:35Z) and
+minted the SolidGround signing certificate; see "Certificate creation parameters" and "The signing certificate
+pin file" below for its recorded identity. A 2026-09-25 live Revit 2027 session then built, signed, and
+packaged a release candidate from commit `a515f0e` (zip SHA-256
+`6456AFFE8C83223EA67DCFBA83C58276153B36F224EBE222A02455EE2BF8B36D`) and ran the full "Manual evidence plan"
+below end to end against a real Revit 2027 (build 27.0.10.13, i.e. update 2027.0.1) process on Windows 11; its
+results are recorded in "Evidence" below and in each numbered step's own Evidence paragraph.
 `Directory.Build.props` now declares `<Version>0.1.0</Version>`; `scripts/Sign-RevitAddIn.ps1`,
 `scripts/Import-SigningTrust.ps1`, `scripts/Uninstall-SolidGround.ps1`, `scripts/New-ReleasePackage.ps1`,
 `scripts/Install-SolidGround.ps1`, and `scripts/install.cmd` all exist and are described below directly from
-their own committed source; none of the packaging/install scripts, and no signing beyond the certificate
-mint itself, has been run for real yet. `scripts/signing-certificate.json` — the pin file every signing/
-packaging/install script treats as its one source of truth for the certificate's identity — now exists,
-written by that same mint; its committed values are quoted directly in "The signing certificate pin file"
-below. This note's own "Manual evidence plan" section is a written-in-advance runbook, not a report: every
-"Evidence" paragraph in it is still a placeholder reading "Pending the live Revit 2027 session," and this
-note makes no claim that a real build, sign of a build artifact, package, install, or Revit-launch has
-happened — only the certificate mint itself has. It follows the structure, tone, and citation style of
+their own committed source, and have now all been run for real (see "Evidence" below).
+`scripts/signing-certificate.json` — the pin file every signing/packaging/install script treats as its one
+source of truth for the certificate's identity — now exists, written by that same mint; its committed values
+are quoted directly in "The signing certificate pin file" below. **What remains open**: AC6 (the owner's
+acceptance of this end-to-end result) and, gated on it, the GitHub Release publication described in "GitHub
+Release" below — neither has happened yet. It follows the structure, tone, and citation style of
 `docs/architecture/revit-toposolid-creation.md`, `docs/architecture/revit-extensible-storage-provenance.md`,
 and `docs/architecture/revit-ribbon-icons.md`, and is synthesized from Issue #17's own multi-proposal,
 four-review design record (`design-record.md`, Draft 4; not committed to this repository) plus a read-only
@@ -94,9 +96,11 @@ appears in the release zip's filename and the git tag, computed separately at pa
 Whether a *dirty* working tree changes, suffixes, or leaves unchanged the embedded SHA is not resolved by
 inspection alone; this does not block adopting `<Version>`, because `New-ReleasePackage.ps1`'s own clean-tree
 precondition (below) is what actually guarantees a shipped binary's embedded commit hash is truthful,
-independent of whatever the SDK's own git-dirty detection does. **To be evidenced:** a real build during the
-live Revit 2027 session (Stage 1.1 below) is the first time this repository reads the resulting
-`AssemblyInfo`/`FileVersionInfo` directly rather than predicting its shape.
+independent of whatever the SDK's own git-dirty detection does. **Evidenced (2026-09-25):** the real build
+produced for the live Revit 2027 session (Stage 1.1) resolved to `FileVersion` `0.1.0.0` when read back live at
+Stage 2.12's final-machine-state check, confirming `<Version>0.1.0</Version>` reaches the shipped binary as
+designed; this session's evidence did not separately capture the full `AssemblyInformationalVersion` string
+with its embedded commit SHA in writing.
 
 `tests/SolidGround.Tests/ArchitectureTests.cs`'s `DirectoryBuildPropsDeclaresThePinnedVersion` parses
 `Directory.Build.props` as XML and asserts exactly one `<Version>` element with the literal, hardcoded value
@@ -151,13 +155,14 @@ New-SelfSignedCertificate `
 already exists or if `Cert:\CurrentUser\My` already contains a certificate with the same subject — rotation
 is a documented manual procedure (see "Key loss, rotation, and revocation" below), not something this switch
 does. **This certificate was minted for real on 2026-09-24 local time (2026-09-25T02:35Z)**, ahead of and
-separately from the rest of the orchestrated Stage 1.1 (below), which still covers only the not-yet-run
-build/sign/package/dry-run sequence. The mint placed the certificate in `Cert:\CurrentUser\My` as requested,
-plus a public-only copy (no private key) in `Cert:\CurrentUser\CA` — expected, harmless behavior confirmed by
-before/after store snapshots this session; see `scripts/Sign-RevitAddIn.ps1`'s own catch-block comment for
-the full explanation. No trust import (`Import-SigningTrust.ps1`) has run yet. See "The signing certificate
-pin file" immediately below for the minted certificate's recorded identity, pinned in the committed
-`scripts/signing-certificate.json`.
+separately from the rest of Stage 1.1 (below); the build/sign/package/dry-run sequence itself then ran for
+real on 2026-09-25 (see "Evidence" further down this note). The mint placed the certificate in
+`Cert:\CurrentUser\My` as requested, plus a public-only copy (no private key) in `Cert:\CurrentUser\CA` —
+expected, harmless behavior confirmed by before/after store snapshots this session; see
+`scripts/Sign-RevitAddIn.ps1`'s own catch-block comment for the full explanation. `Import-SigningTrust.ps1` has
+since run for real too (Stage 2.4), adding this certificate to `Cert:\LocalMachine\Root` and
+`Cert:\LocalMachine\TrustedPublisher`. See "The signing certificate pin file" immediately below for the minted
+certificate's recorded identity, pinned in the committed `scripts/signing-certificate.json`.
 
 ### The signing certificate pin file
 
@@ -192,9 +197,10 @@ above reads `scripts/signing-certificate.json` itself, not this table. **The pin
 
 The private key is non-exportable (CNG `ExportPolicy None`) and lives only in `Cert:\CurrentUser\My` on this
 workstation; minting also left a public-only copy (no private key) in `Cert:\CurrentUser\CA`, expected and
-harmless (see "Certificate creation parameters" above). No trust import has run yet, so this certificate is
-still untrusted everywhere until `Import-SigningTrust.ps1` runs (see "Who mints, who imports trust, and
-when" below).
+harmless (see "Certificate creation parameters" above). `Import-SigningTrust.ps1` has since run for real
+(Stage 2.4, 2026-09-25), so this certificate is now trusted in `Cert:\LocalMachine\Root` and
+`Cert:\LocalMachine\TrustedPublisher` on the machine that session ran on (see "Who mints, who imports trust,
+and when" below); any *other* workstation remains untrusted until it runs the same import.
 
 ### Which files are signed, and with what
 
@@ -280,9 +286,11 @@ otherwise silently downgrade the shipped file signature's own hash algorithm on 
 (`New-ReleasePackage.ps1` always passes it); without it, a timestamp failure is a logged warning and the file
 is re-signed without one. `New-ReleasePackage.ps1` reports, per run, whether every signed file was actually
 timestamped — never merely attempted — so a release's "keeps working after a future rotation" status is
-checkable per build rather than assumed. **To be evidenced:** whether `http://timestamp.digicert.com` actually
-succeeds against this project's own certificate is confirmed only by the first real signing pass (Stage 1.1
-below); Sectigo's own public timestamp endpoint is a documented fallback if it does not.
+checkable per build rather than assumed. The first real signing pass ran at Stage 1.1 (2026-09-25) and produced
+the signed, trusted, working `a515f0e` release candidate the rest of the session validated; this note does not
+separately carry `New-ReleasePackage.ps1`'s own per-run timestamp-success report in writing. Sectigo's own
+public timestamp endpoint remains the documented fallback if `http://timestamp.digicert.com` ever does not
+succeed.
 
 ### Who mints, who imports trust, and when
 
@@ -494,8 +502,9 @@ except itself, computed over the **final, signed** bytes — the conventional `s
 format. A **separate**, sibling `artifacts/release/SolidGround-Revit2027-v0.1.0.zip.sha256` file (outside the
 zip, since the in-zip `SHA256SUMS` cannot hash the archive that contains it) lets a downloader verify the
 archive itself before ever extracting it; this is the file also attached as a standalone GitHub Release asset
-(below). **The first real `SHA256SUMS` and `.zip.sha256` have not been produced yet** — they are written only
-by a real, non-dry-run `New-ReleasePackage.ps1` run, which has not happened as of this note's drafting.
+(below). **The first real `SHA256SUMS` and `.zip.sha256` were produced by the 2026-09-25 packaging run**
+described in "Evidence" further down this note, whose zip carries SHA-256
+`6456AFFE8C83223EA67DCFBA83C58276153B36F224EBE222A02455EE2BF8B36D`.
 
 ### Notices, license, install guide
 
@@ -710,14 +719,18 @@ non-push-event run even in a hypothetical misconfiguration. **To be confirmed at
 `gh release create`, `gh run list --workflow=ci.yml --limit 5` shows no new run with a timestamp after the
 release was created.
 
-**Neither the release build nor the tag/release has happened yet.** This section describes the design D2
-adopted; it makes no claim that Stage 9 has run.
+**The release build has now happened** (the `a515f0e` release candidate described in "Evidence" below), but
+the git tag and the GitHub Release publication itself have not: both are gated on AC6, the owner's explicit
+acceptance, which is still pending. This section describes the design D2 adopted; it makes no claim that the
+`git tag`/`gh release create` commands above have actually been run.
 
 ## Manual evidence plan (Revit 2027 session)
 
-A prepared, not-yet-run runbook, following this repository's own established shape — numbered steps, a pass
-criterion, and a blank "Evidence" paragraph per step, filled in only from a real session. It requires
-the owner's explicit "go" before any Revit launch and follows every standing owner rule throughout: handle-only
+**Run for real on 2026-09-25**; every numbered step below now carries its own Evidence paragraph filled in from
+that session (see also the "Evidence" and "Acceptance criteria" sections further down this note for the
+headline summary). This section otherwise still follows this repository's own established shape — numbered
+steps, a pass criterion, and a per-step "Evidence" paragraph. It required the owner's explicit "go" before any
+Revit launch and followed every standing owner rule throughout: handle-only
 automation; the pyRevit port-ordering rule; never saving into the launcher's own template document
 (hash-guarded); avoiding the `SolidGroundProbe` add-in entirely (a new, minimal, ribbon-free, `OnStartup`-free
 reader add-in is used instead for the provenance read-back, since that add-in's own ribbon-building code has
@@ -731,10 +744,16 @@ session can produce, the unified button rule: **click "Load Once" if the dialog 
 throwaway `-AddinsDirectory`. **Update, 2026-09-24:** the certificate mint itself (`Sign-RevitAddIn.ps1
 -NewCertificate`) already ran for real, separately from and ahead of the rest of this stage — see "Code
 signing" above for its recorded thumbprint and SHA-256 hash — so it is no longer a side effect this stage's
-own first run produces; the build/sign-a-real-artifact/package/dry-run sequence itself has not run yet.
+own first run produces.
 *Pass:* every command exits 0; `-Verify` reports all `OK`.
-*Evidence: Pending the live Revit 2027 session for the build/package/dry-run sequence; the certificate mint's
-own evidence is recorded in "Code signing" above.*
+*Evidence: build/sign/package ran for real on 2026-09-25, producing a release candidate from commit `a515f0e`
+(zip SHA-256 `6456AFFE8C83223EA67DCFBA83C58276153B36F224EBE222A02455EE2BF8B36D`). The session paused mid-way
+through the first packaging attempt when the owner asked that no personal information ship in the public
+repository; the zip was rebuilt from a privacy-scrubbed commit (`2eab002` onward, landing at `a515f0e`) before
+resuming. A dedicated throwaway-directory dry run ahead of Stage 2 was folded into, rather than run separately
+from, the live sequence itself: Stage 2.1 is this build's first real install, and Stage 2.11's uninstall,
+reinstall, and `Deploy-RevitAddIn.ps1 -Verify` (6 of 6 files `OK`) is this build's own verify pass. Every
+command exited 0.*
 
 **1.2** Snapshot SolidGround- and probe-owned state, with hashes, not just notes: the live `SolidGround.addin`
 manifest, the whole versioned `SolidGround\` folder tree, `SolidGroundProbe.addin` and its build tree,
@@ -745,7 +764,10 @@ manifest, the whole versioned `SolidGround\` folder tree, `SolidGroundProbe.addi
 exists anywhere in that listing other than the one just minted at 1.1. *Pass:* every hash and certificate-store
 listing recorded before anything else is touched; the assertion holds, or any exception is recorded and
 handled at 1.3.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: a full snapshot was written before anything else was touched (`S1-2-snapshot-baseline.json`);
+checked for drift immediately before Stage 1.3's removal, with no drift found. It discovered both AddInIds
+present on the machine (`SolidGround.addin`'s and `SolidGroundProbe.addin`'s), consistent with the assertion
+holding.*
 
 **1.3** Remove that state, reproducing a never-installed machine for SolidGround and its probe specifically
 (explicitly not attempted: pyRevit itself, a concurrently running Revit 2026 session, or the installed default
@@ -753,12 +775,20 @@ template's own history). Any *pre-existing* SolidGround-subject certificate foun
 (a leftover from a prior run of this same procedure, never this run's own freshly minted `CurrentUser\My`
 certificate) is removed now; the certificate minted at 1.1 and its `CurrentUser\My` presence are not removed
 here.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: backed up and removed the live `SolidGround.addin` and `SolidGroundProbe.addin` manifests, the
+versioned `SolidGround\` folder tree, `%ProgramData%\SolidGround\Revit\` (`settings.json` and `Logs\`), and
+both discovered `HKCU:\...\CodeSigning` values (one per AddInId). No pre-existing SolidGround-subject
+certificate was found in any of the five stores beyond the certificate minted at 1.1, so nothing
+certificate-related was removed at this step. Left in place, by design: every certificate store; `Program
+Files`/`ProgramData`'s Autodesk Addins folders (pyRevit and other vendors' files); the timestamped backup
+itself.*
 
 **1.4** Simulate a download: copy the built zip to a scratch "Downloads"-style folder and apply a real
 `Zone.Identifier` alternate data stream, so the session genuinely exercises the mark-of-the-web path
 `Install-SolidGround.ps1`'s `Unblock-File` step is designed around.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: done, twice — once ahead of the first (paused) install attempt, and again after the zip was
+rebuilt from the privacy-scrubbed commit `a515f0e` following the pause described at 1.1. Both times the
+extracted files carried a genuine Mark-of-the-Web stream before `Install-SolidGround.ps1` ran.*
 
 **1.5** Reader add-in preparation and the `Type="Command"` manifest verification (ruling R7). Before
 authoring or building the throwaway reader add-in used at Stage 2.9: independently verify, against the
@@ -772,7 +802,13 @@ of the already-proven Issue #16 four-part discipline (`GetEntitySchemaGuids()` c
 `Element.GetEntity()`, per-field reads). *Pass:* the manifest-type claim is confirmed against a primary Revit
 2027 source (cited here once found) or this design is updated to match whatever the SDK/documentation
 actually says before Stage 2.9 depends on it; the reader add-in builds cleanly and is not yet installed.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: a `Type="Command"` reader add-in was built and installed under a distinct `VendorId`
+("SolidGroundEvidence") as planned. **Deviation, discovered live at Stage 2.7 (recorded here rather than
+silently smoothed over):** Revit 2027's Add-Ins → External Tools pulldown exposes no UI Automation children,
+so a `Type="Command"` entry cannot actually be driven by this session's handle-only automation discipline. The
+reader was pivoted, live, to a `DocumentOpened`-triggered `IExternalApplication` (an "autodump" reader) so it
+could run without needing a menu click — the read-half implementation itself (`GetEntitySchemaGuids()`,
+`Schema.Lookup`, `Element.GetEntity()`, per-field reads) was unchanged.*
 
 **Stop condition**: if 1.1's dry run finds any non-`OK` row, or any packaging precondition fires, stop and
 fix before proceeding — never carry an unverified package into a live Revit session.
@@ -781,7 +817,8 @@ fix before proceeding — never carry an unverified package into a live Revit se
 
 **2.0** Preconditions: an interference check for other Revit/pyRevit processes; a pyRevit-port-safe launch
 window; the launcher template hashed before any launch.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: run before every launch throughout Stage 2 below; the default template's hash was captured as part
+of the Stage 1.2 snapshot and reconfirmed unchanged at Stage 2.12 (see that step's Evidence).*
 
 **2.1** Extract, unblock, and install via the documented path (`install.cmd`), handling Windows SmartScreen's
 "Windows protected your PC" prompt if it appears (via the same structured, message-based click technique used
@@ -789,23 +826,43 @@ for every other dialog in this session, since this is a disclosed, deliberate ex
 discipline to this one additional, non-Revit Win32 dialog) into the now-genuinely-empty real per-user
 `-AddinsDirectory`. *Maps to:* AC1. *Pass:* the install guide's own written steps, followed exactly, produce a
 working deploy with no undocumented workaround.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: the double-click path (`install.cmd`) was used with Revit 2026 open, confirming
+`-AllowOtherRevitVersions` (on by default in `install.cmd`) let the install proceed anyway. Windows showed the
+expected "Open File - Security Warning" ("The publisher could not be verified. Are you sure you want to run
+this software?", Publisher: Unknown Publisher, Type: Windows Command Script; buttons Run / Save / Cancel);
+SmartScreen's own separate "Windows protected your PC" prompt did not appear this run. **Run** was clicked and
+`install.cmd` completed, printing that every signed file matches the pinned certificate hash, that the
+certificate is not yet trusted, and the exact `Import-SigningTrust.ps1` next-step command — matching the
+design exactly. The session paused once mid-attempt (see Stage 1.1's Evidence) and resumed against the
+rebuilt, privacy-scrubbed zip before this step's own pass was recorded. **Pass.***
 
 **2.2** Launch Revit 2027 **without** the trust import — the untrusted-first-launch dialog, required evidence
 for AC1's own no-trust-import alternative, not an optional bonus. Capture whichever dialog shape actually
-appears (the 3-choice unsigned shape, or the 2-choice signed-but-not-yet-trusted-publisher shape) with its
-exact window text and button set. Per the unified button rule: click "Load Once" if offered, else "Do Not
+appears (the 3-choice unsigned shape, or the dialog a signed-but-not-yet-trusted build actually shows) with
+its exact window text and button set. Per the unified button rule: click "Load Once" if offered, else "Do Not
 Load"; never "Always Load," deliberately avoiding the one persistence choice whose effect on a *signed*
 SolidGround build has never been observed. Record whether the ribbon tab loaded; close Revit. *Maps to:* AC1.
 *Pass:* the dialog is captured with its exact button set recorded; the correct button is clicked; the tab's
 load state matches the button clicked.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: a signed, not-yet-trusted build shows a dialog titled **"Security - Invalid Signature"**, not a
+2-button variant of the unsigned 3-choice dialog as this design originally assumed — it is a visibly different
+dialog: "This signed add-in has a security problem. What do you want to do?", Name SolidGround, Publisher
+Unknown, Location the per-user Addins path, Issuer None, Date the signing time, then "This could mean that
+this add-in has been tampered with, or that the publisher's certificate has been revoked. We recommend that
+you do not load it." Its buttons are exactly **Load** / **Do Not Load** — no "Always Load" button exists on
+this dialog at all, so the unified button rule's "else Do Not Load" branch is what actually applied; **Do Not
+Load** was clicked. No SolidGround tab appeared afterward. `docs/revit-install-guide.md` and
+`scripts/Install-SolidGround.ps1` have been corrected to describe this dialog accurately instead of the
+originally assumed 2-choice "Always Load"/"Do Not Load" shape. **Pass**, with the design's own dialog-shape
+assumption corrected by this evidence.*
 
 **2.3** Diff certificate- and registry-state against the Stage 1.2 snapshot. A "Load Once" or "Do Not Load"
 answer at 2.2 is expected to leave every one of them unchanged; this step confirms that directly. Any
 difference found is recorded (old value, new value) and reverted before 2.4. *Pass:* either no diff, or a
 fully recorded and reverted one.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: no diff. No `HKCU:\...\CodeSigning` value was written by the "Do Not Load" answer at 2.2; the
+certificate stores held only the pre-existing `CurrentUser\My` and `CurrentUser\CA` entries from the 1.1 mint,
+unchanged; the default template's hash was unchanged. **Pass** — no revert was needed before 2.4.*
 
 **2.4** The one-time trust import: run `Import-SigningTrust.ps1 -Confirm:$false` (the orchestrator's own
 invocation is non-interactive, so `-Confirm:$false` is required — without it, `$PSCmdlet.ShouldProcess()`
@@ -814,19 +871,39 @@ below); cross-check its printed thumbprint and SHA-256 hash against the values p
 `scripts/signing-certificate.json` and this note. The orchestrator runs the command; **the owner approves the
 resulting UAC elevation prompt personally.** *Pass:* the command exits 0; both printed hash values match the
 pinned values exactly. If the owner declines the prompt, this step and the session stop and escalate.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: `Import-SigningTrust.ps1 -Confirm:$false` was run from the extracted package's own `install\`
+folder, in a PowerShell session that was already elevated for this work — no new UAC prompt was rendered for
+the owner to approve at this specific invocation, since the elevation this step's own precondition checks for
+was already in place. It printed the certificate's subject, SHA-1 thumbprint
+`EEEAD0AD06069A56C44E09C1FBB26B59FA902270`, and SHA-256 hash
+`33AE532345DEF1CE3050E1466C3C131BAE2D64C75D595F570405B3DFD18D0AA5` — both matching "The signing certificate
+pin file" above exactly — then added the certificate to `LocalMachine\Root` and `LocalMachine\TrustedPublisher`
+idempotently. Exit code 0. **Pass.***
 
 **2.5** Relaunch Revit 2027 — the central, to-be-evidenced claim: **no security dialog appears at all**,
 confirming durable suppression, tested against a machine this same session already proved was genuinely
 untrusted moments before. *Maps to:* AC1. *Pass:* no dialog; the ribbon tab loads. If a dialog unexpectedly
 appears anyway, the same unified button rule applies, and this step stops to investigate rather than being
 waved past.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: **the central claim is confirmed: Pass, on the third attempt.** The first two relaunches with the
+now-trusted certificate each crashed Revit itself during template open — not a security dialog, a full process
+crash (`ntdll.dll` exception `0xc0000374`, heap corruption; see "Known limitations" below) — before any
+security dialog could be observed either way, so neither crash is evidence against durable suppression, only
+evidence of the separate, already-known intermittent startup crash. A relaunch succeeded each time. Before
+trying a third relaunch, a control launch with the SolidGround manifest set aside opened cleanly (ruling out a
+launch-window/interference problem), and a separate comparison launch of an **unsigned** build of the same
+commit showed the expected 3-choice "Security - Unsigned Add-In" dialog (Always Load / Load Once / Do Not
+Load) — confirming the crash is not specific to signing. On the third relaunch of the signed, now-trusted
+build: **no security dialog appeared; the SolidGround tab loaded silently.** Confirmed against a machine this
+same session had just proven genuinely untrusted at 2.2–2.3. **Pass.***
 
 **2.6** Icon check (a light re-confirmation of Issue #19's own already-complete evidence, mapping to AC3),
 then close Revit — needed before 2.7's key-bearing relaunch, since the OpenTopography key can only be injected
 into a fresh child process.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: the 32 px icon rendered correctly on the signed, trusted build (dark theme), consistent with Issue
+#19's own already-complete evidence. The first click of **Create Toposolid** with no `settings.json` present
+produced the expected Preflight dialog and wrote the starting template to
+`%ProgramData%\SolidGround\Revit\settings.json`. Revit closed. **Pass.***
 
 **2.7** The example-site scenario, live `fetch` mode (ruling R6). Relaunch with `OPENTOPOGRAPHY_API_KEY` injected
 only through the launcher's own `-EnvironmentVariable` parameter — never written to `settings.json`, never
@@ -839,11 +916,27 @@ before concluding the add-in is at fault; if the CLI fetch also fails, the key i
 step falls back to `"mode": "process"` against the already-committed example-site fixture set — AC2 is still met
 via the process-mode path, but the live-fetch demonstration did not complete this session, and that limitation
 is recorded plainly rather than smoothed over.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: the live fetch succeeded — no 401/403 fallback was needed. `OPENTOPOGRAPHY_API_KEY` was injected
+only through the launcher's own `-EnvironmentVariable` parameter into this one child process, never written to
+`settings.json` and never logged (the log records the request with `API_Key` redacted). **Deviation recorded
+honestly:** Stage 1.5's planned `Type="Command"` reader add-in turned out not to be drivable handle-only,
+because Revit 2027's Add-Ins → External Tools pulldown exposes no UI Automation children (see 1.5's own
+Evidence above); this was discovered live at this step, and the plan pivoted to saving the created element
+into a document, closing, and reopening it under a `DocumentOpened`-triggered reader instead (see 2.8-2.9
+below) rather than reading it back in the same session via a menu click. With that pivot in place, **Create
+Toposolid** was run with `"mode": "fetch"`, the example-site parcel-polygon AOI, `pointBudget` 15000, and U.S.
+survey foot: it created element id 317345, 1600 of 1600 points retained (within the 15000 budget). **Pass**
+for the live-fetch half of AC2.*
 
 **2.8** Create a fresh evidence Revit project by API, before any Save — never saving into the launcher's own
 template document. Hash the template before and after this whole stage as a hard-stop guard.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: **deviation recorded honestly:** rather than an API-created fresh project, the save target actually
+used was a disposable working copy of the default template (`template-copy\Default_I_ENU.rte`, 4,710,400
+bytes) created in the evidence scratch folder — the element created at 2.7 was saved into that copy, never
+into the installed template or the launcher's own template document. The installed template's own hash
+(`C:\ProgramData\Autodesk\RVT 2027\Templates\Default_I_ENU.rte`) was confirmed unchanged both before this
+stage and again at 2.12. Revit closed. **Pass**, via this disclosed substitute save target rather than the
+originally planned API-created project.*
 
 **2.9** Install the reader add-in's manifest (built at Stage 1.5) into `%APPDATA%\Autodesk\Revit\Addins\2027\`
 for the first time this session, mirroring `SolidGroundProbe.addin`'s own already-observed
@@ -856,7 +949,18 @@ only the read half of the proven Issue #16 four-part discipline, and independent
 with the existing, unmodified Issue #16 `GeoCheck` console against the recorded local-origin offset/CRS/datum.
 *Maps to:* AC2 (second half). *Pass:* all 36 provenance fields match pre-save values within tolerance;
 `GeoCheck`'s reconstructed source coordinate matches within its own tolerance.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: as described at 2.7's own Evidence, the reader was installed as a `DocumentOpened`-triggered
+`IExternalApplication` (its own `VendorId`, "SolidGroundEvidence") rather than the originally planned
+`Type="Command"` entry. Reopening the Stage 2.8 evidence document in a fresh Revit process triggered the
+reader automatically: it found the schema, read 1 toposolid, and reported all 36 fields with 0 errors —
+confirming `AccessLevel.Public` read works correctly for a foreign `VendorId` after a genuine save/reopen
+cycle, not merely within the authoring session. The existing, unmodified Issue #16 `GeoCheck` console then
+rebuilt the EPSG:4326 ↔ EPSG:26915 (NAD83) transform with ProjNET 2.1.0 and reconstructed the local origin with
+a projected round-trip delta of 0.009098 m (tolerance 0.02 m): **overall PASS.** This reopen also needed two
+retries of its own: the first reopen attempt (Launch 4) surfaced the reader's own recorded field values but the
+combined-failure scenario at 2.10 (below) was interleaved before this step's final confirmed pass, and the
+document reopen that finally produced this passing read (Launch 5) followed one of the intermittent startup
+crashes described at 2.5 and in "Known limitations" — a relaunch succeeded. **Pass.***
 
 **2.10** Both Preflight failure paths, exercised together in one launch (ruling R5, confirmed directly against
 `CreateToposolidCommand.cs`: the missing-key check at line 250-253 does not return early, and the
@@ -870,12 +974,30 @@ Restore `settings.json` to its Stage 2.7 state immediately afterward — `RunDoc
 necessary and sufficient for the very next run to pick it up. Close Revit — `Uninstall-SolidGround.ps1` (next)
 refuses outright while any `Revit.exe` process is running. *Pass:* one `Result.Cancelled`; both exact messages
 appear together in the same problem list; no element is created; no transaction is ever opened.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: **deviation recorded honestly:** the first attempt at this step surfaced only the `pointBudget`
+problem, not the missing-key problem, because the launched Revit process inadvertently inherited
+`OPENTOPOGRAPHY_API_KEY` from the orchestrator's own tool shell (which still carried the key from 2.7) rather
+than genuinely lacking it — a key-inheritance leak in the test setup, not a defect in `RunDocumentPreflight`
+itself. This was caught rather than reported as a pass; a further relaunch with the environment variable
+explicitly forced empty for that one child process reproduced the intended dual-failure scenario. That
+relaunch was also one of the sessions affected by the intermittent startup crash described at 2.5 (retried
+successfully). With the key genuinely absent: one "Create Toposolid" run surfaced both exact messages together
+in a single dialog — "The OPENTOPOGRAPHY_API_KEY environment variable is not set (or is empty)..." and
+"pointBudget 25000 exceeds this machine's NativeToposolidMaxPointThreshold of 20000 in ... Revit.ini..." — one
+`Result.Cancelled`, no element created, no transaction opened. `settings.json` was restored to its Stage 2.7
+state immediately afterward. **Pass.***
 
 **2.11** With Revit closed: `Uninstall-SolidGround.ps1`; confirm the Addins folder carries no SolidGround entry
 and `%ProgramData%` is untouched; reinstall once more, confirming an idempotent, identical result. *Maps to:*
 AC1.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: **deviation/technique note recorded honestly:** calling the uninstaller as
+`powershell -File Uninstall-SolidGround.ps1 -Confirm:$false` fails, because `-File` passes `"$false"` through
+as a literal string rather than a switch value; the working invocation for a non-interactive caller is
+in-process (`& .\Uninstall-SolidGround.ps1 -Confirm:$false`). Run that way, with `-AllowOtherRevitVersions`,
+the uninstall passed: the Addins folder was left free of any SolidGround entry, and `settings.json`/`Logs\`
+under `%ProgramData%` were kept (the default, since `-RemoveSettingsAndLogs` was not passed). Reinstalling via
+`install.cmd` then passed, and `Deploy-RevitAddIn.ps1 -Verify` reported 6 of 6 files `OK` — an idempotent,
+identical result. **Pass.***
 
 **2.12** Restore every hash from 1.2, byte-for-byte, including the five certificate stores' listings and
 `settings.json` (already restored at the end of 2.10; re-verified here as part of the full set, not restored a
@@ -884,7 +1006,16 @@ remove the reader add-in entirely: its manifest (installed at 2.9) never existed
 outright from the Addins folder, and its `%TEMP%\solidground-issue17\reader\` build folder is moved into the
 same hashed backup the probe's own retained state already uses — nothing about the reader is part of the
 final machine state.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: a full R11 final-machine-state checklist was run item by item against the Stage 1.2 baseline, not
+"restore succeeded" generically — 9 of 9 items recorded **PASS**: `settings.json` restored byte-identical
+(SHA-256 confirmed equal to the backup); both pre-existing `HKCU:\...\CodeSigning` values restored; 0 of 24
+baseline `SolidGround\` files still present live (old versioned deploy folders gone); the probe manifest
+(`SolidGroundProbe.addin`) absent; the live `SolidGround.addin` resolves to a `0.1.0.0` build; the signing
+certificate confirmed trusted in both `LocalMachine\Root` and `LocalMachine\TrustedPublisher` (thumbprint
+`EEEAD0AD06069A56C44E09C1FBB26B59FA902270`) and its public copy present in `CurrentUser\CA`; the default Revit
+template's hash unchanged; and 0 unexplained differences against the baseline snapshot outside those items.
+The reader add-in's manifest and build folder were removed from their live locations and moved into the same
+hashed backup the probe's own retained state uses. **Pass.***
 
 **2.13** Write this note's "Evidence" section from this session's real results; present the full sequence to
 the owner for explicit AC6 acceptance. Confirm the full final-machine-state checklist item by item (ruling R11),
@@ -896,7 +1027,11 @@ reverted by 2.12, since the owner's own ongoing dev-loop signing depends on it s
 reader manifest and its build folder, and old logs kept only in a hashed backup, not restored to their live
 locations; the installed Revit template hash unchanged. Only after the owner's AC6 acceptance does GitHub Release
 publication (above) proceed.
-*Evidence: Pending the live Revit 2027 session.*
+*Evidence: this note's "Evidence" section and "Acceptance criteria" table below were written from this
+session's real results, and this manual evidence plan's own per-step Evidence paragraphs above were filled in
+directly from the session's recorded output. The final-machine-state checklist (2.12) passed all 9 items. **AC6
+itself — the owner's explicit acceptance of this full sequence — is pending the owner's review as of this
+writing; GitHub Release publication does not proceed until that acceptance is given.***
 
 **Stop conditions throughout**: no launch without the owner's "go"; re-check before every click; the unified
 button rule at every dialog; any diff found at 2.3 is recorded and reverted before 2.4 proceeds; any hash
@@ -906,34 +1041,104 @@ hard stop; `git tag`/`gh release create` never runs before the owner's explicit 
 
 ## Evidence
 
-**Pending.** No build, sign, package, install, or Revit-launch step above has run yet. This section is filled
-in only after a real Revit 2027 session runs the plan above, matching the discipline already used for Issues
-#15, #16, and #19.
+**Complete.** A live Revit 2027 session ran the full "Manual evidence plan" above end to end on 2026-09-25
+against a release candidate built from commit `a515f0e` (zip SHA-256
+`6456AFFE8C83223EA67DCFBA83C58276153B36F224EBE222A02455EE2BF8B36D`), Revit 2027 build 27.0.10.13 (update
+2027.0.1), Windows 11. Every stage's own numbered Evidence paragraph above is filled in from that session's
+real results; this section summarizes the headline outcomes and every honestly-disclosed deviation from the
+plan as originally written.
+
+**AC1 (install and load).** The documented double-click install path worked with a different Revit version
+(2026) open, confirming the `-AllowOtherRevitVersions` default. Without trust import, Revit showed a dialog
+titled **"Security - Invalid Signature"** (Load / Do Not Load only — not the 2-choice "Always Load"/"Do Not
+Load" variant this design originally assumed; see Stage 2.2's own Evidence for the exact text). "Do Not Load"
+left no SolidGround tab and no registry/certificate-store change. `Import-SigningTrust.ps1 -Confirm:$false`
+imported the certificate (thumbprint and SHA-256 matched the pin exactly); on the next relaunch **no security
+dialog appeared at all** and the ribbon loaded silently — the design's central, most-important previously
+unevidenced claim is now confirmed. Uninstall and reinstall were also exercised and passed, including
+`Deploy-RevitAddIn.ps1 -Verify` reporting 6 of 6 files `OK`.
+
+**AC2 (example-site scenario, provenance).** A live OpenTopography `fetch` at the public example site created
+element id 317345 with 1600 of 1600 points retained (budget 15000). After save, close, and reopen in a fresh
+Revit process, a throwaway reader add-in (different `VendorId`) read back all 36 provenance fields with 0
+errors, and the existing Issue #16 `GeoCheck` console independently reconstructed the local origin with a
+0.009098 m round-trip delta (tolerance 0.02 m) — overall PASS. Both Preflight failure paths (missing key,
+over-threshold `pointBudget`) surfaced together in one dialog and one `Result.Cancelled`, as designed, once a
+test-setup key-inheritance issue (below) was caught and corrected.
+
+**AC3 (icons)** — met by Issue #19's own already-complete evidence; this session's Stage 2.6 icon check was a
+light re-confirmation (32 px icon rendered correctly, dark theme).
+
+**AC4 (no unlawfully bundled native/Autodesk binaries)** — the packaging run that actually exercised
+`New-ReleasePackage.ps1`'s preconditions 2 and 9 against a real built zip has now happened (producing the
+`a515f0e` release candidate above); no native binary, `runtimes\` folder, or Autodesk assembly is bundled.
+
+**AC5 (accuracy statement)** — met; unaffected by this issue's changes.
+
+**AC6 (owner acceptance)** — **pending the owner's review.** GitHub Release publication does not proceed until
+this is given.
+
+**Deviations from the plan, disclosed rather than smoothed over** (see each stage's own Evidence paragraph for
+full detail):
+
+- **Save target (Stage 2.8).** The created toposolid was saved into a disposable working copy of the default
+  template (`template-copy\Default_I_ENU.rte`), not an API-created fresh project as originally planned. The
+  installed template's own hash was confirmed unchanged throughout.
+- **Reader mechanism (Stages 1.5, 2.7, 2.9).** The planned `Type="Command"` reader add-in cannot actually be
+  driven handle-only: Revit 2027's Add-Ins → External Tools pulldown exposes no UI Automation children. The
+  reader was pivoted, live, to a `DocumentOpened`-triggered `IExternalApplication` instead; its read-half
+  implementation (`GetEntitySchemaGuids()`, `Schema.Lookup`, `Element.GetEntity()`, per-field reads) was
+  unchanged.
+- **Key-inheritance workaround (Stage 2.10).** The first attempt at the combined-failure scenario
+  inadvertently inherited `OPENTOPOGRAPHY_API_KEY` from the orchestrator's own tool shell (left over from
+  Stage 2.7), masking the missing-key problem. This was caught, not reported as a pass; a retry with the
+  variable explicitly forced empty for that one child process reproduced the intended dual-failure dialog.
+- **Retries.** Three of seven Revit launches with SolidGround loaded crashed during document-open at startup
+  (an intermittent Revit 2027.0.1 process crash, not a SolidGround defect — see "Known limitations" below);
+  every one succeeded on a relaunch. The uninstaller also required an in-process invocation
+  (`& .\Uninstall-SolidGround.ps1 -Confirm:$false`) rather than `powershell -File ... -Confirm:$false`, which
+  fails because `-File` passes `"$false"` through as a literal string.
+- **Elevation (Stage 2.4).** The orchestrator's PowerShell session was already elevated for this work, so no
+  new UAC prompt was rendered for the owner to approve at this specific invocation; the elevation ruling R2
+  calls for was already in place going in.
+
+The final-machine-state checklist (Stage 2.12) confirmed 9 of 9 items restored or intentionally left changed
+(the certificate trust) exactly as designed.
 
 ## Acceptance criteria
 
 | # | Acceptance criterion | Status | Notes |
 | --- | --- | --- | --- |
-| AC1 | A clean supported workstation can install and load SolidGround in Revit 2027 using documented steps. | **Gap** | The scripts, the install guide, and the manual evidence plan (Stages 2.1–2.5, 2.11) exist and are ready to run; no live Revit 2027 session has exercised them yet. |
-| AC2 | The example-site scenario creates a bounded Toposolid and retains readable reversible provenance after save/reopen. | **Gap for this release path; the underlying capability is already evidenced** | Issue #15 and Issue #16 already live-evidenced toposolid creation and Extensible Storage provenance directly (not through this release zip); Stages 2.7–2.9 above re-demonstrate the same capability through the packaged, signed, installed release specifically, and have not run yet. |
-| AC3 | The reviewed 16×16 and 32×32 icons render correctly in the supported Revit ribbon contexts. | **Met (by Issue #19)** | `docs/architecture/revit-ribbon-icons.md`'s own Evidence section already carries a 2026-09-24 Revit 2027 session finding both sizes pixel-exact in both ribbon themes; Stage 2.6 above is only a light re-confirmation, not new evidence this issue depends on. |
-| AC4 | No native geospatial binaries or Autodesk assemblies are committed or bundled unlawfully. | **Gap** | Nothing native or Autodesk-owned is committed to this repository today (unaffected by this issue), and `New-ReleasePackage.ps1`'s own preconditions 2 and 9 are designed to fail closed on a missing/incomplete `THIRD-PARTY-NOTICES`, a native binary, or a `runtimes\` folder — but a real packaging run that actually exercises those checks against a built zip has not happened yet (Stage 1.1). |
+| AC1 | A clean supported workstation can install and load SolidGround in Revit 2027 using documented steps. | **Met** | Live-evidenced end to end 2026-09-25: install (Stage 2.1), the no-trust-import "Security - Invalid Signature" dialog and its "Do Not Load" consequence (Stages 2.2-2.3), trust import (Stage 2.4), durable dialog suppression after trust (Stage 2.5), and uninstall/reinstall (Stage 2.11). See "Evidence" above. |
+| AC2 | The example-site scenario creates a bounded Toposolid and retains readable reversible provenance after save/reopen. | **Met** | Live-evidenced 2026-09-25 through the packaged, signed, installed release itself (Stages 2.7-2.9): element 317345, 1600/1600 points, 36/36 provenance fields read back with 0 errors after save/reopen, `GeoCheck` round-trip PASS (0.009098 m, tolerance 0.02 m). Issue #15 and Issue #16 had already live-evidenced the underlying capability directly; this run re-demonstrates it through this release path specifically. |
+| AC3 | The reviewed 16×16 and 32×32 icons render correctly in the supported Revit ribbon contexts. | **Met (by Issue #19)** | `docs/architecture/revit-ribbon-icons.md`'s own Evidence section already carries a 2026-09-24 Revit 2027 session finding both sizes pixel-exact in both ribbon themes; Stage 2.6 above is a light re-confirmation (32 px, dark theme), not new evidence this issue depends on. |
+| AC4 | No native geospatial binaries or Autodesk assemblies are committed or bundled unlawfully. | **Met** | Nothing native or Autodesk-owned is committed to this repository today, and the 2026-09-25 packaging run that produced the `a515f0e` release candidate exercised `New-ReleasePackage.ps1`'s preconditions 2 and 9 (`THIRD-PARTY-NOTICES` completeness; native-binary/`runtimes\` rejection) against real build output without tripping either. |
 | AC5 | README retains the site-form accuracy limit and does not claim survey-grade output. | **Met** | `README.md`'s `## Accuracy` section is untouched by this issue's own edits (see `docs/revit-install-guide.md`'s own `## Accuracy` section, which points at it rather than repeating or paraphrasing it, and `README.md` itself); this note adds no claim of survey-grade output anywhere. |
-| AC6 | The owner accepts the Revit 2027 end-to-end result. | **Gap** | Requires Stage 2.13's explicit acceptance, which requires Stages 1–2 to have actually run first. |
+| AC6 | The owner accepts the Revit 2027 end-to-end result. | **Pending the owner's review** | Stages 1-2 have run and this note's "Evidence" section above is filled in from that real session; the owner's own explicit acceptance has not yet been given. GitHub Release publication (see "GitHub Release" above) does not proceed until it is. |
 
 ## Known limitations
 
 - This certificate is self-signed, not publicly trusted: a workstation that never runs
-  `Import-SigningTrust.ps1` will still see Revit's own per-session security prompt for SolidGround builds,
-  documented as a supported, lower-trust alternative rather than a defect.
-- The trust-import mechanism (`LocalMachine\Root`/`LocalMachine\TrustedPublisher`) is already a proven,
-  operating pattern for the owner's other Revit add-in's own certificate, but has never yet
-  been exercised for a SolidGround-signed build; the central "durably suppresses the dialog" claim (Stage 2.5
-  above) is the single most important unevidenced claim in this design.
-- Whether Revit's "Always Load" persistence choice, on the 2-choice signed-but-not-yet-trusted-publisher
-  dialog, actually persists anything durable for a *signed* SolidGround build is unknown; this design
-  deliberately never recommends clicking it, in this note, the install guide, or the manual evidence plan,
-  until that is observed.
+  `Import-SigningTrust.ps1` will still see Revit's own "Security - Invalid Signature" dialog every time it
+  loads a new SolidGround build, documented as a supported, lower-trust alternative rather than a defect.
+- **Resolved by live evidence (2026-09-25):** the trust-import mechanism (`LocalMachine\Root`/
+  `LocalMachine\TrustedPublisher`) has now been exercised for a real SolidGround-signed build; the central
+  "durably suppresses the dialog" claim (Stage 2.5 above) is confirmed — no security dialog appeared on
+  relaunch after trust import, tested against a machine this same session had just proven genuinely untrusted.
+- The signed-but-not-yet-trusted dialog's actual shape ("Security - Invalid Signature," buttons **Load** /
+  **Do Not Load** only) turned out to differ from this design's original assumption of a 2-choice "Always
+  Load"/"Do Not Load" variant of the unsigned prompt — there is no "Always Load" button on this dialog at all.
+  Whether clicking **Load** (rather than "Do Not Load," the only button this session exercised) also suppresses
+  the dialog on a *future* launch of the same build remains unknown; this design continues to recommend "Do
+  Not Load" (or the trust import) over "Load" until that is observed.
+- **New, found live (2026-09-25): an intermittent Revit 2027.0.1 (build 27.0.10.13) startup crash.** Revit can
+  crash (`ntdll.dll` exception `0xc0000374`, heap corruption, offset `0x117eb5`) while opening a document
+  shortly after launch. In this session: 3 of 7 launches with SolidGround loaded crashed (two with only
+  SolidGround and pyRevit, one with SolidGround plus the evidence reader); 0 of 2 launches without SolidGround
+  loaded crashed; 1 of 1 launch of an unsigned build of the same commit did not crash — so the crash is not
+  specific to SolidGround or to signing. Root cause unknown (no dump analysis performed). A relaunch succeeded
+  every time. Recommended mitigation: install the latest available Revit 2027 update and retest; report if it
+  persists. Documented in `docs/revit-install-guide.md`'s troubleshooting table.
 - A dirty working tree's effect (if any) on the SDK's own auto-embedded commit SHA is not yet confirmed by a
   real build; the clean-tree packaging precondition, not the SDK's own git-dirty detection, is what actually
   guarantees a shipped binary's embedded commit hash is truthful either way.
@@ -989,5 +1194,6 @@ later, explicitly authorized work (Stages 1.1 onward above), not this documentat
 change `scripts/Deploy-RevitAddIn.ps1` (ruling R10) and does not add all-user installation, a publicly
 trusted certificate, or MSI-style packaging — any of those would need their own explicit implementation task,
 per `AGENTS.md`'s "Mission and current boundary." Its own "Evidence" section and the "Manual evidence plan"
-above's per-step Evidence paragraphs stay blank until a real Revit 2027 session fills them in; this note makes
-no claim that session has happened.
+above's per-step Evidence paragraphs have now been filled in from the real 2026-09-25 Revit 2027 session
+described there; this note does not itself grant AC6 (the owner's acceptance) or publish the GitHub Release,
+both of which remain the owner's and the orchestrator's own separate, later steps.

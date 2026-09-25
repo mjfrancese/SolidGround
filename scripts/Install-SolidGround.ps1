@@ -24,8 +24,8 @@
          present in both Cert:\LocalMachine\Root and Cert:\LocalMachine\TrustedPublisher, prints the
          next step (running Import-SigningTrust.ps1, elevated) and continues regardless. Trust import
          is not a precondition for installing or for Revit loading the add-in: an operator who skips
-         it simply keeps seeing Revit's own signed-but-not-yet-trusted-publisher prompt on every
-         launch -- a real, documented, supported alternative, not a silent gap.
+         it simply keeps seeing Revit's own "Security - Invalid Signature" warning every time it loads
+         a new SolidGround build -- a real, documented, supported alternative, not a silent gap.
       4. Forwards every argument this script itself did not otherwise consume (any switch or
          parameter Deploy-RevitAddIn.ps1 accepts, for example -AddinsDirectory, -WhatIf,
          -AllowOtherRevitVersions, -KeepPreviousVersions) to
@@ -164,9 +164,13 @@ try {
     } else {
         Write-Host ''
         Write-Host 'The SolidGround signing certificate is not yet trusted on this machine.' -ForegroundColor Yellow
-        Write-Host 'This is a supported, lower-trust alternative: Revit will show a one-time,'
-        Write-Host 'signed-but-not-yet-trusted-publisher prompt each session until you either'
-        Write-Host 'answer it or import trust once, as Administrator:'
+        Write-Host 'This is a supported, lower-trust alternative: without trust, Revit shows a'
+        Write-Host '"Security - Invalid Signature" warning every time it loads a new SolidGround'
+        Write-Host 'build -- it says the add-in may have been tampered with and recommends that you'
+        Write-Host 'not load it. Clicking Load loads it for that session; whether that choice also'
+        Write-Host 'suppresses the warning on a later launch of the same build has not been verified.'
+        Write-Host 'Importing trust once, as Administrator, is the recommended way to make this'
+        Write-Host 'warning stop appearing entirely:'
         Write-Host ''
         Write-Host "    $(Join-Path $PSScriptRoot 'Import-SigningTrust.ps1')" -ForegroundColor Cyan
         Write-Host ''
