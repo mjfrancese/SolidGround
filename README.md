@@ -2,7 +2,7 @@
 
 SolidGround is a planned Revit 2027 add-in for turning 1-meter USGS bare-earth elevation data from OpenTopography into a native Revit toposolid clipped to a single parcel. It is designed for the overall form of a residential lot: fetch a DEM, remove missing cells, transform and localize coordinates, preserve the parcel boundary, simplify the surface to a Revit-safe point budget, and retain enough provenance to reverse every transform.
 
-The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, provenance with deterministic exports, and the end-to-end CLI workflow established**. Core, CLI, and offline test projects compile on .NET 10; the `process`/`fetch`/`run`/`verify` CLI workflow is implemented and tested — see [Usage](#usage) below. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md), and the [CLI workflow design note](docs/architecture/cli-workflow.md). Phase 2 has begun: Issue #14 (2026-09-21) scaffolded `src/SolidGround.Revit`, the Revit 2027 add-in host, following the owner's established conventions; it ships a manifest, a ribbon with one read-only Preflight-and-report command, diagnostics, a deploy script, and an active CI compile gate — see [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md). Issue #15 (2026-09-21) then implemented `CreateToposolidCommand`, which runs the same acquisition/processing pipeline Core exposes to the CLI and creates a bounded, native Revit toposolid inside one transaction with provable-unchanged-on-rejection semantics — see [the toposolid creation design note](docs/architecture/revit-toposolid-creation.md). Issue #16 (2026-09-21) then attached Extensible Storage provenance to the created toposolid itself, with Stage 4's manual Revit evidence still pending — see [the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md).
+The repository is currently in **Phase 1: Core contracts, AAIGrid parsing, the OpenTopography USGS 1 m source, AOI normalization and parcel clipping, coordinate/unit/local-origin transformation, terrain-aware decimation, provenance with deterministic exports, and the end-to-end CLI workflow established**. Core, CLI, and offline test projects compile on .NET 10; the `process`/`fetch`/`run`/`verify` CLI workflow is implemented and tested — see [Usage](#usage) below. See the [Phase 1 contract design note](docs/architecture/phase-1-contracts.md), the [OpenTopography USGS 1 m source design note](docs/architecture/opentopography-usgs1m-source.md), the [AOI normalization and clipping design note](docs/architecture/aoi-normalization-and-clipping.md), the [coordinate transformation and units design note](docs/architecture/coordinate-transformation-and-units.md), the [terrain-aware decimation design note](docs/architecture/terrain-aware-decimation.md), the [provenance and deterministic exports design note](docs/architecture/provenance-and-deterministic-exports.md), and the [CLI workflow design note](docs/architecture/cli-workflow.md). Phase 2 has begun: Issue #14 (2026-09-21) scaffolded `src/SolidGround.Revit`, the Revit 2027 add-in host, following the owner's established conventions; it ships a manifest, a ribbon with one read-only Preflight-and-report command, diagnostics, a deploy script, and an active CI compile gate — see [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md). Issue #15 (2026-09-21) then implemented `CreateToposolidCommand`, which runs the same acquisition/processing pipeline Core exposes to the CLI and creates a bounded, native Revit toposolid inside one transaction with provable-unchanged-on-rejection semantics — see [the toposolid creation design note](docs/architecture/revit-toposolid-creation.md). Issue #16 (2026-09-21 to 2026-09-23) then attached Extensible Storage provenance to the created toposolid itself, with all Revit 2027 evidence complete as of 2026-09-23 — see [the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md). Issue #19 (2026-09-23 to 2026-09-24) replaced the placeholder ribbon icons with the final 16×16/32×32 terrain-and-parcel pair, confirmed pixel-exact in both the light and dark ribbon themes in a 2026-09-24 Revit 2027 session — see [the ribbon icons design note](docs/architecture/revit-ribbon-icons.md). Issue #17 is packaging, signing, and validating the Revit 2027 release for install from a GitHub Release zip — see [the release packaging and signing design note](docs/architecture/revit-release-packaging-and-signing.md) and [Install](#install) below.
 
 ## Scope
 
@@ -58,10 +58,12 @@ SolidGround.slnx
 command, diagnostics, and a deploy script) plus Issue #15's `CreateToposolidCommand`, which creates a
 bounded, native Revit toposolid from the same acquisition/processing pipeline Core already exposes to the
 CLI. Issue #16 then attached Extensible Storage provenance to the created element via a dedicated schema
-(`SolidGround_Provenance_Toposolid`); Stage 4's manual Revit evidence is still pending. See
+(`SolidGround_Provenance_Toposolid`), with all Revit 2027 evidence complete as of 2026-09-23, and Issue #19
+shipped the final ribbon icon pair, pixel-exact in both ribbon themes as of 2026-09-24. See
 [the Revit add-in host scaffold note](docs/architecture/revit-add-in-host-scaffold.md),
-[the toposolid creation design note](docs/architecture/revit-toposolid-creation.md), and
-[the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md).
+[the toposolid creation design note](docs/architecture/revit-toposolid-creation.md),
+[the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md), and
+[the ribbon icons design note](docs/architecture/revit-ribbon-icons.md).
 
 The central design rule is that acquisition, parsing, geometry, transformations, simplification, provenance models, and exports remain testable without Revit installed. [Groundit](https://github.com/lewismconte/groundit) demonstrates the useful architectural pattern of a pure core with offline tests and a thin Revit-specific build step. SolidGround does not adopt Groundit's Python, pyRevit, browser, multi-version, or data-source choices.
 
@@ -80,6 +82,18 @@ In Revit, Issue #16 attaches this same provenance to the created toposolid itsel
 Storage entity (`SolidGround_Provenance_Toposolid`, public read, SolidGround-only write) rather than a
 sidecar file; see [the Extensible Storage provenance design note](docs/architecture/revit-extensible-storage-provenance.md)
 for the full field list and how the round trip is verified before the transaction commits.
+
+## Install
+
+To use SolidGround in Revit 2027 without building it yourself, download the latest release zip from the
+[GitHub Releases page](https://github.com/mjfrancese/SolidGround/releases) and follow
+[`docs/revit-install-guide.md`](docs/revit-install-guide.md), which covers verifying the download,
+installing per-user with `install.cmd`, the Mark-of-the-Web and Revit's own add-in security prompt, the
+optional one-time certificate-trust import, setting `OPENTOPOGRAPHY_API_KEY`, `settings.json`, logs,
+troubleshooting, upgrading, and uninstalling. This is a separate, no-SDK-required path from the developer
+source-build workflow in [Build](#build) below; see
+[the release packaging and signing design note](docs/architecture/revit-release-packaging-and-signing.md)
+for how that release is built and signed.
 
 ## Build
 

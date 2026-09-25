@@ -13,6 +13,8 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 1. **Reference assemblies.** Option A plus option B. Local and deploy builds reference `RevitAPI.dll`/`RevitAPIUI.dll` from the installed Revit 2027 via HintPath, never committed. A CI-only compile gate, activated once `SolidGround.Revit` exists, uses the pinned `Nice3point.Revit.Api.RevitAPI`/`RevitAPIUI` 2027.x packages. See "10. Revit reference assemblies for local builds and CI" below for the full mechanism and the licensing position.
 2. **ContextName.** `"SolidGround"`. See "3. Manifest and isolated add-in context" below for the full manifest shape.
 3. **Code signing.** Accept Revit's unsigned-add-in prompt for now; no signing in the initial milestone. Revisit with Issue #17 after verification item 14 (Revit 2027 unsigned-add-in prompt behavior) is checked; verified on 2026-09-20, see `revit-2027-verification-and-host-design.md`, item 14.
+
+**Update, Issue #17 (2026-09-24):** revisited — self-signed Authenticode signing, non-exportable `CurrentUser\My` certificate, `LocalMachine\Root`/`LocalMachine\TrustedPublisher` trust import per workstation. See "12. Code signing and release packaging" below.
 4. **Settings and log location.** Machine-wide, following the owner's other add-in, under `%ProgramData%\SolidGround\Revit\` (a settings file and a `Logs\` folder), not per-user. This is a deliberate, scoped exception: the add-in itself still installs per-user (see decision 6 and "7. Deployment and per-user install" below); only settings and logs are machine-wide. See "5. Settings" and "6. Logging and diagnostics" below.
 5. **Ribbon icon.** Ship an icon for `CreateToposolidCommand` in the initial milestone; Issue #19 designs it. See "4. Ribbon and command structure" below.
 6. **Deployment.** Write a deploy script in the initial milestone, not a by-hand copy loop. See "7. Deployment and per-user install" below.
@@ -107,6 +109,8 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 - (detail about the owner's other add-in withheld)
 - Code signing: accept Revit's unsigned-add-in prompt for now; no Authenticode signing in the initial milestone (owner decision 3, see "3. Code signing" in Owner decisions above, and verification item 14; verified on 2026-09-20, see `revit-2027-verification-and-host-design.md`, item 14).
 
+  **Update, Issue #17 (2026-09-24):** signing shipped, scoped to release packages and the ordinary dev-loop deploy path alike (once a developer has run the one-time trust import locally); it never runs in CI. See section 12.
+
 ## 8. Debugging
 
 (detail about the owner's other add-in withheld)
@@ -125,7 +129,11 @@ the owner answered seven open decisions from the proposal on 2026-09-20; those a
 **Adopted for `SolidGround.Revit`:**
 
 - No formal versioning scheme for the initial milestone. When one is needed, prefer a simple, idiomatic `<Version>` over the owner's other add-in's bespoke git-HEAD-plus-hash ledger, unless a specific reason calls for that stronger guarantee.
+
+  **Update, Issue #17 (2026-09-24):** adopted — `<Version>0.1.0</Version>` in `Directory.Build.props`.
 - No committed or git-ignored "release-staging" folder. If a distributable package is needed before the deploy script from section 7 covers it, keep the steps in an explicit, reviewed script.
+
+  **Update, Issue #17 (2026-09-24):** `scripts/New-ReleasePackage.ps1` is that script; its output lands in `artifacts/release/`, a subfolder of the pre-existing, already git-ignored `artifacts/` bucket, not a new folder — the "no committed or git-ignored release-staging folder" sentence stays literally true.
 
 ## 10. Revit reference assemblies for local builds and CI
 
@@ -161,6 +169,43 @@ freshly-minted-GUID-plus-explicit-`schemaVersion`-field mechanism, and the `Acce
 read/`AccessLevel.Vendor` write pair adopted above. See
 `docs/architecture/revit-extensible-storage-provenance.md` for the full field table, the Revit-side
 write/read-back design, and the manual evidence plan.
+
+## 12. Code signing and release packaging
+
+Issue #17 (begun 2026-09-24) designed and implemented versioning, self-signed Authenticode code signing,
+release packaging, and install/uninstall for `SolidGround.Revit`. Full design, the certificate's pinned
+identity once minted, the release-package script's fail-closed preconditions, the install/uninstall scripts,
+and a written-in-advance manual evidence plan are recorded in
+`docs/architecture/revit-release-packaging-and-signing.md`, whose Evidence section is still pending a live
+Revit 2027 session as of this writing.
+
+**Adopted for `SolidGround.Revit`:**
+
+- Versioning: one `<Version>0.1.0</Version>` in `Directory.Build.props`, inherited by all four projects;
+  bumped by hand per release.
+- Signing: a non-exportable `Cert:\CurrentUser\My` code-signing certificate
+  (`CN=SolidGround Revit Add-in Signing`), minted by `scripts/Sign-RevitAddIn.ps1 -NewCertificate` and pinned
+  in the committed, non-secret `scripts/signing-certificate.json` — no `.pfx` or password anywhere.
+  `scripts/Sign-RevitAddIn.ps1`'s default mode signs `SolidGround.Revit.dll`, `SolidGround.Core.dll`, and
+  every first-party release/install script with `Set-AuthenticodeSignature -HashAlgorithm SHA256`,
+  Authenticode-timestamped against `http://timestamp.digicert.com` (the legacy Authenticode/PKCS#7 protocol,
+  never RFC 3161) — fail-closed for a real release, best-effort for ordinary dev-loop signing.
+  `scripts/Import-SigningTrust.ps1` performs the one-time, elevated, per-workstation trust import into
+  `Cert:\LocalMachine\Root` and `Cert:\LocalMachine\TrustedPublisher` — the mechanism this project's own
+  research already found durably suppresses the dialog for the sibling the owner's other add-in project's own certificate.
+- Release packaging: `scripts/New-ReleasePackage.ps1` runs a fail-closed precondition chain (clean tree, HEAD
+  pushed to `origin/main`, restore/build/test, sign and re-verify, timestamp confirmed,
+  `Deploy-RevitAddIn.ps1`'s own `-WhatIf` validation reused verbatim, a native-binary/`runtimes\`/
+  unexplained-file check, `THIRD-PARTY-NOTICES` coverage, version freshness) before staging, signing, and
+  zipping a versioned release into `artifacts/release/`.
+- Install/uninstall: `scripts/Install-SolidGround.ps1`/`scripts/install.cmd` (the zip's double-click entry
+  point) unblock, verify signatures, report trust status, and forward to `scripts/Deploy-RevitAddIn.ps1`
+  unchanged; `scripts/Uninstall-SolidGround.ps1` removes the manifest and every versioned deployment folder
+  while always leaving Revit's own `HKCU:\...\CodeSigning` trust record untouched. `scripts/Deploy-RevitAddIn.ps1`
+  itself is never modified by any of this.
+- Distribution: a GitHub Release, tag `v0.1.0`, gated on the owner's explicit acceptance of a live Revit 2027
+  validation session; never triggers `.github/workflows/ci.yml` (its `on:` block is `push: branches: [main]`
+  only).
 
 ## Items that need Revit 2027 verification before implementation
 
