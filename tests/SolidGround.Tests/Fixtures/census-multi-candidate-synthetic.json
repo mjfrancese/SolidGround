@@ -1,0 +1,45 @@
+{
+  "result": {
+    "input": {
+      "address": { "address": "100 Example Loop" },
+      "benchmark": {
+        "isDefault": true,
+        "benchmarkDescription": "Public Address Ranges - Current Benchmark",
+        "id": "4",
+        "benchmarkName": "Public_AR_Current"
+      }
+    },
+    "addressMatches": [
+      {
+        "tigerLine": { "side": "L", "tigerLineId": "000000001" },
+        "coordinates": { "x": -93.603806, "y": 41.591194 },
+        "addressComponents": {
+          "zip": "00000", "streetName": "EXAMPLE", "preType": "", "city": "TESTSITE",
+          "preDirection": "", "suffixDirection": "", "fromAddress": "100", "state": "ZZ",
+          "suffixType": "LOOP", "toAddress": "100", "suffixQualifier": "", "preQualifier": ""
+        },
+        "matchedAddress": "100 EXAMPLE LOOP, TESTSITE, ZZ, 00000"
+      },
+      {
+        "tigerLine": { "side": "R", "tigerLineId": "000000002" },
+        "coordinates": { "x": -110.0, "y": 35.0 },
+        "addressComponents": {
+          "zip": "00000", "streetName": "EXAMPLE", "preType": "", "city": "OTHERSITE",
+          "preDirection": "", "suffixDirection": "", "fromAddress": "100", "state": "YY",
+          "suffixType": "LOOP", "toAddress": "100", "suffixQualifier": "", "preQualifier": ""
+        },
+        "matchedAddress": "100 EXAMPLE LOOP, OTHERSITE, YY, 00000"
+      },
+      {
+        "tigerLine": { "side": "L", "tigerLineId": "000000003" },
+        "coordinates": { "x": -0.0001, "y": 0.0001 },
+        "addressComponents": {
+          "zip": "00000", "streetName": "EXAMPLE", "preType": "", "city": "THIRDSITE",
+          "preDirection": "", "suffixDirection": "", "fromAddress": "100", "state": "XX",
+          "suffixType": "LOOP", "toAddress": "100", "suffixQualifier": "", "preQualifier": ""
+        },
+        "matchedAddress": "100 EXAMPLE LOOP, THIRDSITE, XX, 00000"
+      }
+    ]
+  }
+}

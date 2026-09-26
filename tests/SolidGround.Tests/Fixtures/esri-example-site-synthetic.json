@@ -1,0 +1,42 @@
+{
+  "spatialReference": {
+    "wkid": 4326,
+    "latestWkid": 4326
+  },
+  "candidates": [
+    {
+      "address": "202 Example Loop, Fixtonville, New Sandbox, 00000",
+      "location": {
+        "x": -0.0002,
+        "y": 0.0002
+      },
+      "score": 86.4,
+      "attributes": {
+        "Addr_type": "StreetAddress"
+      },
+      "extent": {
+        "xmin": -0.0003,
+        "ymin": 0.0001,
+        "xmax": -0.0001,
+        "ymax": 0.0003
+      }
+    },
+    {
+      "address": "100 Example Loop, Fixtonville, New Sandbox, 00000",
+      "location": {
+        "x": -0.0001,
+        "y": 0.0001
+      },
+      "score": 100,
+      "attributes": {
+        "Addr_type": "PointAddress"
+      },
+      "extent": {
+        "xmin": -0.0002,
+        "ymin": 0.0,
+        "xmax": 0.0,
+        "ymax": 0.0002
+      }
+    }
+  ]
+}

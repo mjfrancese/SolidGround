@@ -1,0 +1,25 @@
+{
+  "result": {
+    "input": {
+      "address": { "address": "100 Example Loop" },
+      "benchmark": {
+        "isDefault": true,
+        "benchmarkDescription": "Public Address Ranges - Current Benchmark",
+        "id": "4",
+        "benchmarkName": "Public_AR_Current"
+      }
+    },
+    "addressMatches": [
+      {
+        "tigerLine": { "side": "L", "tigerLineId": "000000001" },
+        "coordinates": { "x": -93.603806, "y": 41.591194 },
+        "addressComponents": {
+          "zip": "00000", "streetName": "EXAMPLE", "preType": "", "city": "TESTSITE",
+          "preDirection": "", "suffixDirection": "", "fromAddress": "100", "state": "ZZ",
+          "suffixType": "LOOP", "toAddress": "100", "suffixQualifier": "", "preQualifier": ""
+        },
+        "matchedAddress": "100 EXAMPLE LOOP, TESTSITE, ZZ, 00000"
+      }
+    ]
+  }
+}

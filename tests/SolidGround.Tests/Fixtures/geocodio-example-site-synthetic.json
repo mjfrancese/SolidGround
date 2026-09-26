@@ -1,0 +1,56 @@
+{
+  "results": [
+    {
+      "address_components": {
+        "number": "100",
+        "street": "Example",
+        "suffix": "Loop",
+        "formatted_street": "Example Loop",
+        "city": "Testville",
+        "county": "Fixture County",
+        "state_province": "ZZ",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "address_lines": [
+        "100 Example Loop",
+        "",
+        "Testville, ZZ 00000"
+      ],
+      "formatted_address": "100 Example Loop, Testville, ZZ 00000",
+      "location": {
+        "lat": 0.0002,
+        "lng": -0.0002
+      },
+      "accuracy": 1,
+      "accuracy_type": "rooftop",
+      "match_type": "building_centroid",
+      "source": "SYNTHETIC FIXTURE - not a real Geocodio data source - see docs/architecture/address-geocoding.md",
+      "stable_address_key": "gcod_usfixturesynthetic0000000001"
+    },
+    {
+      "address_components": {
+        "city": "Testville",
+        "county": "Fixture County",
+        "state_province": "ZZ",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "address_lines": [
+        "",
+        "",
+        "Testville, ZZ 00000"
+      ],
+      "formatted_address": "Testville, ZZ 00000",
+      "location": {
+        "lat": 0.0001,
+        "lng": -0.0001
+      },
+      "accuracy": 0.5,
+      "accuracy_type": "place",
+      "match_type": null,
+      "source": "SYNTHETIC FIXTURE - not a real Geocodio data source - see docs/architecture/address-geocoding.md",
+      "stable_address_key": "gcod_usfixturesynthetic0000000002"
+    }
+  ]
+}
