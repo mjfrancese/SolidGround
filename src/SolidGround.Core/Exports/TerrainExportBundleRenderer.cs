@@ -16,7 +16,7 @@ namespace SolidGround.Core.Exports;
 /// hand-written, property-order-fixed export document (never a reflection-based serializer) plus a bare
 /// points CSV, bound together by a SHA-256 hash and a sample count. Rendering the same payload twice, on any
 /// platform or thread culture, produces identical bytes. See
-/// docs/architecture/provenance-and-deterministic-exports.md's "Export document manifest, schema version 2",
+/// docs/architecture/provenance-and-deterministic-exports.md's "Export document manifest, schema version 3",
 /// "Points file format, version 1", and "Determinism rules" sections for the full contract this class
 /// implements.
 /// </summary>
@@ -153,6 +153,16 @@ public static class TerrainExportBundleRenderer
         // Never null here: Render already rejected OriginalPointCount == 0 above, and TerrainProvenance's own
         // constructor requires a non-null ElevationRange whenever OriginalPointCount is positive.
         WriteElevationRange(writer, provenance.ElevationRange!);
+
+        writer.WritePropertyName("addressParcel");
+        if (provenance.AddressParcel is { } addressParcel)
+        {
+            WriteAddressParcelProvenance(writer, addressParcel);
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
 
         writer.WriteEndObject();
     }
@@ -301,6 +311,61 @@ public static class TerrainExportBundleRenderer
         writer.WriteNumber("minimum", range.Minimum);
         writer.WriteNumber("maximum", range.Maximum);
         writer.WriteString("unit", range.Unit.ToString());
+        writer.WriteEndObject();
+    }
+
+    private static void WriteAddressParcelProvenance(Utf8JsonWriter writer, AddressParcelProvenance addressParcel)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("retrievalDate", addressParcel.RetrievalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+        writer.WritePropertyName("geocode");
+        if (addressParcel.Geocode is { } geocode)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("provider", geocode.Provider.ToString());
+            writer.WriteString("queryText", geocode.QueryText);
+            writer.WriteString("attribution", geocode.Attribution);
+            writer.WriteEndObject();
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
+
+        writer.WritePropertyName("parcel");
+        if (addressParcel.Parcel is { } parcel)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("sourceKind", parcel.SourceKind.ToString());
+            writer.WriteString("sourceIdentity", parcel.SourceIdentity);
+            writer.WriteString("parcelId", parcel.ParcelId);
+            if (parcel.StableParcelId is { } stableParcelId)
+            {
+                writer.WriteString("stableParcelId", stableParcelId);
+            }
+            else
+            {
+                writer.WriteNull("stableParcelId");
+            }
+
+            if (parcel.LegalDescription is { } legalDescription)
+            {
+                writer.WriteString("legalDescription", legalDescription);
+            }
+            else
+            {
+                writer.WriteNull("legalDescription");
+            }
+
+            writer.WriteString("licenseDisclaimerText", parcel.LicenseDisclaimerText);
+            writer.WriteEndObject();
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
+
         writer.WriteEndObject();
     }
 

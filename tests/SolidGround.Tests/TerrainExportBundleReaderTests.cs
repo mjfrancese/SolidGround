@@ -161,22 +161,22 @@ public sealed class TerrainExportBundleReaderTests
         string tamperedText = ReplaceExactlyOnce(
             documentText,
             $"\"schemaVersion\": {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}",
-            "\"schemaVersion\": 3");
+            "\"schemaVersion\": 999");
         byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
 
         Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
     }
 
     [Fact]
-    public void ReadProvenanceAcceptsSchemaVersionTwoAndReadsBothNewReferenceOriginFields()
+    public void ReadProvenanceAcceptsTheCurrentSchemaVersionAndReadsBothReferenceOriginFields()
     {
         TerrainExportPayload payload = CreatePayload(
             horizontalReferenceOrigin: ReferenceOrigin.SourceMetadataResponse,
             verticalReferenceOrigin: ReferenceOrigin.DatasetDocumentation);
-        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-schema-version-two");
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-schema-version-current");
 
         using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
-        Assert.Equal(2, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(TerrainProvenance.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
 
         TerrainProvenance provenance = TerrainExportBundleReader.ReadProvenance(bundle.DocumentBytes.Span);
         Assert.Equal(ReferenceOrigin.SourceMetadataResponse, provenance.SourceHorizontalReferenceOrigin);
@@ -425,6 +425,238 @@ public sealed class TerrainExportBundleReaderTests
         Assert.Contains("must not be null", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ReadOfARenderedPayloadRoundTripsAPopulatedAddressParcelProvenanceIncludingPartialPresence(bool includeGeocode, bool includeParcel)
+    {
+        GeocodeProvenance? geocode = includeGeocode
+            ? new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.")
+            : null;
+        ParcelProvenance? parcel = includeParcel
+            ? new ParcelProvenance(
+                ParcelBoundarySourceKind.CountyRegistry,
+                "Synthetic County (fixture only) (GEOID 99999)",
+                "99-99-999-999",
+                stableParcelId: null,
+                legalDescription: "Lot 4, Synthetic Subdivision (fixture only)",
+                licenseDisclaimerText: "Synthetic fixture data; no real license applies.")
+            : null;
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, parcel);
+
+        TerrainExportPayload payload = CreatePayload(retainedPointCount: 2, addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-address-parcel-round-trip");
+
+        TerrainExportPayload roundTripped = TerrainExportBundleReader.Read(bundle.DocumentBytes.Span, bundle.PointsBytes.Span);
+
+        Assert.Equal(addressParcel, roundTripped.Provenance.AddressParcel);
+    }
+
+    [Fact]
+    public void ReadOfARenderedPayloadRoundTripsAPopulatedParcelStableParcelId()
+    {
+        // The theory above always renders a null StableParcelId, so it never proves this optional field's
+        // non-null branch survives render->read. Exercise that branch explicitly.
+        ParcelProvenance parcel = new(
+            ParcelBoundarySourceKind.LocalParcelFile,
+            "Local Regrid Standard export (fixture only)",
+            "99-99-999-999",
+            stableParcelId: "00000000-0000-0000-0000-000000000000",
+            legalDescription: null,
+            licenseDisclaimerText: "Synthetic fixture data; no real license applies.");
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode: null, parcel);
+
+        TerrainExportPayload payload = CreatePayload(retainedPointCount: 2, addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-address-parcel-stable-parcel-id");
+
+        TerrainExportPayload roundTripped = TerrainExportBundleReader.Read(bundle.DocumentBytes.Span, bundle.PointsBytes.Span);
+
+        Assert.Equal(addressParcel, roundTripped.Provenance.AddressParcel);
+        Assert.Equal("00000000-0000-0000-0000-000000000000", roundTripped.Provenance.AddressParcel!.Parcel!.StableParcelId);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnAddressParcelWrapperWithBothGeocodeAndParcelNull()
+    {
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."),
+            null);
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-address-parcel-both-null");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        string geocodeRawText = document.RootElement.GetProperty("provenance").GetProperty("addressParcel").GetProperty("geocode").GetRawText();
+        string token = $"\"geocode\": {geocodeRawText}";
+        string tamperedText = ReplaceExactlyOnce(documentText, token, "\"geocode\": null");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("is not a valid address/parcel provenance record", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnUnrecognizedPropertyUnderAddressParcel()
+    {
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."),
+            null);
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-unknown-property-address-parcel");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        string retrievalDateRawText = document.RootElement.GetProperty("provenance").GetProperty("addressParcel").GetProperty("retrievalDate").GetRawText();
+        string token = $"\"retrievalDate\": {retrievalDateRawText}";
+        string tamperedText = ReplaceExactlyOnce(documentText, token, $"\"unexpectedProperty\": true, {token}");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("unrecognized", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnAddressParcelDocumentMissingARequiredProperty()
+    {
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            null,
+            new ParcelProvenance(
+                ParcelBoundarySourceKind.CountyRegistry,
+                "Synthetic County (fixture only) (GEOID 99999)",
+                "99-99-999-999",
+                null,
+                null,
+                "Synthetic fixture data; no real license applies."));
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-missing-property-address-parcel");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement parcel = document.RootElement.GetProperty("provenance").GetProperty("addressParcel").GetProperty("parcel");
+        string tamperedText = RemoveJsonProperty(documentText, parcel, "parcelId");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("missing", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnUnrecognizedGeocodeProviderValue()
+    {
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."),
+            null);
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-geocode-provider");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        string tamperedText = ReplaceExactlyOnce(
+            documentText,
+            $"\"provider\": \"{AddressGeocoderProvider.Census}\"",
+            "\"provider\": \"NotARealProvider\"");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("provider", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("NotARealProvider", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnUnrecognizedParcelSourceKindValue()
+    {
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            null,
+            new ParcelProvenance(
+                ParcelBoundarySourceKind.CountyRegistry,
+                "Synthetic County (fixture only) (GEOID 99999)",
+                "99-99-999-999",
+                null,
+                null,
+                "Synthetic fixture data; no real license applies."));
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-parcel-source-kind");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        string tamperedText = ReplaceExactlyOnce(
+            documentText,
+            $"\"sourceKind\": \"{ParcelBoundarySourceKind.CountyRegistry}\"",
+            "\"sourceKind\": \"NotARealSourceKind\"");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("sourceKind", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("NotARealSourceKind", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAVersionTwoDocumentBecauseVersionTwoNeverWroteTheAddressParcelField()
+    {
+        // A genuine version 2 document (from before SolidGround Issue #33) never wrote addressParcel at all;
+        // reconstructing one exactly means omitting that property entirely in addition to changing the
+        // schemaVersion number, so this document is built by hand rather than by tampering with a version 3
+        // rendering (mirrors ReadProvenanceRejectsAVersionOneDocumentBecauseVersionOneNeverWroteTheReferenceOriginFields's
+        // own precedent for the v1-to-v2 transition).
+        const string version2Document = """
+            {
+              "schema": "solidground.terrain-export",
+              "schemaVersion": 2,
+              "provenance": {
+                "source": { "sourceName": "OpenTopography", "datasetIdentifier": "USGS1m", "collectionPeriod": null, "qualityLevel": null },
+                "horizontalTransformation": {
+                  "sourceReference": { "coordinateReferenceSystem": "EPSG:4326", "datum": "WGS84", "kind": "Geographic", "unit": { "referenceKind": "Geographic", "linearUnit": null }, "axisOrder": "LongitudeLatitude" },
+                  "targetReference": { "coordinateReferenceSystem": "EPSG:26915", "datum": "NAD83(2011)", "kind": "Projected", "unit": { "referenceKind": "Projected", "linearUnit": "Meter" }, "axisOrder": "EastingNorthing" },
+                  "forwardOperation": { "format": "PROJJSON", "definition": "forward operation" },
+                  "inverseOperation": { "format": "PROJJSON", "definition": "inverse operation" },
+                  "engineName": "candidate-engine",
+                  "engineVersion": "1.0"
+                },
+                "sourceVerticalReference": { "datum": "NAVD88", "unit": "InternationalFoot", "geoidModel": "Geoid12B" },
+                "sourceHorizontalReferenceOrigin": "Operator",
+                "sourceVerticalReferenceOrigin": "Operator",
+                "localFrame": {
+                  "origin": { "x": 10.5, "y": 20.25, "elevation": 30.125 },
+                  "projectedHorizontalReference": { "coordinateReferenceSystem": "EPSG:26915", "datum": "NAD83(2011)", "kind": "Projected", "unit": { "referenceKind": "Projected", "linearUnit": "Meter" }, "axisOrder": "EastingNorthing" },
+                  "verticalReference": { "datum": "NAVD88", "unit": "InternationalFoot", "geoidModel": "Geoid12B" },
+                  "outputUnit": "UsSurveyFoot"
+                },
+                "simplification": { "pointBudget": 15000, "method": "CurvatureAware" },
+                "originalPointCount": 1,
+                "retainedPointCount": 1,
+                "elevationRange": { "minimum": 1.5, "maximum": 3.75, "unit": "InternationalFoot" }
+              },
+              "unitDefinitions": [
+                { "unit": "Meter", "metersPerUnit": 1, "definition": "1 m" },
+                { "unit": "InternationalFoot", "metersPerUnit": 0.3048, "definition": "0.3048 m" },
+                { "unit": "UsSurveyFoot", "metersPerUnit": 0.3048006096012192, "definition": "1200/3937 m" }
+              ],
+              "points": { "file": "reader-version-two.points.csv", "format": "csv", "columns": ["x", "y", "elevation"], "unit": "UsSurveyFoot", "count": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000" }
+            }
+            """;
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(
+            () => TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(version2Document)));
+        Assert.Contains("schemaVersion", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("2", exception.Message, StringComparison.Ordinal);
+    }
+
     // ---- tamper helpers: mutate the rendered UTF-8 text deterministically rather than hand-writing documents ----
 
     private static string ReplaceExactlyOnce(string text, string oldValue, string newValue)
@@ -469,7 +701,8 @@ public sealed class TerrainExportBundleReaderTests
         Coordinate3D? origin = null,
         ElevationRange? elevationRange = null,
         ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
-        ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator)
+        ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator,
+        AddressParcelProvenance? addressParcel = null)
     {
         IReadOnlyList<LocalTerrainSample> effectiveSamples = samples ?? DefaultSamples(retainedPointCount);
         TerrainProvenance provenance = CreateProvenance(
@@ -484,7 +717,8 @@ public sealed class TerrainExportBundleReaderTests
             origin,
             elevationRange,
             horizontalReferenceOrigin,
-            verticalReferenceOrigin);
+            verticalReferenceOrigin,
+            addressParcel);
 
         return new TerrainExportPayload(effectiveSamples, provenance);
     }
@@ -501,7 +735,8 @@ public sealed class TerrainExportBundleReaderTests
         Coordinate3D? origin,
         ElevationRange? elevationRange,
         ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
-        ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator)
+        ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator,
+        AddressParcelProvenance? addressParcel = null)
     {
         VerticalReference vertical = VerticalReference(verticalUnit, geoidModel);
         HorizontalReference projected = ProjectedReference(projectedUnit);
@@ -516,7 +751,8 @@ public sealed class TerrainExportBundleReaderTests
             new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
             originalPointCount,
             retainedPointCount,
-            elevationRange ?? new ElevationRange(1.5d, 3.75d, verticalUnit));
+            elevationRange ?? new ElevationRange(1.5d, 3.75d, verticalUnit),
+            addressParcel);
     }
 
     private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null) =>

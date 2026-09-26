@@ -191,11 +191,125 @@ public sealed class ContractModelTests
         Assert.Throws<ArgumentException>(() => new TerrainExportReceipt(" "));
     }
 
+    [Fact]
+    public void AddressParcelProvenanceRequiresAtLeastOneOfGeocodeOrParcel()
+    {
+        Assert.Throws<ArgumentException>(() => new AddressParcelProvenance(new DateOnly(2026, 9, 21), null, null));
+    }
+
+    [Fact]
+    public void AddressParcelProvenanceAcceptsGeocodeOnlyWithNoParcel()
+    {
+        GeocodeProvenance geocode = CreateGeocodeProvenance();
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, null);
+
+        Assert.Equal(geocode, addressParcel.Geocode);
+        Assert.Null(addressParcel.Parcel);
+    }
+
+    [Fact]
+    public void AddressParcelProvenanceAcceptsParcelOnlyWithNoGeocode()
+    {
+        ParcelProvenance parcel = CreateParcelProvenance();
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), null, parcel);
+
+        Assert.Null(addressParcel.Geocode);
+        Assert.Equal(parcel, addressParcel.Parcel);
+    }
+
+    [Theory]
+    [InlineData(" ", "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.")]
+    [InlineData("100 Example Loop", " ")]
+    public void GeocodeProvenanceRejectsBlankQueryTextOrBlankAttribution(string queryText, string attribution)
+    {
+        Assert.Throws<ArgumentException>(() => new GeocodeProvenance(AddressGeocoderProvider.Census, queryText, attribution));
+    }
+
+    [Fact]
+    public void GeocodeProvenanceRejectsAnUndefinedProviderValue()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GeocodeProvenance(
+            (AddressGeocoderProvider)999,
+            "100 Example Loop",
+            "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."));
+    }
+
+    [Fact]
+    public void ParcelProvenanceRejectsBlankRequiredStringsButAllowsNullOptionalStrings()
+    {
+        Assert.Throws<ArgumentException>(() => new ParcelProvenance(
+            ParcelBoundarySourceKind.CountyRegistry, " ", "99-99-999-999", null, null, "Synthetic fixture data; no real license applies."));
+        Assert.Throws<ArgumentException>(() => new ParcelProvenance(
+            ParcelBoundarySourceKind.CountyRegistry, "Synthetic County (fixture only) (GEOID 99999)", " ", null, null, "Synthetic fixture data; no real license applies."));
+        Assert.Throws<ArgumentException>(() => new ParcelProvenance(
+            ParcelBoundarySourceKind.CountyRegistry, "Synthetic County (fixture only) (GEOID 99999)", "99-99-999-999", null, null, " "));
+
+        ParcelProvenance parcel = new(
+            ParcelBoundarySourceKind.CountyRegistry,
+            "Synthetic County (fixture only) (GEOID 99999)",
+            "99-99-999-999",
+            stableParcelId: null,
+            legalDescription: null,
+            licenseDisclaimerText: "Synthetic fixture data; no real license applies.");
+
+        Assert.Null(parcel.StableParcelId);
+        Assert.Null(parcel.LegalDescription);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ParcelProvenanceRejectsABlankOptionalStringWhenSupplied(string blankValue)
+    {
+        // Mirrors ParcelBoundaryCandidateTests.ConstructorRejectsABlankOptionalStringWhenSupplied: null is
+        // allowed for these two optional strings, but a supplied blank value must still be rejected. The
+        // test above only proves the null-is-allowed half of that contract.
+        Assert.Throws<ArgumentException>(() => new ParcelProvenance(
+            ParcelBoundarySourceKind.CountyRegistry,
+            "Synthetic County (fixture only) (GEOID 99999)",
+            "99-99-999-999",
+            stableParcelId: blankValue,
+            legalDescription: null,
+            licenseDisclaimerText: "Synthetic fixture data; no real license applies."));
+        Assert.Throws<ArgumentException>(() => new ParcelProvenance(
+            ParcelBoundarySourceKind.CountyRegistry,
+            "Synthetic County (fixture only) (GEOID 99999)",
+            "99-99-999-999",
+            stableParcelId: null,
+            legalDescription: blankValue,
+            licenseDisclaimerText: "Synthetic fixture data; no real license applies."));
+    }
+
+    [Fact]
+    public void ParcelProvenanceRejectsAnUndefinedSourceKindValue()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParcelProvenance(
+            (ParcelBoundarySourceKind)999,
+            "Synthetic County (fixture only) (GEOID 99999)",
+            "99-99-999-999",
+            null,
+            null,
+            "Synthetic fixture data; no real license applies."));
+    }
+
+    [Fact]
+    public void TerrainProvenanceAddressParcelIsNullByDefaultAndSettableWhenSupplied()
+    {
+        TerrainProvenance defaulted = CreateProvenance(retainedPointCount: 1);
+        Assert.Null(defaulted.AddressParcel);
+
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), CreateGeocodeProvenance(), null);
+        TerrainProvenance withAddressParcel = CreateProvenance(retainedPointCount: 1, addressParcel: addressParcel);
+
+        Assert.Equal(addressParcel, withAddressParcel.AddressParcel);
+    }
+
     private static TerrainProvenance CreateProvenance(
         int retainedPointCount,
         VerticalReference? sourceVerticalReference = null,
         SimplificationRequest? simplificationRequest = null,
-        HorizontalReference? transformationTarget = null)
+        HorizontalReference? transformationTarget = null,
+        AddressParcelProvenance? addressParcel = null)
     {
         VerticalReference vertical = VerticalReference();
         return new TerrainProvenance(
@@ -209,8 +323,22 @@ public sealed class ContractModelTests
             simplificationRequest ?? new SimplificationRequest(),
             5,
             retainedPointCount,
-            new ElevationRange(1d, 3d, LengthUnit.InternationalFoot));
+            new ElevationRange(1d, 3d, LengthUnit.InternationalFoot),
+            addressParcel);
     }
+
+    private static GeocodeProvenance CreateGeocodeProvenance() => new(
+        AddressGeocoderProvider.Census,
+        "100 Example Loop",
+        "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.");
+
+    private static ParcelProvenance CreateParcelProvenance() => new(
+        ParcelBoundarySourceKind.LocalParcelFile,
+        "Local Regrid Standard export (fixture only)",
+        "99-99-999-999",
+        "00000000-0000-0000-0000-000000000000",
+        null,
+        "Synthetic fixture data; no real license applies.");
 
     private static HorizontalReference GeographicReference() => new("EPSG:4326", "WGS84", HorizontalReferenceKind.Geographic, HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);
 

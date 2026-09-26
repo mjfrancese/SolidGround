@@ -269,6 +269,27 @@ public sealed class TerrainExportPayloadAssemblerTests
     }
 
     [Fact]
+    public async Task AssembleCarriesANonNullAddressParcelIntoTheResultingProvenanceUnchanged()
+    {
+        ElevationGrid grid = Grid(SequentialElevations(2, 2));
+        GridTerrainSimplifier simplifier = new();
+        SimplificationResult simplification = await simplifier.SimplifyAsync(
+            grid, new SimplificationRequest(pointBudget: 1000), TestContext.Current.CancellationToken);
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."),
+            null);
+
+        TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
+            Source(), Transformation(), VerticalReference(), Origins(), LocalFrame(), grid, simplification, addressParcel);
+
+        Assert.Equal(addressParcel, payload.Provenance.AddressParcel);
+    }
+
+    [Fact]
     public void AssembleRejectsNullArguments()
     {
         ElevationGrid grid = Grid(SequentialElevations(1, 1));

@@ -15,8 +15,10 @@ public sealed record TerrainProvenance
     /// section for what changing this constant means and why the old manifest stays documented. Version 2
     /// (SolidGround Issue #21) added <see cref="SourceHorizontalReferenceOrigin"/> and
     /// <see cref="SourceVerticalReferenceOrigin"/>; see "Export document manifest, schema version 2".
+    /// Version 3 (SolidGround Issue #33) added <see cref="AddressParcel"/>; see "Export document manifest,
+    /// schema version 3".
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public TerrainProvenance(
         int schemaVersion,
@@ -29,7 +31,8 @@ public sealed record TerrainProvenance
         SimplificationRequest simplificationRequest,
         int originalPointCount,
         int retainedPointCount,
-        ElevationRange? elevationRange)
+        ElevationRange? elevationRange,
+        AddressParcelProvenance? addressParcel = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(schemaVersion);
 
@@ -92,6 +95,7 @@ public sealed record TerrainProvenance
         OriginalPointCount = originalPointCount;
         RetainedPointCount = retainedPointCount;
         ElevationRange = elevationRange;
+        AddressParcel = addressParcel;
     }
 
     public int SchemaVersion { get; }
@@ -111,6 +115,9 @@ public sealed record TerrainProvenance
     public int OriginalPointCount { get; }
     public int RetainedPointCount { get; }
     public ElevationRange? ElevationRange { get; }
+
+    /// <summary>How this export's area of interest was located via an address/parcel lookup, or null when it was not (SolidGround Issue #33). Always null in a schema version 1 or 2 document.</summary>
+    public AddressParcelProvenance? AddressParcel { get; }
 }
 
 /// <summary>Finite minimum and maximum elevations expressed in an explicit vertical unit.</summary>

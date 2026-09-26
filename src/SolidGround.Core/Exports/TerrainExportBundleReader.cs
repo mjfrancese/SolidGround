@@ -13,12 +13,12 @@ using SolidGround.Core.Units;
 namespace SolidGround.Core.Exports;
 
 /// <summary>
-/// Strictly reads a schema version 2 export document (and, for <see cref="Read"/>, its points file) back into
+/// Strictly reads a schema version 3 export document (and, for <see cref="Read"/>, its points file) back into
 /// domain objects: every manifest property is required and exactly typed, every enum string must be an exact
 /// defined member name, every domain record is reconstructed through its own public constructor so existing
 /// invariants re-run, and any deviation is reported as a <see cref="TerrainExportException"/> naming the JSON
 /// path. See docs/architecture/provenance-and-deterministic-exports.md's "Export document manifest, schema
-/// version 2" and "Versioning and compatibility policy" sections for the manifest this reader enforces, and
+/// version 3" and "Versioning and compatibility policy" sections for the manifest this reader enforces, and
 /// its "Reconstructing source coordinates" section for how a caller uses the result.
 /// </summary>
 public static class TerrainExportBundleReader
@@ -29,7 +29,7 @@ public static class TerrainExportBundleReader
     /// against the reconstructed provenance (count, format, columns, unit); only the SHA-256 and line-by-line
     /// checks that need actual point bytes are skipped.
     /// </summary>
-    /// <exception cref="TerrainExportException">The bytes are not a well-formed, strict schema version 2 export document.</exception>
+    /// <exception cref="TerrainExportException">The bytes are not a well-formed, strict schema version 3 export document.</exception>
     public static TerrainProvenance ReadProvenance(ReadOnlySpan<byte> documentBytes)
     {
         (TerrainProvenance provenance, _) = ParseDocument(documentBytes);
@@ -43,7 +43,7 @@ public static class TerrainExportBundleReader
     /// invariant-culture, round-trippable numbers.
     /// </summary>
     /// <exception cref="TerrainExportException">
-    /// The document is not a well-formed, strict schema version 2 export document; the points bytes do not
+    /// The document is not a well-formed, strict schema version 3 export document; the points bytes do not
     /// match the document's recorded SHA-256 or sample count; or a points line is malformed.
     /// </exception>
     public static TerrainExportPayload Read(ReadOnlySpan<byte> documentBytes, ReadOnlySpan<byte> pointsBytes)
@@ -131,6 +131,7 @@ public static class TerrainExportBundleReader
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                "addressParcel",
             ]);
 
         ElevationSourceMetadata source = ParseSource(props["source"], $"{path}.source");
@@ -143,6 +144,7 @@ public static class TerrainExportBundleReader
         int originalPointCount = RequireInt(props["originalPointCount"], $"{path}.originalPointCount");
         int retainedPointCount = RequireInt(props["retainedPointCount"], $"{path}.retainedPointCount");
         ElevationRange elevationRange = ParseElevationRange(props["elevationRange"], $"{path}.elevationRange");
+        AddressParcelProvenance? addressParcel = ParseAddressParcelProvenance(props["addressParcel"], $"{path}.addressParcel");
 
         try
         {
@@ -157,7 +159,8 @@ public static class TerrainExportBundleReader
                 simplification,
                 originalPointCount,
                 retainedPointCount,
-                elevationRange);
+                elevationRange,
+                addressParcel);
         }
         catch (ArgumentException ex)
         {
@@ -384,7 +387,7 @@ public static class TerrainExportBundleReader
             // provenance-and-deterministic-exports.md's "NODATA, empty candidate sets, and statistics"
             // section): the writer rejects an original point count of zero, and a positive original point
             // count always carries a non-null elevation range.
-            throw new TerrainExportException($"'{path}' must not be null in schema version 2.");
+            throw new TerrainExportException($"'{path}' must not be null in schema version 3.");
         }
 
         RequireObject(obj, path);
@@ -401,6 +404,82 @@ public static class TerrainExportBundleReader
         catch (ArgumentException ex)
         {
             throw new TerrainExportException($"'{path}' is not a valid elevation range.", ex);
+        }
+    }
+
+    private static AddressParcelProvenance? ParseAddressParcelProvenance(JsonElement obj, string path)
+    {
+        if (obj.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        RequireObject(obj, path);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path, ["retrievalDate", "geocode", "parcel"]);
+
+        DateOnly retrievalDate = RequireDate(props["retrievalDate"], $"{path}.retrievalDate");
+        GeocodeProvenance? geocode = ParseGeocodeProvenance(props["geocode"], $"{path}.geocode");
+        ParcelProvenance? parcel = ParseParcelProvenance(props["parcel"], $"{path}.parcel");
+
+        try
+        {
+            return new AddressParcelProvenance(retrievalDate, geocode, parcel);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new TerrainExportException($"'{path}' is not a valid address/parcel provenance record.", ex);
+        }
+    }
+
+    private static GeocodeProvenance? ParseGeocodeProvenance(JsonElement obj, string path)
+    {
+        if (obj.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        RequireObject(obj, path);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path, ["provider", "queryText", "attribution"]);
+
+        AddressGeocoderProvider provider = RequireEnum<AddressGeocoderProvider>(props["provider"], $"{path}.provider");
+        string queryText = RequireString(props["queryText"], $"{path}.queryText");
+        string attribution = RequireString(props["attribution"], $"{path}.attribution");
+
+        try
+        {
+            return new GeocodeProvenance(provider, queryText, attribution);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new TerrainExportException($"'{path}' is not a valid geocode provenance record.", ex);
+        }
+    }
+
+    private static ParcelProvenance? ParseParcelProvenance(JsonElement obj, string path)
+    {
+        if (obj.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        RequireObject(obj, path);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path,
+            ["sourceKind", "sourceIdentity", "parcelId", "stableParcelId", "legalDescription", "licenseDisclaimerText"]);
+
+        ParcelBoundarySourceKind sourceKind = RequireEnum<ParcelBoundarySourceKind>(props["sourceKind"], $"{path}.sourceKind");
+        string sourceIdentity = RequireString(props["sourceIdentity"], $"{path}.sourceIdentity");
+        string parcelId = RequireString(props["parcelId"], $"{path}.parcelId");
+        string? stableParcelId = RequireStringOrNull(props["stableParcelId"], $"{path}.stableParcelId");
+        string? legalDescription = RequireStringOrNull(props["legalDescription"], $"{path}.legalDescription");
+        string licenseDisclaimerText = RequireString(props["licenseDisclaimerText"], $"{path}.licenseDisclaimerText");
+
+        try
+        {
+            return new ParcelProvenance(sourceKind, sourceIdentity, parcelId, stableParcelId, legalDescription, licenseDisclaimerText);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new TerrainExportException($"'{path}' is not a valid parcel provenance record.", ex);
         }
     }
 
@@ -458,7 +537,7 @@ public static class TerrainExportBundleReader
         string format = RequireString(props["format"], $"{path}.format");
         if (!string.Equals(format, "csv", StringComparison.Ordinal))
         {
-            throw new TerrainExportException($"'{path}.format' is '{format}', but schema version 2 requires 'csv'.");
+            throw new TerrainExportException($"'{path}.format' is '{format}', but schema version 3 requires 'csv'.");
         }
 
         ValidateColumns(props["columns"], $"{path}.columns");

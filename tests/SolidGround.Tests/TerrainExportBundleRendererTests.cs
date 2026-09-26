@@ -92,6 +92,7 @@ public sealed class TerrainExportBundleRendererTests
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                "addressParcel",
             ],
             PropertyNames(provenance));
 
@@ -149,6 +150,7 @@ public sealed class TerrainExportBundleRendererTests
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                "addressParcel",
             ],
             PropertyNames(provenanceElement));
         Assert.Equal("SourceMetadataResponse", provenanceElement.GetProperty("sourceHorizontalReferenceOrigin").GetString());
@@ -241,7 +243,7 @@ public sealed class TerrainExportBundleRendererTests
     public void RenderRejectsASchemaVersionOtherThanTheCurrentSchemaVersionWithTerrainExportException()
     {
         TerrainProvenance provenance = new(
-            3,
+            999,
             Source(),
             Transformation(),
             VerticalReference(),
@@ -337,6 +339,217 @@ public sealed class TerrainExportBundleRendererTests
         Assert.Equal(0, document.RootElement.GetProperty("points").GetProperty("count").GetInt32());
     }
 
+    [Fact]
+    public void AddressParcelIsWrittenAsExplicitNullWhenAbsent()
+    {
+        TerrainExportPayload payload = CreatePayload();
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-address-parcel-absent");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement addressParcel = document.RootElement.GetProperty("provenance").GetProperty("addressParcel");
+
+        Assert.Equal(JsonValueKind.Null, addressParcel.ValueKind);
+    }
+
+    [Fact]
+    public void AddressParcelWritesGeocodeAndParcelSubObjectsInFixedPropertyOrderWhenPresent()
+    {
+        GeocodeProvenance geocode = new(
+            AddressGeocoderProvider.Census,
+            "100 Example Loop",
+            "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.");
+        ParcelProvenance parcel = new(
+            ParcelBoundarySourceKind.CountyRegistry,
+            "Synthetic County (fixture only) (GEOID 99999)",
+            "99-99-999-999",
+            stableParcelId: null,
+            legalDescription: "Lot 4, Synthetic Subdivision (fixture only)",
+            licenseDisclaimerText: "Synthetic fixture data; no real license applies.");
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, parcel);
+
+        TerrainProvenance provenance = new(
+            TerrainProvenance.CurrentSchemaVersion,
+            Source(),
+            Transformation(),
+            VerticalReference(),
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
+            LocalFrame(),
+            new SimplificationRequest(),
+            originalPointCount: 1,
+            retainedPointCount: 1,
+            elevationRange: new ElevationRange(1d, 1d, LengthUnit.InternationalFoot),
+            addressParcel: addressParcel);
+        TerrainExportPayload payload = new([new LocalTerrainSample(new LocalCoordinate(1d, 1d, 1d))], provenance);
+
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-address-parcel-both");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement addressParcelElement = document.RootElement.GetProperty("provenance").GetProperty("addressParcel");
+
+        Assert.Equal(["retrievalDate", "geocode", "parcel"], PropertyNames(addressParcelElement));
+        Assert.Equal("2026-09-21", addressParcelElement.GetProperty("retrievalDate").GetString());
+
+        JsonElement geocodeElement = addressParcelElement.GetProperty("geocode");
+        Assert.Equal(["provider", "queryText", "attribution"], PropertyNames(geocodeElement));
+        Assert.Equal("Census", geocodeElement.GetProperty("provider").GetString());
+        Assert.Equal("100 Example Loop", geocodeElement.GetProperty("queryText").GetString());
+        Assert.Equal(
+            "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.",
+            geocodeElement.GetProperty("attribution").GetString());
+
+        JsonElement parcelElement = addressParcelElement.GetProperty("parcel");
+        Assert.Equal(
+            ["sourceKind", "sourceIdentity", "parcelId", "stableParcelId", "legalDescription", "licenseDisclaimerText"],
+            PropertyNames(parcelElement));
+        Assert.Equal("CountyRegistry", parcelElement.GetProperty("sourceKind").GetString());
+        Assert.Equal("Synthetic County (fixture only) (GEOID 99999)", parcelElement.GetProperty("sourceIdentity").GetString());
+        Assert.Equal("99-99-999-999", parcelElement.GetProperty("parcelId").GetString());
+        Assert.Equal(JsonValueKind.Null, parcelElement.GetProperty("stableParcelId").ValueKind);
+        Assert.Equal("Lot 4, Synthetic Subdivision (fixture only)", parcelElement.GetProperty("legalDescription").GetString());
+        Assert.Equal("Synthetic fixture data; no real license applies.", parcelElement.GetProperty("licenseDisclaimerText").GetString());
+    }
+
+    [Fact]
+    public void AddressParcelWritesAPopulatedStableParcelIdAsItsLiteralStringValue()
+    {
+        // AddressParcelWritesGeocodeAndParcelSubObjectsInFixedPropertyOrderWhenPresent above only ever
+        // renders a null stableParcelId, so it never proves the populated branch's actual value (as opposed
+        // to just its JsonValueKind) is written correctly. Exercise that branch explicitly.
+        ParcelProvenance parcel = new(
+            ParcelBoundarySourceKind.LocalParcelFile,
+            "Local Regrid Standard export (fixture only)",
+            "99-99-999-999",
+            stableParcelId: "00000000-0000-0000-0000-000000000000",
+            legalDescription: null,
+            licenseDisclaimerText: "Synthetic fixture data; no real license applies.");
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode: null, parcel);
+
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-address-parcel-stable-parcel-id");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement parcelElement = document.RootElement.GetProperty("provenance").GetProperty("addressParcel").GetProperty("parcel");
+
+        Assert.Equal("00000000-0000-0000-0000-000000000000", parcelElement.GetProperty("stableParcelId").GetString());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AddressParcelWritesNullGeocodeWhenOnlyParcelIsPresentAndNullParcelWhenOnlyGeocodeIsPresent(bool geocodeOnly)
+    {
+        GeocodeProvenance? geocode = geocodeOnly
+            ? new GeocodeProvenance(AddressGeocoderProvider.Geocodio, "100 Example Loop", "geocod.io")
+            : null;
+        ParcelProvenance? parcel = geocodeOnly
+            ? null
+            : new ParcelProvenance(
+                ParcelBoundarySourceKind.LocalParcelFile,
+                "Local Regrid Standard export (fixture only)",
+                "99-99-999-999",
+                "00000000-0000-0000-0000-000000000000",
+                null,
+                "Synthetic fixture data; no real license applies.");
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, parcel);
+
+        TerrainProvenance provenance = new(
+            TerrainProvenance.CurrentSchemaVersion,
+            Source(),
+            Transformation(),
+            VerticalReference(),
+            ReferenceOrigin.Operator,
+            ReferenceOrigin.Operator,
+            LocalFrame(),
+            new SimplificationRequest(),
+            originalPointCount: 1,
+            retainedPointCount: 1,
+            elevationRange: new ElevationRange(1d, 1d, LengthUnit.InternationalFoot),
+            addressParcel: addressParcel);
+        TerrainExportPayload payload = new([new LocalTerrainSample(new LocalCoordinate(1d, 1d, 1d))], provenance);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(
+            payload, geocodeOnly ? "renderer-address-parcel-geocode-only" : "renderer-address-parcel-parcel-only");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement addressParcelElement = document.RootElement.GetProperty("provenance").GetProperty("addressParcel");
+
+        Assert.Equal(geocodeOnly ? JsonValueKind.Object : JsonValueKind.Null, addressParcelElement.GetProperty("geocode").ValueKind);
+        Assert.Equal(geocodeOnly ? JsonValueKind.Null : JsonValueKind.Object, addressParcelElement.GetProperty("parcel").ValueKind);
+    }
+
+    [Fact]
+    public void RenderedDocumentContainingAddressParcelProvenanceContainsNoKeyAuthorizationHeaderOrQueryStringMarker()
+    {
+        // Duplicates FixtureSecurityTests.CommittedFixturesContainNoCredentialsOrRequestUrls's own marker
+        // list: that list is a private local variable in that file, which the hard rules for this issue
+        // forbid modifying, so this regression test keeps its own copy rather than sharing one.
+        string[] forbiddenMarkers =
+        [
+            "authorization:",
+            "bearer ",
+            "api_key",
+            "apikey",
+            "http://",
+            "https://",
+        ];
+
+        GeocodeProvenance geocode = new(
+            AddressGeocoderProvider.Esri,
+            "100 Example Loop",
+            "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.");
+        ParcelProvenance parcel = new(
+            ParcelBoundarySourceKind.CountyRegistry,
+            "Synthetic County (fixture only) (GEOID 99999)",
+            "99-99-999-999",
+            "00000000-0000-0000-0000-000000000000",
+            "Lot 4, Synthetic Subdivision (fixture only)",
+            "Synthetic fixture data; no real license applies.");
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, parcel);
+
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-address-parcel-security");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        foreach (string marker in forbiddenMarkers)
+        {
+            Assert.DoesNotContain(marker, documentText, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void RenderingUnderTheDeDeCultureWithAPopulatedAddressParcelGivesBytesIdenticalToInvariantCulture()
+    {
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 21),
+            new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."),
+            new ParcelProvenance(
+                ParcelBoundarySourceKind.CountyRegistry,
+                "Synthetic County (fixture only) (GEOID 99999)",
+                "99-99-999-999",
+                null,
+                "Lot 4, Synthetic Subdivision (fixture only)",
+                "Synthetic fixture data; no real license applies."));
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle invariantBundle = TerrainExportBundleRenderer.Render(payload, "renderer-culture-address-parcel");
+        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            TerrainExportBundle deDeBundle = TerrainExportBundleRenderer.Render(payload, "renderer-culture-address-parcel");
+
+            Assert.Equal(invariantBundle.DocumentBytes.ToArray(), deDeBundle.DocumentBytes.ToArray());
+            Assert.Equal(invariantBundle.PointsBytes.ToArray(), deDeBundle.PointsBytes.ToArray());
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
     private static void AssertNoByteOrderMark(byte[] bytes)
     {
         bool hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
@@ -366,7 +579,8 @@ public sealed class TerrainExportBundleRendererTests
         string? geoidModel = "Geoid12B",
         LengthUnit verticalUnit = LengthUnit.InternationalFoot,
         LengthUnit projectedUnit = LengthUnit.Meter,
-        LengthUnit outputUnit = LengthUnit.UsSurveyFoot)
+        LengthUnit outputUnit = LengthUnit.UsSurveyFoot,
+        AddressParcelProvenance? addressParcel = null)
     {
         IReadOnlyList<LocalTerrainSample> effectiveSamples = samples ?? DefaultSamples(retainedPointCount);
         TerrainProvenance provenance = CreateProvenance(
@@ -377,7 +591,8 @@ public sealed class TerrainExportBundleRendererTests
             geoidModel,
             verticalUnit,
             projectedUnit,
-            outputUnit);
+            outputUnit,
+            addressParcel);
 
         return new TerrainExportPayload(effectiveSamples, provenance);
     }
@@ -390,7 +605,8 @@ public sealed class TerrainExportBundleRendererTests
         string? geoidModel,
         LengthUnit verticalUnit,
         LengthUnit projectedUnit,
-        LengthUnit outputUnit)
+        LengthUnit outputUnit,
+        AddressParcelProvenance? addressParcel = null)
     {
         VerticalReference vertical = VerticalReference(verticalUnit, geoidModel);
         HorizontalReference projected = ProjectedReference(projectedUnit);
@@ -405,7 +621,8 @@ public sealed class TerrainExportBundleRendererTests
             new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
             originalPointCount,
             retainedPointCount,
-            new ElevationRange(1.5d, 3.75d, verticalUnit));
+            new ElevationRange(1.5d, 3.75d, verticalUnit),
+            addressParcel);
     }
 
     private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null) =>

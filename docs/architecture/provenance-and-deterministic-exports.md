@@ -150,6 +150,50 @@ identically to version 2; nothing else in the manifest changed.
 Phase 2's Extensible Storage schema (see "Boundary: what #9 and Phase 2 still own") is expected to carry
 these same two fields alongside the rest of the manifest once it exists.
 
+## Export document manifest, schema version 3
+
+**Update, Issue #33 (2026-09-26):** `TerrainProvenance.CurrentSchemaVersion` is now `3`. Version 3 adds exactly
+one required property, `provenance.addressParcel`, written by `WriteProvenance` as the last property of the
+`provenance` object, after `elevationRange` -- the version 2 manifest's property order above is otherwise
+unchanged. It records how this export's area of interest was located via an operator-entered address and/or a
+parcel boundary lookup (SolidGround Issues #28/#29, Phase 3), when either one contributed:
+
+```text
+addressParcel                  object | null   AddressParcelProvenance, or null when neither a geocode nor a
+                                                parcel lookup contributed to this area of interest
+  retrievalDate                  string          "yyyy-MM-dd"; when this address/parcel resolution was performed
+  geocode                         object | null   GeocodeProvenance, or null when no geocode contributed
+    provider                       string          AddressGeocoderProvider member name
+    queryText                      string          the operator-entered address text submitted to the geocoder
+    attribution                     string          the geocoder's own attribution/terms text for the candidate
+  parcel                          object | null   ParcelProvenance, or null when no parcel lookup contributed
+    sourceKind                      string          ParcelBoundarySourceKind member name
+    sourceIdentity                   string          a human-readable label for the specific source
+    parcelId                         string          the source's own parcel identifier
+    stableParcelId                    string | null   an optional, source-labeled durable id
+    legalDescription                   string | null   present only when the source reported one
+    licenseDisclaimerText                string          the source's own license/disclaimer text, verbatim
+```
+
+`addressParcel` itself is `null` whenever neither a geocode nor a parcel lookup contributed to the export's
+area of interest -- every export produced by this repository's own current scope, since nothing yet populates
+it (see docs/architecture/address-parcel-provenance.md's "Population path"). When non-null, at least one of
+`geocode`/`parcel` is non-null: `AddressParcelProvenance`'s own constructor rejects a value with both null, and
+`TerrainExportBundleReader.ParseAddressParcelProvenance` re-runs that same check on read, wrapping a violation
+as a `TerrainExportException` naming the address/parcel provenance record invalid. Every other version 2 rule --
+property order, null-vs-omitted, number/date/enum formatting, determinism -- applies identically to version 3;
+nothing else in the manifest changed.
+
+No key, authorization header, or request query string ever reaches this object: `queryText` is the operator's
+own plain address text (never a request URI on any shipped geocoder provider), and `attribution`/
+`sourceIdentity`/`licenseDisclaimerText` are host-supplied, non-secret strings. A populated record does,
+however, put the operator's own query text and the resolved parcel's identifiers into the exported JSON -- see
+docs/architecture/address-parcel-provenance.md's "Privacy" section for what that means for sharing a real
+export.
+
+See docs/architecture/address-parcel-provenance.md for the full type definitions, the field-mapping table
+Issue #16's future Extensible Storage schema version will need, and this design's remaining open questions.
+
 ## Points file format, version 1
 
 `TerrainExportBundleRenderer.RenderPoints` writes one line per retained sample, in `payload.Samples`' order — the simplifier's own row-major order, see "Decisions". There is no header row, no comments, no byte-order mark, and no blank lines: Revit's points-file toposolid import fallback expects bare comma-separated `x,y,z` lines, and a header line would break it.
@@ -183,6 +227,8 @@ The reader enforces this at the two points where a document declares what it is:
 Phase 2's Extensible Storage mapping (out of this issue's scope) is expected to read from this same nested manifest — see "Purpose and boundary" — which is why the shape is not pre-flattened even though a flat table might otherwise be a more natural fit for a schema-backed `Entity`.
 
 **Update, Issue #21 (2026-09-19):** this policy's first paragraph is exercised for the first time: `CurrentSchemaVersion` is now `2` (see "Export document manifest, schema version 2"), and a version 1 document — including one written by an earlier build of this CLI — is rejected by `TerrainExportBundleReader.ParseDocument`'s existing `schemaVersion` check with the same `TerrainExportException` it always threw for any non-current version, naming the actual and expected version. There is no migration path from a version 1 document to version 2; the version 1 manifest above stays documented as what that earlier writer produced, exactly as this section already said it would.
+
+**Update, Issue #33 (2026-09-26):** this policy's first paragraph is exercised again: `CurrentSchemaVersion` is now `3` (see "Export document manifest, schema version 3"), and a version 1 or version 2 document — including one written by an earlier build of this CLI — is rejected by the same `schemaVersion` check with the same `TerrainExportException`, naming the actual and expected version. There is no migration path from a version 1 or version 2 document to version 3; both earlier manifests above stay documented as what those earlier writers produced, exactly as this section already said they would.
 
 ## NODATA, empty candidate sets, and statistics
 
@@ -239,7 +285,7 @@ The detail that matters for reconstruction: `Origin` is a plain `Coordinate3D`, 
 | Mapping the export document manifest onto a Revit Extensible Storage schema (stable GUID, per-field storage) | Phase 2 | AGENTS.md's Extensible Storage decision; the manifest here is deliberately nested, not pre-flattened, so that mapping can walk the same structure. |
 | Attaching provenance to a created toposolid element, and any Revit-side read-back | Phase 2 | `TerrainExportBundleReader` reconstructs a `TerrainProvenance`/`TerrainExportPayload` from bytes; a Revit-side adapter that calls it is a separate, later concern. |
 | An export destination other than the local file system | Not scheduled | `ITerrainExporter` (Issue #2) stays destination-neutral; `FileSystemTerrainExporter` is the only implementation this issue adds. |
-| A schema version 3 manifest | Not scheduled | See "Versioning and compatibility policy": the version 1 and version 2 manifests both stay documented once a version 3 is ever added. |
+| A schema version 4 manifest | Not scheduled | See "Versioning and compatibility policy": the version 1, version 2, and version 3 manifests all stay documented once a version 4 is ever added. |
 
 ## Known limitations
 
