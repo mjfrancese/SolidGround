@@ -35,6 +35,8 @@ internal static class OptionTable
     internal const string Fetch = "fetch";
     internal const string Run = "run";
     internal const string Verify = "verify";
+    internal const string Geocode = "geocode";
+    internal const string Parcel = "parcel";
 
     // ---- options reused, byte-for-byte or with a small variant, across more than one verb ------------
 
@@ -47,7 +49,10 @@ internal static class OptionTable
     private static readonly OptionSpec Radius = new(
         "radius", OptionKind.Value, false, "<meters>", "The radius, in meters, of a center+radius AOI; requires --center.");
 
-    private static readonly OptionSpec Parcel = new(
+    // Named ParcelClip, not Parcel, to avoid colliding with the Parcel verb constant below (the `parcel`
+    // command resolves a parcel boundary from a point/address; this option clips process/fetch/run's own
+    // acquisition to an already-known parcel file).
+    private static readonly OptionSpec ParcelClip = new(
         "parcel", OptionKind.Value, false, "<file>", "Clips to a parcel boundary file (GeoJSON or WKT, WGS 84).");
 
     private static readonly OptionSpec ParcelFormat = new(
@@ -102,6 +107,15 @@ internal static class OptionTable
 
     private static readonly OptionSpec Timeout = new(
         "timeout", OptionKind.Value, false, "<seconds>", "The HTTP timeout, in seconds, for the OpenTopography request.");
+
+    /// <summary>
+    /// <c>geocode</c> and <c>parcel</c> both reference this instance, never the OpenTopography-worded
+    /// <see cref="Timeout"/> instance directly -- neither verb ever calls OpenTopography.
+    /// </summary>
+    private static readonly OptionSpec TimeoutForOnlineLookup = Timeout with
+    {
+        HelpText = "The HTTP timeout, in seconds, for this command's own request(s).",
+    };
 
     private static readonly OptionSpec Origin = new(
         "origin", OptionKind.Value, false, "southwest|centroid|<x>,<y>|<x>,<y>,<z>",
@@ -176,7 +190,7 @@ internal static class OptionTable
         Bbox,
         Center,
         Radius,
-        Parcel,
+        ParcelClip,
         ParcelFormat,
         Buffer,
         Origin,
@@ -195,7 +209,7 @@ internal static class OptionTable
         Bbox,
         Center,
         Radius,
-        Parcel,
+        ParcelClip,
         ParcelFormat,
         Buffer,
         OutputForRasterSet,
@@ -210,7 +224,7 @@ internal static class OptionTable
         Bbox,
         Center,
         Radius,
-        Parcel,
+        ParcelClip,
         ParcelFormat,
         Buffer,
         Origin,
@@ -236,12 +250,55 @@ internal static class OptionTable
         VerboseCoordinateOperation,
     ];
 
+    private static readonly IReadOnlyList<OptionSpec> GeocodeOptions =
+    [
+        new("address", OptionKind.Value, true, "<text>", "The street address to geocode."),
+        new("provider", OptionKind.Value, false, "census|geocodio|esri",
+            "Which geocoder to use. census (default): free, keyless, US Census Bureau. geocodio/esri: keyed opt-in, require GEOCODIO_API_KEY/ARCGIS_API_KEY."),
+        new("output-file", OptionKind.Value, false, "<file>", "Also writes the identical JSON to this file."),
+        TimeoutForOnlineLookup,
+    ];
+
+    private static readonly IReadOnlyList<OptionSpec> ParcelOptions =
+    [
+        new("point", OptionKind.Value, false, "<lat>,<lon>",
+            "The WGS 84 point to resolve a parcel for; exactly one of --point/--address is required. Same lat,lon order as --center."),
+        new("address", OptionKind.Value, false, "<text>",
+            "An address to geocode first (see --geocode-provider/--geocode-candidate), then resolve a parcel at the chosen candidate's point; exactly one of --point/--address is required."),
+        new("geocode-provider", OptionKind.Value, false, "census|geocodio|esri",
+            "Which geocoder to use when --address is given. Default census. Only valid with --address."),
+        new("geocode-candidate", OptionKind.Value, false, "<n>",
+            "The 1-based index into the geocoded candidates to use when --address is given. Default 1. Only valid with --address."),
+        new("source", OptionKind.Value, true, "county-registry|local-file", "Which parcel source to query."),
+        new("registry", OptionKind.Value, false, "<file>", "The machine-local county parcel registry JSON. Required when --source is county-registry."),
+        new("geoid", OptionKind.Value, false, "<5-digit>",
+            "Overrides the county registry's GEOID lookup key. When omitted with --source county-registry, the 5-digit GEOID is found " +
+            "automatically from the resolved point via the keyless Census county lookup. Only valid with --source county-registry."),
+        new("local-file", OptionKind.Value, false, "<file>", "The local GeoJSON parcel export to read. Required when --source is local-file."),
+        new("local-file-label", OptionKind.Value, false, "<text>",
+            "A human-readable label for --local-file's data, recorded on every candidate. Required when --source is local-file."),
+        new("local-file-disclaimer", OptionKind.Value, false, "<text>",
+            "--local-file's own license/disclaimer text, recorded verbatim on every candidate. Required when --source is local-file."),
+        new("select", OptionKind.Value, false, "<n>", "The 1-based index into the resolved parcel candidates to write when --output is given. Default 1."),
+        Buffer,
+        new("output", OptionKind.Value, false, "<dir>", "The directory to write the resolved parcel's geometry and AOI fragment into."),
+        new("name", OptionKind.Value, false, "<baseName>", "The written files' base name (<name>.wkt, <name>.aoi.json). Default parcel."),
+        new("overwrite", OptionKind.Flag, false, "", "Allow replacing existing written files."),
+        new("offline", OptionKind.Flag, false, "", "Refuses any network-requiring step before it would happen; requires --point and --source local-file."),
+        TimeoutForOnlineLookup,
+    ];
+
     private static readonly IReadOnlyList<VerbSpec> AllVerbs =
     [
         new(Process, "OFFLINE. Process a local AAIGrid (.asc) raster into a terrain export bundle.", ProcessOptions),
         new(Fetch, "ONLINE. Acquire a raster set from OpenTopography without processing it.", FetchOptions),
         new(Run, "ONLINE. Acquire from OpenTopography and process it into a terrain export bundle in one step.", RunOptions),
         new(Verify, "Reads an export bundle, verifies it, and prints its provenance summary.", VerifyOptions),
+        new(Geocode, "ONLINE. Resolves a street address to ranked, approximate WGS 84 coordinate candidates (not survey-grade); prints deterministic JSON.", GeocodeOptions),
+        new(Parcel,
+            "ONLINE, unless --offline with --source local-file. Resolves a parcel boundary -- a cadastral/assessor representation, not a survey -- " +
+            "from a point or a geocoded address, against a county registry or a local file; prints deterministic JSON.",
+            ParcelOptions),
     ];
 
     /// <summary>Every verb, in a fixed, deterministic display order.</summary>

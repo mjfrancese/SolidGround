@@ -6,6 +6,12 @@ using SolidGround.Core.Clipping;
 using SolidGround.Core.Exports;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
+using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.Census;
+using SolidGround.Core.Sources.CountyParcels;
+using SolidGround.Core.Sources.Esri;
+using SolidGround.Core.Sources.Geocodio;
+using SolidGround.Core.Sources.LocalParcelFile;
 using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Transformations;
 
@@ -59,6 +65,97 @@ public static class CliApplication
         }
         catch (OpenTopographyException ex)
         {
+            host.StandardError.WriteLine($"error (source-quality): {ex.Message}");
+            return CliExitCodes.SourceQuality;
+        }
+        catch (CensusGeocoderNoCandidatesException ex)
+        {
+            host.StandardError.WriteLine($"error (not-found): {ex.Message}");
+            return CliExitCodes.NotFound;
+        }
+        catch (GeocodioGeocoderNoCandidatesException ex)
+        {
+            host.StandardError.WriteLine($"error (not-found): {ex.Message}");
+            return CliExitCodes.NotFound;
+        }
+        catch (EsriGeocoderNoCandidatesException ex)
+        {
+            host.StandardError.WriteLine($"error (not-found): {ex.Message}");
+            return CliExitCodes.NotFound;
+        }
+        catch (GeocodioGeocoderAuthorizationException ex)
+        {
+            host.StandardError.WriteLine($"error (authorization): {ex.Message}");
+            return CliExitCodes.Authorization;
+        }
+        catch (EsriGeocoderAuthorizationException ex)
+        {
+            host.StandardError.WriteLine($"error (authorization): {ex.Message}");
+            return CliExitCodes.Authorization;
+        }
+        catch (CensusGeocoderRequestValidationException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (GeocodioGeocoderRequestValidationException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (EsriGeocoderRequestValidationException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (AddressGeocoderException ex)
+        {
+            // Any other geocoder failure (quota, server, network, unexpected-response) -- see
+            // docs/architecture/cli-workflow.md's "Exit codes and error classes" section.
+            host.StandardError.WriteLine($"error (source-quality): {ex.Message}");
+            return CliExitCodes.SourceQuality;
+        }
+        catch (CensusCountyLookupNoCountyException ex)
+        {
+            host.StandardError.WriteLine($"error (not-found): {ex.Message}");
+            return CliExitCodes.NotFound;
+        }
+        catch (CensusCountyLookupException ex)
+        {
+            // Any other Census county lookup failure (server, network, unexpected-response).
+            host.StandardError.WriteLine($"error (source-quality): {ex.Message}");
+            return CliExitCodes.SourceQuality;
+        }
+        catch (CountyParcelRegistryUnregisteredGeoidException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (CountyParcelRegistryRequestValidationException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (LocalParcelFileNotFoundException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (LocalParcelFileAccessException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (LocalParcelFileFormatException ex)
+        {
+            host.StandardError.WriteLine($"error (usage): {ex.Message}");
+            return CliExitCodes.Usage;
+        }
+        catch (ParcelBoundarySourceException ex)
+        {
+            // Any other parcel-boundary-source failure (CountyParcelRegistryServerException/
+            // NetworkException/UnexpectedResponseException) -- see docs/architecture/cli-workflow.md's "Exit
+            // codes and error classes" section.
             host.StandardError.WriteLine($"error (source-quality): {ex.Message}");
             return CliExitCodes.SourceQuality;
         }
@@ -205,6 +302,8 @@ public static class CliApplication
         OptionTable.Fetch => FetchCommand.RunAsync(invocation, host, cancellationToken),
         OptionTable.Run => RunCommand.RunAsync(invocation, host, cancellationToken),
         OptionTable.Verify => VerifyCommand.RunAsync(invocation, host, cancellationToken),
+        OptionTable.Geocode => GeocodeCommand.RunAsync(invocation, host, cancellationToken),
+        OptionTable.Parcel => ParcelCommand.RunAsync(invocation, host, cancellationToken),
         _ => throw new InvalidOperationException($"Unhandled verb '{invocation.Verb}'."),
     };
 

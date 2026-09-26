@@ -9,14 +9,23 @@ AAIGrid parsing, AOI normalization and clipping, coordinate/unit/local-origin tr
 decimation, and provenance and export are otherwise unchanged and covered by the design notes this one
 builds on.
 
+**Update, Issue #32 (PH3-5, 2026-09-26):** two new commands, `geocode` and `parcel`, give the CLI the same
+address-to-boundary capability the future Revit dialog will have, reusing Issue #28's `IAddressGeocoder` and
+Issue #29's `IParcelBoundarySource` with no duplicated logic. `parcel` also chains in a small new Core
+component, `SolidGround.Core.Sources.Census.CensusCountyLookup`
+(`docs/architecture/census-county-lookup.md`), that finds a county-registry query's 5-digit GEOID
+automatically from the resolved point, unless an operator overrides it with `--geoid`. Neither command adds a
+package reference or a new `AreaOfInterestKind`: a resolved parcel converts into today's
+`ParcelGeometryAoi`/`areaOfInterest.parcel` shape, exactly as owner decision 8 already established.
+
 ## Purpose and boundaries
 
-This design covers the whole `SolidGround.Cli` executable: argument parsing, the four commands, the
+This design covers the whole `SolidGround.Cli` executable: argument parsing, the six commands, the
 processing pipeline that binds them to Core, raster-set persistence, OpenTopography key resolution, and
 diagnostics.
 
 - **What this adds.** The complete CLI surface: `Program.cs`, the public `CliApplication.RunAsync` entry
-  point, the option table and parser, the four commands, the processing pipeline `process` and `run` both
+  point, the option table and parser, the six commands, the processing pipeline `process` and `run` both
   call, the `.source.json` raster-set sidecar and its reader and writer, the OpenTopography API key
   resolution chain, and the CLI's own exit-code and diagnostics conventions.
 - **What this does not change.** Every Core contract the earlier design notes describe stays exactly as
@@ -30,7 +39,7 @@ diagnostics.
 ## Commands
 
 Every command binds its own arguments to a strongly typed options record and then delegates to Core; none
-of the four duplicates domain logic Core already owns.
+of the six duplicates domain logic Core already owns.
 
 | Command | Online or offline | Purpose |
 | --- | --- | --- |
@@ -38,6 +47,8 @@ of the four duplicates domain logic Core already owns.
 | `fetch` | Online | Acquires a DEM from OpenTopography for exactly one AOI and writes a raster set (`*.asc` plus `*.prj` plus `*.source.json`) to `--output`. It performs no clipping, no local-origin placement, and no simplification. |
 | `run` | Online | Acquires exactly as `fetch`, then processes the acquired grid exactly as `process` does, writing the export bundle in one invocation. `--save-raster` additionally writes the raster set beside the bundle. |
 | `verify` | Offline | Reads a written export bundle strictly, prints its provenance summary, and confirms that reconstructing every sample's source coordinate and converting it back is bit-exact. |
+| `geocode` | Online | Resolves a street address to ranked, approximate WGS 84 coordinate candidates (Census by default, or Geocodio/Esri opt-in) and prints deterministic JSON. |
+| `parcel` | Online, unless `--offline` with `--source local-file` | Resolves a parcel boundary from a WGS 84 point or a geocoded address, against a county registry (with an automatic or `--geoid`-overridden GEOID) or a local file, and prints deterministic JSON. |
 | `help [verb]`, `--help`/`-h`, `--version` | Offline | Prints command help (the whole table, or one command's own options) or the CLI's version, and exits without touching any file. |
 
 `process` and `run` share one processing pipeline (`SolidGround.Core.Processing.TerrainProcessingPipeline`)
@@ -171,13 +182,90 @@ assertion on `run`, exactly as they are on `process`.
 | `--points` | `<file>` | optional | sibling `<document-stem-without-suffix>.points.csv` | must exist and be readable |
 | `--verbose` | flag | optional | off | also prints the full forward and inverse coordinate-operation definition text |
 
+### `geocode`
+
+**Added by Issue #32 (PH3-5).** Resolves a street address to ranked, approximate WGS 84 coordinate candidates
+and prints deterministic JSON to stdout (and, with `--output-file`, an identical copy to that file). See
+`docs/architecture/address-geocoding.md` for the three providers' own request/response contracts.
+
+| Option | Syntax | Requirement | Default | Validation |
+| --- | --- | --- | --- | --- |
+| `--address` | `<text>` | required | — | non-blank |
+| `--provider` | `census`\|`geocodio`\|`esri` | optional | `census` | one of the three values; `geocodio`/`esri` need `GEOCODIO_API_KEY`/`ARCGIS_API_KEY`, checked (and, if missing, rejected as `authorization`) before any HTTP call |
+| `--output-file` | `<file>` | optional | — | writes the identical stdout JSON to this path too, UTF-8 no-BOM |
+| `--timeout` | `<seconds>` | optional | `300` | integer, `> 0`; this command's own request timeout (never OpenTopography's, which `geocode` never calls) |
+
+A zero-candidate result is never printed as an empty JSON array: every provider throws its own
+`...NoCandidatesException` instead, which `geocode` reports as `error (not-found): ...` (exit `6`). The
+top-level JSON order is fixed: `provider`, `requestedAddress`, `candidateCount`, `candidates`; each
+candidate's own order is fixed too: `index` (1-based), `latitude`, `longitude`, `matchedAddress`,
+`precisionLabel`, `score`, `attribution`, `accuracyLabel` (a CLI-owned "approximate, not survey-grade"
+disclaimer -- Core defines no analogous constant for a geocode candidate, unlike `parcel`'s own
+`ParcelBoundaryCandidate.AccuracyLabel`). `precisionLabel`/`score` are JSON `null`, never omitted, when a
+provider's schema has neither.
+
+Unlike `parcel` below, this command's JSON never names `--output-file`'s own path, so a write failure there
+(an unwritable path, or a missing parent directory -- this write never creates one) never makes anything
+already printed false; it is still reported as `error (processing): ...` (exit `5`), via `CliProcessingException`,
+rather than falling through to the generic exit-`1` `unexpected` handler.
+
+### `parcel`
+
+**Added by Issue #32 (PH3-5).** Resolves a parcel boundary -- a cadastral/assessor representation, not a
+survey -- from a WGS 84 point or a geocoded address, against a county registry or a local file, and prints
+deterministic JSON. See `docs/architecture/parcel-boundary-sources.md` for the two sources' own contracts and
+`docs/architecture/census-county-lookup.md` for the automatic county-registry GEOID lookup this command
+chains in.
+
+| Option | Syntax | Requirement | Default | Validation |
+| --- | --- | --- | --- | --- |
+| `--point` | `<lat>,<lon>` | exactly one of `--point`/`--address` required | — | 2 finite doubles, valid WGS 84 range; same order as `--center` |
+| `--address` | `<text>` | exactly one of `--point`/`--address` required | — | non-blank; geocoded first, then resolved at the chosen candidate's point |
+| `--geocode-provider` | `census`\|`geocodio`\|`esri` | optional; only with `--address` | `census` | one of the three values |
+| `--geocode-candidate` | `<n>` | optional; only with `--address` | `1` | positive integer; range-checked against the geocoded candidate count |
+| `--source` | `county-registry`\|`local-file` | required | — | one of the two values |
+| `--registry` | `<file>` | required when `--source county-registry` | — | must exist and decode as a valid `CountyParcelRegistry` |
+| `--geoid` | `<5-digit>` | optional; only with `--source county-registry` | resolved automatically via the Census county lookup | exactly 5 digits; when given, skips the Census county lookup (and its one HTTP call) entirely |
+| `--local-file` | `<file>` | required when `--source local-file` | — | must exist and be readable |
+| `--local-file-label` | `<text>` | required when `--source local-file` | — | non-blank; recorded on every candidate |
+| `--local-file-disclaimer` | `<text>` | required when `--source local-file` | — | non-blank; recorded verbatim on every candidate |
+| `--select` | `<n>` | optional | `1` | positive integer; range-checked against the resolved candidate count |
+| `--buffer` | `<meters>` | optional | `0` | finite, `>= 0` |
+| `--output` | `<dir>` | optional | — (prints JSON only) | when given, also writes `<name>.wkt` and `<name>.aoi.json` |
+| `--name` | `<baseName>` | optional | `parcel` | same base-name rule as `process` |
+| `--overwrite` | flag | optional | off | allows replacing the two written files |
+| `--offline` | flag | optional | off | requires `--point` and `--source local-file`; when satisfied, `host.HttpMessageHandlerFactory()` is never even called |
+| `--timeout` | `<seconds>` | optional | `300` | integer, `> 0`; this command's own request timeout(s) (never OpenTopography's) |
+
+A zero-candidate result is a normal outcome of `IParcelBoundarySource.FindAsync` (not a thrown exception);
+`parcel` reports it as `error (not-found): ...` (exit `6`) before printing any JSON body. The top-level JSON
+order is fixed: `input`, `geocodeInput`, `sourceKind`, `sourceDetail`, `candidateCount`,
+`resultSetTruncated`, `candidates`, `selectedCandidateIndex`, `written`; `geocodeInput` is `null` when
+`--point` was given directly, never omitted. Each candidate's own order mirrors
+`docs/architecture/parcel-boundary-sources.md`'s full field list, with every nullable field present as JSON
+`null` when absent. `<name>.wkt`/`<name>.aoi.json` are written only with `--output`, and the pair is directly
+usable as `fetch --parcel <name>.wkt --parcel-format wkt`'s own input; `<name>.aoi.json`'s `parcel.path` is
+written relative to `--output`'s own directory (never absolute), matching `TerrainRequestSettingsTests.cs`'s
+pinned `areaOfInterest.parcel` template shape (`path`/`format`/`bufferMeters`) exactly, and is directly
+readable with `AoiSettingsFactory.Build` once the sibling `.wkt` file is read into memory by the caller. This
+relative form exists purely so two runs into two different output directories still produce byte-identical
+`.aoi.json` bytes; it is not ready to paste as-is into the real
+`%ProgramData%\SolidGround\Revit\settings.json`, because that document's loader (`CreateToposolidCommand`)
+resolves a relative `Parcel.Path` against its own process's current working directory, never the settings
+file's own directory -- `path` must first be rewritten to an absolute location, matching that document's own
+established convention for its sibling `process.asc` field. Both files are written, and their
+output directory created, before this JSON is printed -- the reverse of the two steps' original order -- so a
+printed `written` object always names files that already exist; a failure creating the directory or writing
+either file is reported as `error (processing): ...` (exit `5`), via `CliProcessingException`, before anything
+reaches stdout, never a false completion claim followed by a non-zero exit.
+
 ### Global
 
 | Option | Syntax | Requirement | Notes |
 | --- | --- | --- | --- |
 | `--help`, `-h` | flag | optional | shows help for the given command, or the whole table |
 | `--version` | flag | optional; must be the only argument | prints the CLI's version and exits |
-| `help [verb]` | — | — | `verb`, if given, must be one of `process`, `fetch`, `run`, `verify` |
+| `help [verb]` | — | — | `verb`, if given, must be one of `process`, `fetch`, `run`, `verify`, `geocode`, `parcel` |
 
 `--method uniform` is a plain, non-terrain-aware sampler kept only for comparison against the default
 `curvature-aware` method; the third method Core defines, `TinError`, throws at runtime and is never an
@@ -563,6 +651,7 @@ sidecar still costs only one.
 3    authorization
 4    source quality
 5    processing
+6    not found                   (geocode/parcel only -- see below)
 130  cancelled
 ```
 
@@ -584,10 +673,28 @@ match wins):
 | `TerrainSimplificationException` | 5 | `processing` |
 | `TerrainProvenanceException` | 4 | `source-quality` |
 | `TerrainExportException` | 5 | `processing` |
-| `CliProcessingException` (the CLI's own — a `run`/`fetch` coordinate-reference mismatch, or an `IOException`/`UnauthorizedAccessException` writing the raster set) | 5 | `processing` |
-| A bare `FormatException` reaching the CLI unguarded | 2 | `usage` |
+| `CliProcessingException` (the CLI's own — a `run`/`fetch` coordinate-reference mismatch, or an `IOException`/`UnauthorizedAccessException` writing the raster set, `parcel`'s `--output` files, or `geocode`'s `--output-file`) | 5 | `processing` |
+| `CensusGeocoderNoCandidatesException` / `GeocodioGeocoderNoCandidatesException` / `EsriGeocoderNoCandidatesException` | 6 | `not-found` |
+| `GeocodioGeocoderAuthorizationException` / `EsriGeocoderAuthorizationException` | 3 | `authorization` |
+| `CensusGeocoderRequestValidationException` / `GeocodioGeocoderRequestValidationException` / `EsriGeocoderRequestValidationException` | 2 | `usage` |
+| Any other `AddressGeocoderException` (quota, server, network, unexpected-response) | 4 | `source-quality` |
+| `CensusCountyLookupNoCountyException` | 6 | `not-found` |
+| Any other `CensusCountyLookupException` (server, network, unexpected-response) | 4 | `source-quality` |
+| `CountyParcelRegistryUnregisteredGeoidException` / `CountyParcelRegistryRequestValidationException` | 2 | `usage` |
+| `LocalParcelFileNotFoundException` / `LocalParcelFileAccessException` / `LocalParcelFileFormatException` | 2 | `usage` |
+| Any other `ParcelBoundarySourceException` (`CountyParcelRegistryServerException`/`NetworkException`/`UnexpectedResponseException`) | 4 | `source-quality` |
+| `parcel`'s own zero-candidate check (not a thrown exception — `IParcelBoundarySource.FindAsync`'s own contract makes an empty result normal) | 6 | `not-found` |
+| A bare `FormatException` reaching the CLI unguarded (including `CountyParcelRegistryFormatException`, which derives from it) | 2 | `usage` |
 | A bare `ArgumentException`/`ArgumentOutOfRangeException`/`ArgumentNullException` (defensive — every option is already validated as a `CliUsageException` before this could fire) | 2 | `usage` |
 | Anything else | 1 | `unexpected` |
+
+**Update, Issue #32 (PH3-5):** exit code `6` (`not-found`) is new — every other new failure category above
+already fit an existing code by direct analogy to the `OpenTopographyException` precedent; only "the input
+was fine, the source responded correctly, and nothing matched" had no existing home, since `4`
+(`source-quality`) means the source's own data was the problem, not an ordinary, expected empty result. This
+mirrors the semantic gap `IAddressGeocoder`'s own design already recognizes by treating "no candidates" as
+its own exception category, distinct from server/network/unexpected-response, and the one
+`IParcelBoundarySource`'s own design recognizes by treating "no matches" as a normal, non-exceptional result.
 
 The `cancelled` message is always the fixed text `the operation was cancelled.`, never an inner exception's
 own `Message` — a caller-attached handler could otherwise embed request text there, which this CLI never
