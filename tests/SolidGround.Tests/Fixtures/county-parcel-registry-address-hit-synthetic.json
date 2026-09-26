@@ -1,0 +1,58 @@
+{
+  "objectIdFieldName": "OBJECTID",
+  "geometryType": "esriGeometryPolygon",
+  "spatialReference": { "wkid": 4326, "latestWkid": 4326 },
+  "features": [
+    {
+      "attributes": {
+        "PARCEL_ID": "SYNTHETIC-PARCEL-001",
+        "SITUS_ADDR": "100 Example Loop",
+        "SUBDIVISION": "SYNTHETIC SUBDIVISION",
+        "LOT_NUMBER": "12",
+        "BLOCK": "3",
+        "PLAT_NUMBER": "PLAT-99",
+        "DEED_BOOK_PAGE": "BK100-PG200",
+        "LEGAL": "LOT 12 BLOCK 3 SYNTHETIC SUBDIVISION SYNTHETIC COUNTY FABRICATED PLAT",
+        "ACRES": 0.4,
+        "ZONING": "R-1"
+      },
+      "geometry": {
+        "rings": [
+          [
+            [-93.604044272, 41.591012685],
+            [-93.604047631, 41.591372958],
+            [-93.603567727, 41.591375478],
+            [-93.603564371, 41.591015206],
+            [-93.604044272, 41.591012685]
+          ]
+        ]
+      }
+    },
+    {
+      "attributes": {
+        "PARCEL_ID": "SYNTHETIC-PARCEL-002",
+        "SITUS_ADDR": "202 Example Loop",
+        "SUBDIVISION": "SYNTHETIC SUBDIVISION",
+        "LOT_NUMBER": "13",
+        "BLOCK": "3",
+        "PLAT_NUMBER": "PLAT-99",
+        "DEED_BOOK_PAGE": "BK100-PG201",
+        "LEGAL": "LOT 13 BLOCK 3 SYNTHETIC SUBDIVISION SYNTHETIC COUNTY FABRICATED PLAT",
+        "ACRES": 0.41,
+        "ZONING": "R-1"
+      },
+      "geometry": {
+        "rings": [
+          [
+            [-93.604044272, 41.591012685],
+            [-93.604047631, 41.591372958],
+            [-93.603567727, 41.591375478],
+            [-93.603564371, 41.591015206],
+            [-93.604044272, 41.591012685]
+          ]
+        ]
+      }
+    }
+  ],
+  "licenseDisclaimerText": "SYNTHETIC-FIXTURE-DISCLAIMER: this data is provided \"as is\" for testing only, with no warranty of any kind, express or implied, and is not an official record of any government entity."
+}

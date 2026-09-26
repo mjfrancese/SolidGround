@@ -359,6 +359,34 @@ public static class ParcelGeometryParser
     ];
 
     /// <summary>
+    /// True when <paramref name="crsValueElement"/> (a <c>crs</c> member's own value, already located by the
+    /// caller) names a recognized WGS 84 CRS and <paramref name="reference"/> is itself geographic. Factored
+    /// out of <see cref="ValidateCrs"/> (SolidGround Issue #29) so a caller outside this class that has already
+    /// isolated a <c>crs</c> value element -- for example a streaming reader that never materializes the whole
+    /// enclosing FeatureCollection/Feature <see cref="JsonElement"/> -- can apply the identical recognition
+    /// rule without duplicating it. Every existing call site's behavior is unchanged: <see cref="ValidateCrs"/>
+    /// still computes exactly this boolean and throws on <see langword="false"/>.
+    /// </summary>
+    internal static bool IsRecognizedWgs84Crs(JsonElement crsValueElement, HorizontalReference reference)
+    {
+        string? name = null;
+        if (crsValueElement.ValueKind == JsonValueKind.Object
+            && crsValueElement.TryGetProperty("type", out JsonElement crsTypeElement)
+            && crsTypeElement.ValueKind == JsonValueKind.String
+            && crsTypeElement.GetString() == "name"
+            && crsValueElement.TryGetProperty("properties", out JsonElement properties)
+            && properties.ValueKind == JsonValueKind.Object
+            && properties.TryGetProperty("name", out JsonElement nameElement)
+            && nameElement.ValueKind == JsonValueKind.String)
+        {
+            name = nameElement.GetString();
+        }
+
+        bool recognized = name is not null && RecognizedWgs84CrsNames.Contains(name.Trim().ToUpperInvariant());
+        return recognized && reference.Kind == HorizontalReferenceKind.Geographic;
+    }
+
+    /// <summary>
     /// Validates an optional <c>crs</c> member on the GeoJSON object at <paramref name="path"/> (the document
     /// root, a Feature, a FeatureCollection, or a Geometry — the older, pre-RFC7946 GeoJSON convention this
     /// parser otherwise tries to support allows a <c>crs</c> member on any of those). GeoJSON's own default
@@ -381,21 +409,7 @@ public static class ParcelGeometryParser
             return;
         }
 
-        string? name = null;
-        if (crsElement.ValueKind == JsonValueKind.Object
-            && crsElement.TryGetProperty("type", out JsonElement crsTypeElement)
-            && crsTypeElement.ValueKind == JsonValueKind.String
-            && crsTypeElement.GetString() == "name"
-            && crsElement.TryGetProperty("properties", out JsonElement properties)
-            && properties.ValueKind == JsonValueKind.Object
-            && properties.TryGetProperty("name", out JsonElement nameElement)
-            && nameElement.ValueKind == JsonValueKind.String)
-        {
-            name = nameElement.GetString();
-        }
-
-        bool recognized = name is not null && RecognizedWgs84CrsNames.Contains(name.Trim().ToUpperInvariant());
-        if (!recognized || reference.Kind != HorizontalReferenceKind.Geographic)
+        if (!IsRecognizedWgs84Crs(crsElement, reference))
         {
             throw new ParcelGeometryException(
                 $"The GeoJSON value at {path} declares a 'crs' member SolidGround does not recognize as WGS 84 " +
