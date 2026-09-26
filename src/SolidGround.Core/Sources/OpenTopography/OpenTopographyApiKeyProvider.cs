@@ -1,3 +1,5 @@
+using SolidGround.Core.Http;
+
 namespace SolidGround.Core.Sources.OpenTopography;
 
 /// <summary>Supplies the OpenTopography API key without prescribing where it is stored.</summary>
@@ -12,10 +14,16 @@ public interface IOpenTopographyApiKeyProvider
 /// The value is trimmed; a null, empty, or all-whitespace value is treated as "no key configured".
 /// </summary>
 /// <remarks>
-/// .NET user secrets is a host/CLI concern: it needs a package reference and a configured
-/// <c>UserSecretsId</c>, neither of which belongs in the Revit-free Core assembly. Reading the key from
-/// user secrets is deferred to the CLI issue, which can compose its own
-/// <see cref="IOpenTopographyApiKeyProvider"/> over the .NET configuration system.
+/// Delegates to <see cref="ApiKeyResolver.TryResolve"/> with no <see cref="UserSecretsLocation"/>, so
+/// resolution stops after the environment-variable check -- this type still never reads a user-secrets
+/// file. A host that also wants a user-secrets fallback (for example, the CLI) composes its own
+/// <see cref="IOpenTopographyApiKeyProvider"/> by calling <see cref="ApiKeyResolver.TryResolve"/> directly
+/// with a <see cref="UserSecretsLocation"/> supplied, the way <c>SolidGround.Cli.Secrets.CliOpenTopographyApiKeyProvider</c>
+/// does. User-secrets file-location and parsing now live in <see cref="ApiKeyResolver"/>/<c>UserSecretsFileLocator</c>
+/// themselves (SolidGround Issue #27, PH3-0), not "deferred to the CLI" as an earlier version of this comment
+/// stated -- that earlier claim assumed user-secrets support would need a package reference, which was never
+/// true: the CLI's own pre-Issue-#27 implementation used hand-rolled <c>System.Text.Json</c> parsing with
+/// zero package reference, so the logic was portable into the Revit-free Core assembly without adding one.
 /// </remarks>
 public sealed class EnvironmentOpenTopographyApiKeyProvider : IOpenTopographyApiKeyProvider
 {
@@ -23,14 +31,8 @@ public sealed class EnvironmentOpenTopographyApiKeyProvider : IOpenTopographyApi
 
     public OpenTopographyApiKey? GetApiKey()
     {
-        string? value = Environment.GetEnvironmentVariable(VariableName);
-        if (value is null)
-        {
-            return null;
-        }
-
-        string trimmed = value.Trim();
-        return trimmed.Length == 0 ? null : new OpenTopographyApiKey(trimmed);
+        string? value = ApiKeyResolver.TryResolve(VariableName, Environment.GetEnvironmentVariable);
+        return value is null ? null : new OpenTopographyApiKey(value);
     }
 }
 

@@ -336,8 +336,9 @@ resolving a reference with a datum from one source and a unit silently defaulted
 ## Secrets and key resolution
 
 There is no `--api-key` option anywhere in the CLI. `fetch` and `run` resolve the OpenTopography key
-themselves (`Secrets/CliOpenTopographyApiKeyProvider.cs`, `Secrets/UserSecretsFileLocator.cs`), before
-constructing anything that could make an HTTP call, in a fixed two-source order:
+themselves (`Secrets/CliOpenTopographyApiKeyProvider.cs`, a thin adapter since Issue #27 (PH3-0) over the
+shared `SolidGround.Core.Http.ApiKeyResolver`), before constructing anything that could make an HTTP call, in
+a fixed two-source order:
 
 1. `OPENTOPOGRAPHY_API_KEY` in the process environment, trimmed; a null, empty, or all-whitespace value
    after trimming counts as no key, the same rule Core's own environment-based provider already applies for
@@ -354,10 +355,15 @@ constructing anything that could make an HTTP call, in a fixed two-source order:
    property, or a `null` property value all count as no key; a non-string property value or unparsable JSON
    is a usage error naming the file path, never its content.
 
-Reading the key from user secrets was always deferred to this CLI on purpose: user secrets need a
-`UserSecretsId` and a configuration surface that has no place in the Revit-free Core assembly, so
-`SolidGround.Cli.csproj` declares `<UserSecretsId>solidground-cli</UserSecretsId>` and composes its own
-provider over the two sources above rather than Core exposing one.
+**Update, Issue #27 (PH3-0):** the file-location and JSON-parsing algorithm above now lives in
+`SolidGround.Core.Http.ApiKeyResolver`/`UserSecretsFileLocator` (the CLI's own
+`Secrets/UserSecretsFileLocator.cs` was deleted; it no longer exists in the CLI), generalized by
+environment-variable name, user-secrets id, and secrets key name instead of hardcoded to
+`OPENTOPOGRAPHY_API_KEY`/`solidground-cli`. `SolidGround.Cli.csproj` still declares
+`<UserSecretsId>solidground-cli</UserSecretsId>`, which remains solely for the `dotnet user-secrets` SDK
+tool's own bookkeeping (which folder it writes into), independent of where the runtime resolution algorithm
+lives. See `shared-http-redaction-and-key-resolution.md` for the shared resolver's full design and the
+per-host resolution-order equivalence table.
 
 A missing key on `fetch` or `run` is an authorization failure returned before any `HttpClient` is even
 constructed, naming both sources and the exact command that configures one:
