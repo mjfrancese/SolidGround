@@ -52,12 +52,24 @@ public static class LocalBoundaryValidator
     /// <see cref="DefaultContainmentToleranceMeters"/> -- genuinely meters, since <see langword="null"/> means
     /// "use the untransformed default" -- when <see langword="null"/>.
     /// </param>
+    /// <param name="minimumEdgeLength">
+    /// The shortest edge length <paramref name="boundary"/>'s eventual consumer can actually draw, in the same
+    /// unit as <paramref name="boundary"/>'s own coordinates. <see langword="null"/> (the default) skips this
+    /// check entirely -- unlike <paramref name="containmentToleranceMeters"/>, there is no Core-only default
+    /// for a value that is only meaningful once a specific downstream consumer's own minimum is known. When
+    /// supplied, every ring gains one aggregated problem line (edge count and the shortest length found) for
+    /// any cyclically consecutive edge whose length is greater than zero but less than this value -- a defense-
+    /// in-depth backstop for whatever <see cref="LocalBoundaryCleaner.Clean"/> did not already repair; see
+    /// <c>docs/architecture/revit-property-line-and-shared-coordinates.md</c>'s "Geometry cleanup contract"
+    /// section.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="boundary"/> or <paramref name="retainedSamples"/> is <see langword="null"/>.</exception>
     public static LocalBoundaryValidationResult Validate(
         LocalBoundary boundary,
         IReadOnlyList<LocalTerrainSample> retainedSamples,
         int pointBudget,
-        double? containmentToleranceMeters = null)
+        double? containmentToleranceMeters = null,
+        double? minimumEdgeLength = null)
     {
         ArgumentNullException.ThrowIfNull(boundary);
         ArgumentNullException.ThrowIfNull(retainedSamples);
@@ -65,7 +77,7 @@ public static class LocalBoundaryValidator
         double tolerance = containmentToleranceMeters ?? DefaultContainmentToleranceMeters;
         List<string> problems = [];
 
-        ValidateBoundaryShape(boundary, problems);
+        ValidateBoundaryShape(boundary, minimumEdgeLength, problems);
 
         if (retainedSamples.Count > pointBudget)
         {
@@ -91,7 +103,7 @@ public static class LocalBoundaryValidator
         return new LocalBoundaryValidationResult(problems);
     }
 
-    private static void ValidateBoundaryShape(LocalBoundary boundary, List<string> problems)
+    private static void ValidateBoundaryShape(LocalBoundary boundary, double? minimumEdgeLength, List<string> problems)
     {
         if (boundary.Polygons.Count == 0)
         {
@@ -105,10 +117,10 @@ public static class LocalBoundaryValidator
             LocalBoundaryPolygon polygon = boundary.Polygons[polygonIndex];
             string polygonLabel = $"boundary polygon {polygonIndex.ToString(CultureInfo.InvariantCulture)}";
 
-            ValidateRingShape(polygon.Shell, $"{polygonLabel} shell", problems);
+            ValidateRingShape(polygon.Shell, $"{polygonLabel} shell", minimumEdgeLength, problems);
             for (int holeIndex = 0; holeIndex < polygon.Holes.Count; holeIndex++)
             {
-                ValidateRingShape(polygon.Holes[holeIndex], $"{polygonLabel} hole {holeIndex.ToString(CultureInfo.InvariantCulture)}", problems);
+                ValidateRingShape(polygon.Holes[holeIndex], $"{polygonLabel} hole {holeIndex.ToString(CultureInfo.InvariantCulture)}", minimumEdgeLength, problems);
             }
 
             Polygon? built = LocalBoundaryFactory.TryBuildNtsPolygon(factory, polygon);
@@ -139,9 +151,15 @@ public static class LocalBoundaryValidator
     /// Rejects fewer than three distinct vertices, and any pair of cyclically consecutive vertices (including
     /// the wrap-around edge from the last vertex back to the first, since <paramref name="ring"/> never stores
     /// that closing vertex explicitly) that are equal -- a zero-length edge wherever it occurs, including a
-    /// redundant explicit closing vertex a caller constructed the ring with by mistake.
+    /// redundant explicit closing vertex a caller constructed the ring with by mistake. When
+    /// <paramref name="minimumEdgeLength"/> is not <see langword="null"/>, also aggregates every cyclically
+    /// consecutive edge whose length is greater than zero but less than it into one problem line per ring (a
+    /// count and the shortest length found) -- a distinct, separately actionable finding from the zero-length
+    /// check above; see <see cref="Validate"/>'s own parameter doc and
+    /// <c>docs/architecture/revit-property-line-and-shared-coordinates.md</c>'s "Geometry cleanup contract"
+    /// section.
     /// </summary>
-    private static void ValidateRingShape(LocalBoundaryRing ring, string ringLabel, List<string> problems)
+    private static void ValidateRingShape(LocalBoundaryRing ring, string ringLabel, double? minimumEdgeLength, List<string> problems)
     {
         IReadOnlyList<LocalCoordinate2D> vertices = ring.Vertices;
         int distinctCount = new HashSet<LocalCoordinate2D>(vertices).Count;
@@ -152,6 +170,8 @@ public static class LocalBoundaryValidator
         }
 
         int count = vertices.Count;
+        int shortEdgeCount = 0;
+        double shortestEdgeLength = 0d; // Only meaningful once shortEdgeCount > 0, mirroring ValidateRetainedSamplesWithinTolerance's own worstOffset accumulator below.
         for (int i = 0; i < count; i++)
         {
             LocalCoordinate2D current = vertices[i];
@@ -161,8 +181,38 @@ public static class LocalBoundaryValidator
                 problems.Add(
                     $"The {ringLabel} has a zero-length edge at vertex {i.ToString(CultureInfo.InvariantCulture)} " +
                     "(two cyclically consecutive vertices, including the closing edge, are equal).");
+                continue;
+            }
+
+            if (minimumEdgeLength is { } threshold)
+            {
+                // current and next are already known distinct here (the zero-length case above continued
+                // instead), so this length is always greater than zero -- exactly the "> 0 but < minimumEdgeLength"
+                // band the design note's own "Geometry cleanup contract" section separates from the zero-length
+                // check above.
+                double length = Distance(current, next);
+                if (length < threshold)
+                {
+                    shortEdgeCount++;
+                    shortestEdgeLength = shortEdgeCount == 1 ? length : Math.Min(shortestEdgeLength, length);
+                }
             }
         }
+
+        if (shortEdgeCount > 0)
+        {
+            problems.Add(
+                $"The {ringLabel} has {shortEdgeCount.ToString(CultureInfo.InvariantCulture)} edge(s) shorter " +
+                $"than the minimum edge length of {minimumEdgeLength.GetValueOrDefault().ToString("R", CultureInfo.InvariantCulture)}; " +
+                $"the shortest is {shortestEdgeLength.ToString("R", CultureInfo.InvariantCulture)}.");
+        }
+    }
+
+    private static double Distance(LocalCoordinate2D a, LocalCoordinate2D b)
+    {
+        double dx = b.X - a.X;
+        double dy = b.Y - a.Y;
+        return Math.Sqrt((dx * dx) + (dy * dy));
     }
 
     private static void ValidateNoDuplicateHorizontalPositions(IReadOnlyList<LocalTerrainSample> retainedSamples, List<string> problems)
