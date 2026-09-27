@@ -65,6 +65,21 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     /// wrongly keep Next disabled forever after a valid direct-point confirmation. Null before any candidate has
     /// ever been confirmed.
     /// </summary>
+    /// <remarks>
+    /// Live-session finding (docs/architecture/revit-interactive-dialog.md "Stage E live-session findings and
+    /// Stage F fixes", defect A): as a bare field, this needed some *other* notifying property's setter to
+    /// re-evaluate <c>NextCommand</c> for it, and both of <see cref="Geocode"/>'s success branches happened to
+    /// assign <see cref="SelectedGeocodeCandidate"/> (which does re-evaluate <c>NextCommand</c> via its own
+    /// <c>NotifyCanExecuteChangedFor</c>) *before* assigning this field -- so <c>NextCommand</c> was
+    /// re-evaluated one statement too early, while this field still held its previous (stale) value, and
+    /// nothing re-evaluated it again afterward. Next stayed disabled even once every real precondition was
+    /// satisfied. Now an <c>[ObservableProperty]</c> in its own right, with its own
+    /// <c>NotifyCanExecuteChangedFor(nameof(NextCommand))</c>: whichever success branch assigns it (in whatever
+    /// order relative to <see cref="SelectedGeocodeCandidate"/>) re-evaluates <c>NextCommand</c> itself, at the
+    /// point both pieces of state are already final -- structurally, not by depending on statement order.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
     private string? _confirmedAddressText;
 
     /// <summary>
@@ -121,7 +136,28 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private bool _parcelLookupAttempted;
 
     /// <summary>See <see cref="_parcelLookupAttempted"/>. Manually notified from <see cref="FindParcel"/> (not itself an <c>[ObservableProperty]</c>, since <see cref="_parcelLookupAttempted"/> is plain private state, not bound directly).</summary>
-    internal bool ShowNoParcelCandidatesMessage => _parcelLookupAttempted && ParcelCandidates.Count == 0;
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> (live-session finding, fixed;
+    /// docs/architecture/revit-interactive-dialog.md "Stage E live-session findings and Stage F fixes", defect
+    /// C): <see cref="SolidGroundDialog"/> reaches this (and every other hand-written computed property this
+    /// same fix touches) only through a string-Path <c>System.Windows.Data.Binding</c>, which WPF resolves
+    /// against this (<see langword="internal"/>) class's runtime instance via reflection -- and that
+    /// resolution only ever discovers <see langword="public"/> members, never <see langword="internal"/> ones,
+    /// even though the *enclosing type* being <see langword="internal"/> is irrelevant to it. An
+    /// <see langword="internal"/> property bound this way fails silently (a "BindingExpression path error:
+    /// '...' property not found" trace line, never surfaced to the operator) and the bound dependency property
+    /// is left at its own default -- <see cref="System.Windows.Visibility.Visible"/> for a
+    /// <c>Visibility</c> binding (this property's own case: the zero-candidates message stayed visible
+    /// unconditionally), or an empty string for a <c>Text</c> binding (see
+    /// <see cref="PointBudgetWarningText"/>/<see cref="PointBudgetRangeErrorText"/>'s own remarks). A
+    /// standalone, non-committed WPF reproduction outside this repository confirmed both failure modes and
+    /// confirmed an otherwise-identical <see langword="public"/> property updates correctly; this test project
+    /// cannot construct a real <see cref="SolidGroundDialogViewModel"/>/WPF <c>Binding</c> itself (see "Tests"),
+    /// so <c>SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal</c> instead
+    /// asserts, from source text, that every property named in a <see cref="SolidGroundDialog"/>
+    /// <c>new Binding(nameof(...))</c> call is declared <see langword="public"/> here.
+    /// </remarks>
+    public bool ShowNoParcelCandidatesMessage => _parcelLookupAttempted && ParcelCandidates.Count == 0;
 
     internal SolidGroundDialogViewModel(SolidGroundDialogInputs inputs)
     {
@@ -158,7 +194,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private DialogAoiSource _aoiSource = DialogAoiSource.FindParcel;
 
     // NotifyCanExecuteChangedFor also names NextCommand (review finding, blocker's own recommended companion
-    // fix): CanGoNext's AddressEntry case now also compares AddressText against _confirmedAddressText, so Next's
+    // fix): CanGoNext's AddressEntry case now also compares AddressText against ConfirmedAddressText, so Next's
     // enabled state must be re-evaluated as the operator types, not only at the next unrelated command
     // re-evaluation.
     [ObservableProperty]
@@ -236,10 +272,24 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     /// guard applies (<see cref="RevitIniToposolidThresholds.ExceedsNativeThreshold"/>), so ignoring this
     /// warning and proceeding anyway always leads to the identical predicted Preflight rejection.
     /// </summary>
-    internal bool ShowPointBudgetWarning => RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds);
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> (live-session finding, fixed; defect D -- both
+    /// this step 5 binding and its step 10 preflight-summary sibling never showed the warning at all, since the
+    /// bound <c>Visibility</c> silently stuck at its own default: see <see cref="ShowNoParcelCandidatesMessage"/>'s
+    /// remarks for the full mechanism).
+    /// </remarks>
+    public bool ShowPointBudgetWarning => RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds);
 
     /// <summary>The exact sentence Preflight's own rejection uses (<see cref="RevitIniToposolidThresholds.DescribeExceedance"/>), or null when <see cref="ShowPointBudgetWarning"/> is false.</summary>
-    internal string? PointBudgetWarningText => _inputs.RevitIniThresholds.NativeToposolidMaxPointThreshold is { } native && ShowPointBudgetWarning
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> (live-session finding, fixed; defect D): unlike
+    /// a <c>Visibility</c> binding's silent fallback to <see cref="System.Windows.Visibility.Visible"/>, this
+    /// property's own bound <c>TextBlock.Text</c> fell back to an empty string while <see langword="internal"/>
+    /// -- indistinguishable, to an operator, from "no warning applies" -- which is exactly why the live session
+    /// described this as the warning text never appearing at all, not as it appearing when it should not (see
+    /// <see cref="ShowNoParcelCandidatesMessage"/>'s remarks for the full mechanism).
+    /// </remarks>
+    public string? PointBudgetWarningText => _inputs.RevitIniThresholds.NativeToposolidMaxPointThreshold is { } native && ShowPointBudgetWarning
         ? RevitIniToposolidThresholds.DescribeExceedance(PointBudget, native, _inputs.RevitIniPath)
         : null;
 
@@ -258,7 +308,15 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     /// immediately instead). Deliberately reuses <see cref="SimplificationSettings"/>'s own literal bound rather
     /// than a second, dialog-local constant, so the two can never drift apart.
     /// </summary>
-    internal string? PointBudgetRangeErrorText =>
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> (live-session finding, fixed; defect D, the
+    /// buffer-panel-like always-on error: the same empty-string-fallback failure
+    /// <see cref="PointBudgetWarningText"/>'s remarks describe. <see cref="BufferErrorText"/>'s own,
+    /// visually-identical inline error was checked and confirmed unaffected: it is an
+    /// <c>[ObservableProperty]</c>-backed, generator-emitted <see langword="public"/> property, never a
+    /// hand-written <see langword="internal"/> one, so it was never exposed to this failure mode.)
+    /// </remarks>
+    public string? PointBudgetRangeErrorText =>
         PointBudget is >= SimplificationSettings.MinPointBudget and <= SimplificationSettings.MaxPointBudget
             ? null
             : $"pointBudget must be between {SimplificationSettings.MinPointBudget.ToString(CultureInfo.InvariantCulture)} " +
@@ -285,14 +343,23 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     /// directly -- <see cref="AddressParcelProvenanceFactory.Create"/> never attaches address data in that
     /// case).
     /// </summary>
-    internal bool ShowFindParcelGeocodedIntro => AoiSource == DialogAoiSource.FindParcel && AddressWasGeocoded;
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> (live-session finding, fixed; defect B: with
+    /// both this and <see cref="ShowFindParcelDirectPointIntro"/> stuck <see langword="internal"/>, *both*
+    /// bound <c>Visibility</c> values silently stuck at <see cref="System.Windows.Visibility.Visible"/> -- see
+    /// <see cref="ShowNoParcelCandidatesMessage"/>'s remarks for the full mechanism -- so the step 9 panel
+    /// showed both the geocoded-address and the direct-point-entry sentence together, regardless of which path
+    /// was actually taken, alongside the always-visible settings-file sentence).
+    /// </remarks>
+    public bool ShowFindParcelGeocodedIntro => AoiSource == DialogAoiSource.FindParcel && AddressWasGeocoded;
 
     /// <summary>
     /// True exactly when the provenance-preview panel should show the direct-point-entry wording: an
     /// interactive parcel lookup whose confirmed point was entered directly as coordinates and never geocoded.
     /// See <see cref="ShowFindParcelGeocodedIntro"/>.
     /// </summary>
-    internal bool ShowFindParcelDirectPointIntro => AoiSource == DialogAoiSource.FindParcel && !AddressWasGeocoded;
+    /// <remarks><see langword="public"/>, not <see langword="internal"/> (live-session finding, fixed; defect B) -- see <see cref="ShowFindParcelGeocodedIntro"/>'s own remarks.</remarks>
+    public bool ShowFindParcelDirectPointIntro => AoiSource == DialogAoiSource.FindParcel && !AddressWasGeocoded;
 
     /// <summary>
     /// Manually raises property-change notifications for <see cref="AddressWasGeocoded"/> and its two
@@ -356,7 +423,11 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             SelectedGeocodeCandidate = syntheticCandidate;
             _addressWasGeocoded = false;
             _geocodedAddressText = null;
-            _confirmedAddressText = addressText;
+            // The property setter (not the bare _confirmedAddressText field), so its own
+            // NotifyCanExecuteChangedFor(nameof(NextCommand)) re-evaluates Next here -- see this property's own
+            // remarks: SelectedGeocodeCandidate's assignment above already re-evaluated NextCommand one
+            // statement too early, while this value still held its previous, stale content.
+            ConfirmedAddressText = addressText;
             NotifyAddressWasGeocodedChanged();
             return;
         }
@@ -392,7 +463,9 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             SelectedGeocodeCandidate = GeocodeCandidates[0];
             _addressWasGeocoded = true;
             _geocodedAddressText = addressText;
-            _confirmedAddressText = addressText;
+            // The property setter, not the bare field -- see the identical comment on this call's sibling in
+            // the direct-point-entry branch above.
+            ConfirmedAddressText = addressText;
             NotifyAddressWasGeocodedChanged();
         }
         catch (AddressGeocoderException ex)
@@ -509,12 +582,14 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private bool CanGoNext() => CurrentStep switch
     {
         SolidGroundDialogStep.AoiSourceChoice => true,
-        // Also requires AddressText to still match _confirmedAddressText (review finding, blocker): without
+        // Also requires AddressText to still match ConfirmedAddressText (review finding, blocker): without
         // this, editing the address after confirming a candidate -- without a fresh successful Geocode --
         // left the stale SelectedGeocodeCandidate/SelectedParcelCandidate pairing reachable all the way to
         // Create, silently building the AOI and AddressParcelProvenance for a different, earlier-confirmed
-        // location than what is currently displayed in the address field.
-        SolidGroundDialogStep.AddressEntry => SelectedGeocodeCandidate is not null && AddressText.Trim() == _confirmedAddressText,
+        // location than what is currently displayed in the address field. Reads the generated property, not
+        // the bare _confirmedAddressText field, now that field is [ObservableProperty]-backed (CommunityToolkit.Mvvm's
+        // own analyzer, MVVMTK0034, disallows referencing it directly once it is).
+        SolidGroundDialogStep.AddressEntry => SelectedGeocodeCandidate is not null && AddressText.Trim() == ConfirmedAddressText,
         SolidGroundDialogStep.GeocodeCandidates => SelectedGeocodeCandidate is not null,
         SolidGroundDialogStep.ParcelCandidates => SelectedParcelCandidate is not null,
         SolidGroundDialogStep.Buffer => BufferErrorText is null,

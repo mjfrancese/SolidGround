@@ -217,14 +217,49 @@ public sealed class RevitInteractiveDialogTests
         // AddressEntry case must also require the live AddressText to still match the text that produced the
         // currently confirmed candidate, and both of Geocode's success branches (a real geocode, and a direct
         // "latitude, longitude" entry) must keep that comparison value current.
+        //
+        // Corrected (not weakened) for the Stage E live-session finding, Stage F fix (docs/architecture/
+        // revit-interactive-dialog.md "Stage E live-session findings and Stage F fixes", defect A): both
+        // Geocode's success branches, and CanGoNext's own read here, now go through the *property*
+        // (ConfirmedAddressText), not the bare field directly -- CommunityToolkit.Mvvm's own analyzer
+        // (MVVMTK0034) disallows referencing an [ObservableProperty]-annotated field directly once it is one,
+        // and the property's own NotifyCanExecuteChangedFor(nameof(NextCommand)) is what re-evaluates Next
+        // regardless of statement order relative to SelectedGeocodeCandidate's assignment -- see the dedicated
+        // structural check immediately below this test for the attribute-level guarantee that makes that true.
         string concatenatedSource = ReadAllDialogSourceConcatenated();
 
         string canGoNextBody = ExtractMethodBody(concatenatedSource, "private bool CanGoNext() => CurrentStep switch");
-        Assert.Contains("_confirmedAddressText", canGoNextBody, StringComparison.Ordinal);
+        Assert.Contains("ConfirmedAddressText", canGoNextBody, StringComparison.Ordinal);
 
         string geocodeBody = ExtractMethodBody(concatenatedSource, "private void Geocode()");
-        int confirmedAddressTextAssignmentCount = Regex.Count(geocodeBody, Regex.Escape("_confirmedAddressText = addressText;"));
+        int confirmedAddressTextAssignmentCount = Regex.Count(geocodeBody, Regex.Escape("ConfirmedAddressText = addressText;"));
         Assert.Equal(2, confirmedAddressTextAssignmentCount);
+    }
+
+    [Fact]
+    public void SolidGroundDialogViewModelConfirmedAddressTextIsObservableAndReEvaluatesNextCommandItself()
+    {
+        // Defect A (SolidGround Issue #31 live-session evidence, docs/architecture/revit-interactive-dialog.md
+        // "Stage E live-session findings and Stage F fixes"): Next stayed disabled after a successful Find, for
+        // both an address and a "latitude, longitude" pair. Root cause: _confirmedAddressText was a bare,
+        // non-notifying field; both of Geocode's success branches assigned SelectedGeocodeCandidate (which
+        // re-evaluates NextCommand via its own NotifyCanExecuteChangedFor) *before* assigning
+        // _confirmedAddressText, so CanGoNext's AddressEntry case (`AddressText.Trim() == _confirmedAddressText`)
+        // was re-checked one statement too early, against the *previous* confirmed value, and nothing
+        // re-evaluated NextCommand a second time afterward. The fix must be structural, not a mere reordering of
+        // the two statements (a future third dependency added carelessly in the wrong order would silently
+        // reintroduce the same bug): _confirmedAddressText must itself be an [ObservableProperty] carrying its
+        // own [NotifyCanExecuteChangedFor(nameof(NextCommand))], so whichever success branch assigns it (in
+        // whatever order relative to SelectedGeocodeCandidate) re-evaluates NextCommand itself, at the point
+        // both pieces of state are already final.
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        int fieldIndex = RequireIndex(viewModelSource, "private string? _confirmedAddressText;");
+        const int MaxPrecedingDistance = 400; // comfortably covers both attribute lines immediately above it.
+        string precedingWindow = viewModelSource[Math.Max(0, fieldIndex - MaxPrecedingDistance)..fieldIndex];
+
+        Assert.Contains("[ObservableProperty]", precedingWindow, StringComparison.Ordinal);
+        Assert.Contains("[NotifyCanExecuteChangedFor(nameof(NextCommand))]", precedingWindow, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -252,9 +287,14 @@ public sealed class RevitInteractiveDialogTests
         // constants -- the identical bound TerrainRequestSettings.Validate() already enforces for every
         // settings-file-sourced value -- rather than a second, dialog-local literal that could silently drift
         // out of sync with it.
+        //
+        // "public", not "internal" (corrected, not weakened, for the Stage E live-session finding, Stage F fix:
+        // docs/architecture/revit-interactive-dialog.md "Stage E live-session findings and Stage F fixes",
+        // defect D -- see SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal
+        // below for the general check this property's own fix is one instance of).
         string concatenatedSource = ReadAllDialogSourceConcatenated();
 
-        int propertyIndex = RequireIndex(concatenatedSource, "internal string? PointBudgetRangeErrorText =>");
+        int propertyIndex = RequireIndex(concatenatedSource, "public string? PointBudgetRangeErrorText =>");
         const int MaxFollowingDistance = 200; // covers the range condition itself (measured: 154 chars).
         string window = concatenatedSource[propertyIndex..Math.Min(concatenatedSource.Length, propertyIndex + MaxFollowingDistance)];
 
@@ -366,15 +406,121 @@ public sealed class RevitInteractiveDialogTests
         // is false). The panel must show two mutually exclusive, accurate sentences instead -- one bound to
         // ShowFindParcelGeocodedIntro, one to ShowFindParcelDirectPointIntro -- and the old blanket claim must
         // be gone.
+        //
+        // "public", not "internal" (corrected, not weakened, for the Stage E live-session finding, Stage F fix:
+        // docs/architecture/revit-interactive-dialog.md "Stage E live-session findings and Stage F fixes",
+        // defect B -- both sentences showed at once, regardless of path, because a WPF Binding cannot resolve
+        // an internal property; see SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal
+        // below for the general check these two properties' own fix is an instance of).
         string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
         string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
 
-        Assert.Contains("internal bool ShowFindParcelGeocodedIntro", viewModelSource, StringComparison.Ordinal);
-        Assert.Contains("internal bool ShowFindParcelDirectPointIntro", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("public bool ShowFindParcelGeocodedIntro", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("public bool ShowFindParcelDirectPointIntro", viewModelSource, StringComparison.Ordinal);
         Assert.Contains("ShowFindParcelGeocodedIntro", dialogSource, StringComparison.Ordinal);
         Assert.Contains("ShowFindParcelDirectPointIntro", dialogSource, StringComparison.Ordinal);
         Assert.Contains("No address will be attached to this run's exported provenance record.", dialogSource, StringComparison.Ordinal);
         Assert.DoesNotContain("came from an interactive address/parcel lookup", dialogSource, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Stage E live-session findings, Stage F fixes (docs/architecture/revit-interactive-dialog.md "Stage E
+    // live-session findings and Stage F fixes"): a live Revit 2027 session exercising the Stage D wiring found
+    // defects B (step 9 provenance preview showed every conditional sentence at once), C (step 3's
+    // zero-candidates message showed even when a candidate was listed), and D (step 5/10's point-budget warning
+    // and range-error text never appeared, despite the range rule itself correctly disabling Next). All three
+    // share one root cause: SolidGroundDialogViewModel is itself internal, and each of these was a hand-written
+    // computed property *also* declared internal, referenced from SolidGroundDialog.cs only through a
+    // string-Path `new Binding(nameof(...))`. WPF resolves that kind of binding source against a plain CLR
+    // object via reflection, which only ever discovers public members -- an internal property bound this way
+    // fails silently (a "BindingExpression path error: '...' property not found" trace line the operator never
+    // sees) and the bound dependency property is left at its own default: Visibility.Visible for a Visibility
+    // binding (defects B and C: unconditionally shown), or an empty string for a Text binding (defect D:
+    // "never appears" -- indistinguishable from no warning applying at all). This was confirmed empirically with
+    // a standalone, non-committed WPF reproduction outside this repository (this test project cannot construct
+    // a real SolidGroundDialogViewModel/WPF Binding itself -- see this file's own header): an otherwise-identical
+    // pair of internal/public bool properties, and internal/public string? properties, bound the same way,
+    // showed exactly this split -- the public ones tracked their real value; the internal ones stuck at
+    // Visible/empty regardless of it. The buffer panel's own step 4 error text (BufferErrorText) was checked and
+    // confirmed unaffected, since it is an [ObservableProperty]-backed, generator-emitted public property, never
+    // a hand-written internal one.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SolidGroundDialogViewModelShowNoParcelCandidatesMessageIsPublicNotInternal()
+    {
+        // Defect C: the step 3 "no parcel boundary was found" message showed even when a parcel candidate was
+        // listed (and alongside an inline registry error) -- ShowNoParcelCandidatesMessage's own Visibility
+        // binding could never resolve while this property was internal, so it stuck at Visibility.Visible
+        // regardless of _parcelLookupAttempted/ParcelCandidates.Count's real, correctly-computed values.
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        Assert.Contains("public bool ShowNoParcelCandidatesMessage", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal bool ShowNoParcelCandidatesMessage", viewModelSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogViewModelPointBudgetWarningPropertiesArePublicNotInternal()
+    {
+        // Defect D: the step 5 (and step 10 preflight-summary) point-budget warning never appeared, even well
+        // above the machine's own configured NativeToposolidMaxPointThreshold. ShowPointBudgetWarning gates the
+        // warning TextBlock's Visibility; PointBudgetWarningText supplies its Text -- both bindings could never
+        // resolve while these were internal, so Text stuck at an empty string (indistinguishable from "no
+        // warning applies") regardless of Visibility. PointBudgetRangeErrorText (the sibling always-on range
+        // error, also part of defect D) is checked by
+        // SolidGroundDialogViewModelPointBudgetRangeErrorTextReusesSimplificationSettingsBoundsNotADuplicatedLiteral
+        // above, which this same live-session finding also corrected.
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        Assert.Contains("public bool ShowPointBudgetWarning", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal bool ShowPointBudgetWarning", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("public string? PointBudgetWarningText", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal string? PointBudgetWarningText", viewModelSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal()
+    {
+        // The general, forward-looking form of the three checks immediately above: not a fixed list of names,
+        // so a *future* hand-written computed property that gets bound the same way, without also being made
+        // public, fails this test too. Reads every `nameof(SolidGroundDialogViewModel.X)` argument to a
+        // `new Binding(...)` call in SolidGroundDialog.cs -- both the plain literal form
+        // (`new Binding(nameof(SolidGroundDialogViewModel.X))`) and the composite/interpolated-path form used
+        // for every property-path binding in this file
+        // (`new Binding($"{nameof(SolidGroundDialogViewModel.X)}.{nameof(Other.Y)}")`), since WPF's reflection
+        // resolves the same first path segment, and so the same public-only visibility rule, either way -- then
+        // reads every hand-written `internal`/`public <Type> X => ...`-shaped property declaration in
+        // SolidGroundDialogViewModel.cs (an X backed instead by an [ObservableProperty] field or a
+        // [RelayCommand] method never appears in that second scan at all -- CommunityToolkit.Mvvm's source
+        // generator only ever emits public members for those, so this only ever inspects the hand-written
+        // computed properties actually at risk), and asserts none of the bound names is declared internal.
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        HashSet<string> boundNames = [.. Regex.Matches(dialogSource, @"new Binding\([^)\n]*nameof\(SolidGroundDialogViewModel\.(\w+)\)")
+            .Select(match => match.Groups[1].Value)];
+        Assert.NotEmpty(boundNames);
+
+        Dictionary<string, string> declaredAccessibilityByName = [];
+        foreach (Match match in Regex.Matches(viewModelSource, @"(?m)^[ \t]*(internal|public)\s+\S+\s+(\w+)\s*=>"))
+        {
+            declaredAccessibilityByName[match.Groups[2].Value] = match.Groups[1].Value;
+        }
+
+        // Guards the guard: if this ever drops to zero, the regex above stopped matching this file's own
+        // property-declaration shape (for example a reformat to block-bodied `{ get => ...; }` properties)
+        // silently rather than the check just having nothing to flag.
+        Assert.NotEmpty(declaredAccessibilityByName);
+
+        List<string> violations = [.. boundNames
+            .Where(name => declaredAccessibilityByName.TryGetValue(name, out string? accessibility) && accessibility == "internal")
+            .OrderBy(name => name, StringComparer.Ordinal)];
+
+        Assert.True(
+            violations.Count == 0,
+            "Expected every SolidGroundDialogViewModel property referenced by a WPF Binding in SolidGroundDialog.cs " +
+            "to be declared 'public', not 'internal' (WPF's Binding resolves a plain CLR object's Path by " +
+            $"reflection, which only ever discovers public members): {string.Join(", ", violations)}.");
     }
 
     // ------------------------------------------------------------------------------------------------

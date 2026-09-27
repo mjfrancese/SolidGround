@@ -8,9 +8,10 @@ before today's Preflight/transaction. No new command, ribbon button, or panel (P
 `SolidGround.Core` and `SolidGround.Cli` are otherwise untouched except for the small, Revit-free Core
 additions this note names below.
 
-**Status: Stages A, B, C, and D landed; the dialog is wired into `CreateToposolidCommand.Execute`.** This note
-records the whole accepted design so later stages' code comments can cite its section titles verbatim; four of
-its five stages have been implemented so far:
+**Status: Stages A, B, C, and D landed; the dialog is wired into `CreateToposolidCommand.Execute`. Stage E's live
+Revit 2027 session then ran and found four defects, all fixed in Stage F.** This note records the whole accepted
+design so later stages' code comments can cite its section titles verbatim; every stage below, including Stage
+F's fix pass, has now been carried out:
 
 - **Stage A (Core only):** `RevitIniToposolidThresholds.ExceedsNativeThreshold`/`.DescribeExceedance`
   (`src/SolidGround.Core/Hosting/RevitIniToposolidThresholds.cs`) and `TerrainProcessingPipeline.RunAsync`'s
@@ -50,8 +51,9 @@ its five stages have been implemented so far:
   overlap window this dialog has: after a successful search, before Next is pressed). See "Result-code mapping",
   "AOI and provenance", and "Settings interaction" below for the full behavior-changing detail; "Tests" below
   for what backstops each claim.
-- **Stage E (manual evidence + docs update)** has **not** been implemented. Every section below that is not
-  explicitly marked "landed" describes the accepted design for that future work, not code that exists today.
+- **Stage E (manual evidence + docs update):** this stage. A live Revit 2027 session ran the manual evidence plan
+  below and found four defects, all now fixed in **Stage F**; see "Stage E live-session findings and Stage F
+  fixes" below for the full write-up.
 
 ## Content model and sections
 
@@ -443,9 +445,11 @@ different address/point, letting `Create` pair a stale parcel boundary with a se
 `SelectedGeocodeCandidate` is itself reassigned -- it does nothing if the operator edits `AddressText` after a
 candidate is already confirmed without a fresh *successful* `Geocode` (for example a re-geocode that fails or
 times out, or simply never clicking Find again before Next). `CanGoNext`'s `AddressEntry` case now also
-requires `AddressText.Trim()` to equal `_confirmedAddressText`, a new field set alongside both of `Geocode`'s
-success branches (a real geocode, or a validated direct "latitude, longitude" entry) to the exact trimmed text
-that produced the currently confirmed candidate. Kept as its own field rather than reusing
+requires `AddressText.Trim()` to equal `ConfirmedAddressText` (backed by the `_confirmedAddressText` field --
+see "Stale-address invalidation, follow-up" immediately below for why that field is now
+`[ObservableProperty]`-backed with its own `NotifyCanExecuteChangedFor(nameof(NextCommand))`), set alongside
+both of `Geocode`'s success branches (a real geocode, or a validated direct "latitude, longitude" entry) to the
+exact trimmed text that produced the currently confirmed candidate. Kept as its own field rather than reusing
 `_geocodedAddressText` (which is deliberately `null` on the direct-point-entry path, by
 `AddressParcelProvenanceFactory.Create`'s own contract) so a valid direct-point confirmation does not
 permanently disable Next. `AddressText`'s own `[NotifyCanExecuteChangedFor]` now also names `NextCommand`, so
@@ -455,6 +459,15 @@ stale `SelectedGeocodeCandidate`/`SelectedParcelCandidate` pairing through to `C
 `AddressParcelProvenance` for a different, earlier-confirmed location than what the address box currently
 displays. `SolidGroundDialogViewModelRequiresAddressTextToStillMatchTheConfirmedCandidateBeforeAllowingNext`
 (see "Tests" below) guards this.
+
+**Stale-address invalidation, follow-up (Stage E live-session finding, defect A, fixed in Stage F).** The fix
+immediately above was necessary but not sufficient: Next itself stayed *disabled* after a successful Find (for
+both an address and a "latitude, longitude" pair), because `_confirmedAddressText` was a bare field, and both of
+`Geocode`'s success branches assigned `SelectedGeocodeCandidate` (which re-evaluates `NextCommand` through its
+own `NotifyCanExecuteChangedFor`) *before* assigning `_confirmedAddressText` -- so `CanGoNext`'s `AddressEntry`
+case was re-checked one statement too early, against the *previous* confirmed value, and nothing re-evaluated
+`NextCommand` a second time afterward. See "Stage E live-session findings and Stage F fixes" below for the fix
+and every other defect that same session found.
 
 ## Theming and accessibility
 
@@ -625,9 +638,11 @@ needed (`RevitProjectContainsNoXamlFiles`, `CsprojPinsCommunityToolkitMvvmToTheA
     major) — locates `OnSelectedGeocodeCandidateChanged`'s real method body the same way, and asserts it
     clears `ParcelCandidates`, `SelectedParcelCandidate`, and `_parcelLookupAttempted`.
   - `SolidGroundDialogViewModelRequiresAddressTextToStillMatchTheConfirmedCandidateBeforeAllowingNext` (review
-    finding, blocker) — locates `CanGoNext`'s real switch-expression body and asserts its `AddressEntry` case
-    references `_confirmedAddressText`, and locates `Geocode()`'s real method body and asserts both of its
-    success branches assign `_confirmedAddressText = addressText;`.
+    finding, blocker; corrected in Stage F — see "Stage E live-session findings and Stage F fixes" below) — as
+    landed in Stage C, located `CanGoNext`'s real switch-expression body and asserted its `AddressEntry` case
+    referenced `_confirmedAddressText`, and located `Geocode()`'s real method body and asserted both of its
+    success branches assigned `_confirmedAddressText = addressText;`. Both checks now instead reference the
+    generated `ConfirmedAddressText` property, not the bare field (see the Stage F entry below).
   - `SolidGroundDialogSourceNeverHardcodesABrushInsteadOfDrawingFromThePalette` (review finding, major) —
     `SolidGroundDialog.cs` alone (not the whole concatenated Dialog source, since `DialogTheme.cs` legitimately
     defines its palettes from literal `Brushes.*` values) contains zero occurrences of `Brushes.`.
@@ -713,10 +728,36 @@ needed (`RevitProjectContainsNoXamlFiles`, `CsprojPinsCommunityToolkitMvvmToTheA
   extraction; the pre-existing `ValidateReportsOutOfRangePointBudget` theory already proves one past each end
   is still rejected.
 
+**Landed in Stage F** (see "Stage E live-session findings and Stage F fixes" below for the full defect writeup;
+every test below was confirmed to fail against the pre-Stage-F source and pass after the fix):
+
+- `RevitInteractiveDialogTests.SolidGroundDialogViewModelConfirmedAddressTextIsObservableAndReEvaluatesNextCommandItself`
+  (new, defect A) — asserts `[ObservableProperty]`/`[NotifyCanExecuteChangedFor(nameof(NextCommand))]` both
+  immediately precede the `_confirmedAddressText` field declaration.
+- `.SolidGroundDialogViewModelRequiresAddressTextToStillMatchTheConfirmedCandidateBeforeAllowingNext` (corrected,
+  not weakened) — its assignment-count check now looks for `ConfirmedAddressText = addressText;` (the generated
+  property, which defect A's fix requires both of `Geocode`'s success branches to write through instead of the
+  bare field), and its `CanGoNext` check now looks for `ConfirmedAddressText` (the property read, required by
+  CommunityToolkit.Mvvm's own `MVVMTK0034` analyzer once the field is `[ObservableProperty]`-annotated) rather
+  than the bare `_confirmedAddressText` field name either previously pinned.
+- `.SolidGroundDialogViewModelShowNoParcelCandidatesMessageIsPublicNotInternal` (new, defect C) and
+  `.SolidGroundDialogViewModelPointBudgetWarningPropertiesArePublicNotInternal` (new, defect D) — each asserts
+  its own named property is declared `public`, not `internal`.
+- `.SolidGroundDialogViewModelPointBudgetRangeErrorTextReusesSimplificationSettingsBoundsNotADuplicatedLiteral`
+  and `.SolidGroundDialogSourceShowsDistinctProvenancePreviewWordingForAGeocodedAddressVersusADirectPointEntry`
+  (both corrected, not weakened) — now look for `public`, not `internal`, on the properties they were already
+  asserting exist (`PointBudgetRangeErrorText`; `ShowFindParcelGeocodedIntro`/`ShowFindParcelDirectPointIntro`).
+- `.SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal` (new; general,
+  forward-looking) — reads every `nameof(SolidGroundDialogViewModel.X)` argument to a `new Binding(...)` call in
+  `SolidGroundDialog.cs`, reads every hand-written `internal`/`public <Type> X => ...`-shaped property
+  declaration in `SolidGroundDialogViewModel.cs`, and asserts none of the bound names is declared `internal` —
+  catching any future instance of this same mistake, not only the six named above.
+
 ## Manual evidence plan
 
-**Finalized for AC5 (Stage D); not yet run (Stage E).** Runs against a real Revit 2027 process, following this
-repository's existing numbered-step convention (for example `docs/architecture/revit-toposolid-creation.md`'s
+**Finalized for AC5 (Stage D); run against a real Revit 2027 process (Stage E), which found four defects fixed
+in Stage F -- see "Stage E live-session findings and Stage F fixes" below.** Follows this repository's existing
+numbered-step convention (for example `docs/architecture/revit-toposolid-creation.md`'s
 own "Manual evidence plan"). Every step below needs Stage D's real wiring to be reachable at all; none of them
 can run before this stage lands.
 
@@ -791,6 +832,94 @@ can run before this stage lands.
     toposolid/`PropertyLine` creation — against a real, non-synthetic property, confirming the full flow works
     on real-world data end to end. No address, coordinates, parcel id, or other identifying detail from this run
     is ever recorded in any repository-facing document; only the fact that this step was performed is recorded.
+
+## Stage E live-session findings and Stage F fixes
+
+**Stage E** ran the manual evidence plan above against a real Revit 2027 process. Pixel capture of the dialog's
+own client area was not available in that session (a WPF-rendering limitation of the capture tooling used, not
+of the dialog itself), so evidence there took the form of UI Automation state — control names, `IsEnabled`,
+`IsOffscreen`, values, and bounding rectangles — rather than screenshots. That session found four defects, all
+now fixed in **Stage F**:
+
+- **Defect A.** Next stayed disabled after a successful Find, for both a street address and a "latitude,
+  longitude" pair, even though every real precondition (a confirmed candidate; the address box still matching
+  what was confirmed) was satisfied. See "MVVM shape (and why no messenger)" above ("Stale-address invalidation,
+  follow-up") for the exact root cause: `_confirmedAddressText` was a bare field, and both of `Geocode`'s success
+  branches happened to assign `SelectedGeocodeCandidate` — which re-evaluates `NextCommand` through its own
+  `NotifyCanExecuteChangedFor` — *before* assigning `_confirmedAddressText`, so `CanGoNext`'s `AddressEntry` case
+  was re-checked one statement too early, against the stale, previously confirmed value, and nothing
+  re-evaluated `NextCommand` a second time afterward.
+
+  **Fix (structural, not a mere statement reorder):** `_confirmedAddressText` is now itself an
+  `[ObservableProperty]` carrying its own `[NotifyCanExecuteChangedFor(nameof(NextCommand))]`, so whichever
+  success branch assigns it — in whatever order relative to `SelectedGeocodeCandidate` — re-evaluates
+  `NextCommand` itself, at the point both pieces of state are already final. Both of `Geocode`'s success
+  branches, and `CanGoNext`'s own read, now go through the generated `ConfirmedAddressText` property rather than
+  the bare field directly (CommunityToolkit.Mvvm's own analyzer, `MVVMTK0034`, disallows referencing an
+  `[ObservableProperty]`-annotated field directly once it is one). An audit of every other `CanExecute`-guarded
+  command (`Next`, `Back`, `Create`, `Geocode`, `FindParcel`) found no sibling instance of this same
+  ordering hazard: every other predicate's dependencies either belong to the identical property whose own
+  change triggers the re-evaluation (no cross-property ordering possible), or are independent properties that
+  each carry their own correct `NotifyCanExecuteChangedFor`/`NotifyPropertyChangedFor`.
+
+- **Defects B, C, and D (one shared root cause).** Step 9's provenance-preview panel showed every conditional
+  sentence at once regardless of which path was actually taken (defect B); step 3's "no parcel boundary was
+  found" message showed even when a parcel candidate was listed, alongside an inline registry error (defect C);
+  and step 5's point-budget warning and always-on out-of-range error text never appeared at all, even though the
+  range rule itself correctly disabled Next (defect D) — as did that same warning's step 10 preflight-summary
+  sibling.
+
+  **Root cause.** `SolidGroundDialogViewModel` is an `internal` type, and six of its hand-written computed
+  properties — `ShowNoParcelCandidatesMessage`, `ShowPointBudgetWarning`, `PointBudgetWarningText`,
+  `PointBudgetRangeErrorText`, `ShowFindParcelGeocodedIntro`, `ShowFindParcelDirectPointIntro` — were themselves
+  also declared `internal`, each reached from `SolidGroundDialog.cs` only through a string-`Path`
+  `new Binding(nameof(...))`. WPF resolves that kind of binding source against a plain CLR object at runtime by
+  reflection, and that reflection only ever discovers **public** members — an internal member is invisible to
+  it, regardless of the enclosing type's own accessibility (a `public` member on an `internal` type is still
+  found; an `internal` member is not, even on a `public` type). Binding to an inaccessible property fails
+  silently: WPF logs a "`BindingExpression path error: '<Name>' property not found`" trace line the operator
+  never sees, and leaves the bound dependency property at its own default value — `Visibility.Visible` for a
+  `Visibility` binding (defects B and C: the affected text stayed visible unconditionally, since Visible is
+  `UIElement.VisibilityProperty`'s own default), or an empty string for a `Text` binding (defect D: the affected
+  text never appeared at all, indistinguishable from "no warning applies", since empty is
+  `TextBlock.TextProperty`'s own default). This was confirmed with a standalone, non-committed WPF reproduction
+  built and run outside this repository (this test project cannot construct a real
+  `SolidGroundDialogViewModel`/WPF `Binding` itself — see "Tests" below): an otherwise-identical pair of
+  internal/public `bool` properties, and internal/public `string?` properties, each bound the same way, showed
+  exactly this split — the public ones tracked their real value on every change; the internal ones stuck at
+  Visible/empty regardless of it, with the trace log confirming the exact "property not found" failure. The same
+  reproduction also confirmed that a *public* property whose own *type* is an `internal` enum (matching
+  `AoiSource`'s `DialogAoiSource`) binds and updates correctly — reflection's accessibility check is on the bound
+  *member*, not on its declared type — so the step 9/10 sentences gated on `AoiSource` (`geocodeAttribution`,
+  `parcelAccuracy`, `parcelDisclaimer`, `settingsFileNote`, `parcelSummary`, `settingsFileSummary`) were never
+  affected by this defect; step 9's own "settings-file sentence" appearing alongside the other two in the
+  live-session evidence is accounted for entirely by `ShowFindParcelGeocodedIntro`/`ShowFindParcelDirectPointIntro`
+  being stuck permanently visible regardless of `AoiSource`, next to whichever `AoiSource`-gated sentence was
+  genuinely, correctly active at that moment.
+
+  **Fix.** All six properties are now declared `public`. `SolidGroundDialogViewModel`'s own remaining accessibility
+  is unaffected (still `internal sealed partial class`; a `public` member on an `internal` type is ordinary,
+  unremarkable C#, and does not widen this type's reach outside the assembly). The buffer panel's own,
+  visually-identical step 4 error text (`BufferErrorText`) was checked and confirmed **not** affected: it is an
+  `[ObservableProperty]`-backed, generator-emitted `public` property, never a hand-written `internal` one, so it
+  was never exposed to this failure mode.
+
+**Tests (Stage F, additive/corrective; see "Tests" below for the full list):**
+`SolidGroundDialogViewModelConfirmedAddressTextIsObservableAndReEvaluatesNextCommandItself` (new, defect A);
+`SolidGroundDialogViewModelShowNoParcelCandidatesMessageIsPublicNotInternal` (new, defect C);
+`SolidGroundDialogViewModelPointBudgetWarningPropertiesArePublicNotInternal` (new, defect D);
+`SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal` (new; a general,
+forward-looking check that flags *any* future hand-written computed property bound this way without also being
+public, not only the six named above). Three pre-existing tests were corrected, not weakened, because their own
+assertions happened to pin the exact defective pattern this session found:
+`SolidGroundDialogViewModelRequiresAddressTextToStillMatchTheConfirmedCandidateBeforeAllowingNext` (its
+assignment-count check now looks for the `ConfirmedAddressText` property write, and its `CanGoNext` check now
+looks for the `ConfirmedAddressText` read, both of which superseded the bare-field forms once defect A's fix
+required going through the generated property);
+`SolidGroundDialogViewModelPointBudgetRangeErrorTextReusesSimplificationSettingsBoundsNotADuplicatedLiteral` and
+`SolidGroundDialogSourceShowsDistinctProvenancePreviewWordingForAGeocodedAddressVersusADirectPointEntry` (both
+now look for `public`, not `internal`, on the properties they were already asserting exist). Every one of these
+seven tests was confirmed to fail against the pre-Stage-F source and pass after the fix.
 
 ## Non-goals
 
