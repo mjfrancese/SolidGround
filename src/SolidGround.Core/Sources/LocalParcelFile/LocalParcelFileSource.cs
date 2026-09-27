@@ -172,6 +172,14 @@ public sealed class LocalParcelFileSource : IParcelBoundarySource
             return null;
         }
 
+        // The nearby-parcel fallback tier's own query (SolidGround Issue #31 follow-up): the same
+        // relevance-before-validation protection, tested against the query's search envelope rather than an
+        // exact point.
+        if (query is ParcelNearbyQuery nearbyQuery && (boundary is null || !IntersectsEnvelope(boundary, nearbyQuery)))
+        {
+            return null;
+        }
+
         // From here on, this exact feature IS the query's match (by address or by point, or the query is
         // neither shape and every feature is unconditionally in scope): any structural problem in it is a
         // real, reportable error rather than something to silently skip.
@@ -244,6 +252,34 @@ public sealed class LocalParcelFileSource : IParcelBoundarySource
 
         Point testPoint = GeometryInterop.Services.CreateGeometryFactory().CreatePoint(new Coordinate(pointQuery.Longitude, pointQuery.Latitude));
         return boundary.Geometry.Intersects(testPoint);
+    }
+
+    /// <summary>
+    /// A cheap envelope-vs-envelope reject, then the exact NTS <c>Intersects</c> test against a rectangle
+    /// built from the nearby-tier query's own search envelope -- mirroring the county REST source's own
+    /// <c>esriGeometryEnvelope</c>/<c>esriSpatialRelIntersects</c> query exactly, so the two sources never
+    /// disagree about which features are "in scope" for this tier. Never itself ranks or filters by true
+    /// distance (an envelope test alone cannot: a square envelope circumscribes the requested circle) --
+    /// <see cref="NearbyParcelBoundaryFinder"/> is what does that, uniformly across every
+    /// <see cref="IParcelBoundarySource"/>.
+    /// </summary>
+    private static bool IntersectsEnvelope(PolygonalRegion boundary, ParcelNearbyQuery nearbyQuery)
+    {
+        PlanarEnvelope queryEnvelope = ParcelBoundaryProximity.ComputeEnvelope(nearbyQuery.Latitude, nearbyQuery.Longitude, nearbyQuery.RadiusMeters);
+        PlanarEnvelope featureEnvelope = boundary.Envelope;
+        if (featureEnvelope.MaxX < queryEnvelope.MinX || featureEnvelope.MinX > queryEnvelope.MaxX
+            || featureEnvelope.MaxY < queryEnvelope.MinY || featureEnvelope.MinY > queryEnvelope.MaxY)
+        {
+            return false;
+        }
+
+        // Geometry (unqualified) would resolve to the SolidGround.Core.Geometry namespace, not
+        // NetTopologySuite.Geometries.Geometry, from inside this file's own SolidGround.Core.Sources.*
+        // namespace (an enclosing-namespace match wins over a using-directive import) -- fully qualified here
+        // rather than adding a second file-wide alias for one call site.
+        NetTopologySuite.Geometries.Geometry envelopeGeometry = GeometryInterop.Services.CreateGeometryFactory()
+            .ToGeometry(new Envelope(queryEnvelope.MinX, queryEnvelope.MaxX, queryEnvelope.MinY, queryEnvelope.MaxY));
+        return boundary.Geometry.Intersects(envelopeGeometry);
     }
 
     private ParcelBoundaryCandidate BuildCandidate(PolygonalRegion boundary, string parcelId, string situsAddress, JsonElement properties)

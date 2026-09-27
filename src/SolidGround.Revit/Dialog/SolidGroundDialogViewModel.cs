@@ -159,6 +159,29 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     /// </remarks>
     public bool ShowNoParcelCandidatesMessage => _parcelLookupAttempted && ParcelCandidates.Count == 0;
 
+    /// <summary>
+    /// Non-null exactly when <see cref="FindParcel"/>'s most recent lookup fell back to the nearby-parcel
+    /// tier (SolidGround Issue #31 follow-up: the exact point-in-parcel query found nothing, most often
+    /// because a geocoded point landed a few meters into the street frontage or right-of-way) and that
+    /// fallback tier found at least one candidate -- names the actual configured search radius
+    /// (<see cref="SolidGroundDialogInputs.NearbySearchRadiusMeters"/>), never a re-hardcoded "30", so a
+    /// configured override is reflected here too. <see langword="null"/> both before any lookup and whenever
+    /// the exact tier alone already resolved a candidate (<see cref="UsedNearbyTier"/> false) or the nearby
+    /// tier itself found nothing (<see cref="ShowNoParcelCandidatesMessage"/> covers that case instead).
+    /// </summary>
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> -- a hand-written computed property bound by a
+    /// WPF string-Path <c>Binding</c> (see <see cref="ShowNoParcelCandidatesMessage"/>'s own remarks for the
+    /// full mechanism this repeats).
+    /// </remarks>
+    public string? NearbyTierNoticeText => UsedNearbyTier && ParcelCandidates.Count > 0
+        ? $"No parcel contains this point. These nearby parcels are within " +
+          $"{_inputs.NearbySearchRadiusMeters.ToString("N0", CultureInfo.InvariantCulture)} m, nearest first; confirm the right one." +
+          (ResultSetTruncated
+              ? " The parcel source reported more nearby matches than it returned, so the closest parcel might not be listed here."
+              : string.Empty)
+        : null;
+
     internal SolidGroundDialogViewModel(SolidGroundDialogInputs inputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);
@@ -216,12 +239,41 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private AddressGeocodeCandidate? _selectedGeocodeCandidate;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ShowNoParcelCandidatesMessage))]
-    private ObservableCollection<ParcelBoundaryCandidate> _parcelCandidates = [];
+    [NotifyPropertyChangedFor(nameof(ShowNoParcelCandidatesMessage), nameof(NearbyTierNoticeText))]
+    private ObservableCollection<ParcelProximityCandidate> _parcelCandidates = [];
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(NextCommand))]
-    private ParcelBoundaryCandidate? _selectedParcelCandidate;
+    private ParcelProximityCandidate? _selectedParcelCandidate;
+
+    /// <summary>
+    /// True once <see cref="FindParcel"/> has completed a lookup whose exact point-in-parcel tier returned
+    /// zero candidates, so the nearby-parcel fallback tier ran (SolidGround Issue #31 follow-up; see
+    /// <see cref="SolidGround.Core.Sources.NearbyParcelBoundaryFinder"/>) -- regardless of whether that
+    /// fallback tier itself then found anything within its own search radius. Reset to <see langword="false"/>
+    /// whenever <see cref="SelectedGeocodeCandidate"/> changes, alongside <see cref="ParcelCandidates"/> itself
+    /// (<see cref="OnSelectedGeocodeCandidateChanged"/>), so a stale notice from an earlier confirmed point can
+    /// never linger for a search that has not run yet against the newly confirmed one.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NearbyTierNoticeText))]
+    private bool _usedNearbyTier;
+
+    /// <summary>
+    /// True when <see cref="FindParcel"/>'s most recent lookup's own <see cref="ParcelProximityAcquisition.ResultSetTruncated"/>
+    /// was true -- the source's own paging/limit signal (Esri's <c>exceededTransferLimit</c>) indicating more
+    /// matches may exist than were actually returned for that lookup, so <see cref="ParcelCandidates"/> may be
+    /// an incomplete subset of what the source actually has nearby (re-check finding, minor, fixed: this signal
+    /// used to be discarded entirely -- see <see cref="ParcelProximityAcquisition.ResultSetTruncated"/>'s own
+    /// remarks). Surfaced as a caveat appended to <see cref="NearbyTierNoticeText"/>, not a separate bound
+    /// property, following that property's own established idiom. Reset to <see langword="false"/> alongside
+    /// <see cref="UsedNearbyTier"/> whenever <see cref="SelectedGeocodeCandidate"/> changes, so a stale
+    /// truncation caveat from an earlier lookup can never linger for a search that has not yet run against the
+    /// newly confirmed point.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NearbyTierNoticeText))]
+    private bool _resultSetTruncated;
 
     [ObservableProperty]
     private double _bufferMeters;
@@ -508,6 +560,8 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         ParcelCandidates = [];
         SelectedParcelCandidate = null;
         _parcelLookupAttempted = false;
+        UsedNearbyTier = false;
+        ResultSetTruncated = false;
         OnPropertyChanged(nameof(ShowNoParcelCandidatesMessage));
     }
 
@@ -542,16 +596,27 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         using CancellationTokenSource cts = new(TimeSpan.FromSeconds(_inputs.NetworkTimeoutSeconds));
         try
         {
-            ParcelPointQuery query = new(geocodeCandidate.Latitude, geocodeCandidate.Longitude);
-            ParcelBoundaryAcquisition acquisition = Task.Run(
-                    () => parcelSource.FindAsync(query, cts.Token).AsTask(),
+            // NearbyParcelBoundaryFinder (SolidGround Issue #31 follow-up) tries the exact point-in-parcel
+            // query first and only falls back to its own nearby-parcel tier when that returns zero
+            // candidates -- see docs/architecture/parcel-boundary-sources.md's "Nearby-parcel fallback tier".
+            // Same ValueTask<T>-to-Task<T> bridge as Geocode's own identical call above.
+            ParcelProximityAcquisition acquisition = Task.Run(
+                    () => NearbyParcelBoundaryFinder.FindAsync(
+                        parcelSource, geocodeCandidate.Latitude, geocodeCandidate.Longitude,
+                        _inputs.NearbySearchRadiusMeters, cts.Token).AsTask(),
                     cts.Token)
                 .GetAwaiter().GetResult();
-            ParcelCandidates = new ObservableCollection<ParcelBoundaryCandidate>(acquisition.Candidates);
+            // Set before ParcelCandidates below, so that assignment's own NotifyPropertyChangedFor(NearbyTierNoticeText)
+            // already reads UsedNearbyTier's/ResultSetTruncated's final value for this lookup, not the previous
+            // lookup's.
+            UsedNearbyTier = acquisition.UsedNearbyTier;
+            ResultSetTruncated = acquisition.ResultSetTruncated;
+            ParcelCandidates = new ObservableCollection<ParcelProximityCandidate>(acquisition.Candidates);
             // No default selection here (docs/architecture/revit-interactive-dialog.md "Content model and
             // sections" step 3, unlike Geocode's own best-match default): a zero-candidate result is a
             // normal, non-exceptional outcome, and even a single candidate still requires the operator's own
-            // explicit confirmation.
+            // explicit confirmation -- including every nearby-tier candidate, never auto-selected regardless
+            // of how close it is.
             SelectedParcelCandidate = null;
             _parcelLookupAttempted = true;
             OnPropertyChanged(nameof(ShowNoParcelCandidatesMessage));
@@ -654,11 +719,15 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         AddressParcelProvenance? addressParcel = null;
         if (AoiSource == DialogAoiSource.FindParcel)
         {
-            if (SelectedParcelCandidate is not { } parcelCandidate)
+            if (SelectedParcelCandidate is not { } selectedProximityCandidate)
             {
                 return;
             }
 
+            // The confirmed parcel candidate is recorded exactly as before this fallback tier existed --
+            // ParcelProximityCandidate.DistanceMeters/whether the nearby tier was used are dialog-only
+            // display state, never threaded into the AOI or provenance.
+            ParcelBoundaryCandidate parcelCandidate = selectedProximityCandidate.Candidate;
             aoi = ParcelBoundaryAoiFactory.FromCandidate(parcelCandidate, LinearDistance.Meters(BufferMeters));
 
             // The caller supplies the clock value -- this view-model is not SolidGround.Core, but it follows

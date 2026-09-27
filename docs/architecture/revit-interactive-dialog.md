@@ -921,6 +921,102 @@ required going through the generated property);
 now look for `public`, not `internal`, on the properties they were already asserting exist). Every one of these
 seven tests was confirmed to fail against the pre-Stage-F source and pass after the fix.
 
+## Nearby-parcel fallback tier (follow-up)
+
+A live Revit 2027 session performing "Content model and sections" step 3's own "Manual evidence plan" step 15
+(a private, real-property run) found a real defect this note's own "Stage E live-session findings and Stage F
+fixes" did not yet cover: the US Census geocoder interpolates along the street centreline, so its own point
+commonly lands a few meters into the street frontage or right-of-way, just outside the confirmed address's
+true parcel. `FindParcel`'s exact point-in-parcel query then resolved zero candidates even though a parcel was
+right there, and the operator had no way to confirm one. `docs/architecture/parcel-boundary-sources.md`'s own
+new "Nearby-parcel fallback tier" section records the Revit-free fix in full (`NearbyParcelBoundaryFinder`,
+`ParcelNearbyQuery`, `ParcelProximityCandidate`/`ParcelProximityAcquisition`, `ParcelBoundaryProximity`, and
+each source's own nearby-tier support); this section records only what changed here, in `SolidGround.Revit`.
+
+**`FindParcel` (see "Threading and the network bridge" above).** Calls
+`SolidGround.Core.Sources.NearbyParcelBoundaryFinder.FindAsync(parcelSource, geocodeCandidate.Latitude,
+geocodeCandidate.Longitude, _inputs.NearbySearchRadiusMeters, cts.Token)` instead of calling
+`parcelSource.FindAsync` directly -- the identical `Task.Run(...).AsTask().GetAwaiter().GetResult()` bridge,
+the identical two catch clauses (`ParcelBoundarySourceException`, `OperationCanceledException` on the
+caller's own token), never rethrowing, exactly as before this change.
+
+**"Content model and sections" step 3, extended.** `ParcelCandidates`/`SelectedParcelCandidate` are now typed
+`ParcelProximityCandidate`, not `ParcelBoundaryCandidate` -- the wrapper record carrying each candidate's own
+`DistanceMeters` alongside the resolved `Candidate`. The parcel candidate `DataTemplate`'s five existing
+bindings each gained a `Candidate.` path segment (what each one displays is unchanged); a new sixth line binds
+`DistanceMeters` directly (`"{0:N1} m from this point"` -- 0 for a parcel that actually contains the point,
+the ordinary case). A new banner, visible exactly when a lookup actually fell back to the nearby tier and
+found at least one candidate (`NearbyTierNoticeText`, non-null in that case only, following the buffer/
+point-budget panels' own `BufferErrorText`/`PointBudgetRangeErrorText`/`TextPresenceToVisibility` idiom rather
+than a second, separate bool property), reads "No parcel contains this point. These nearby parcels are within
+`{radius}` m, nearest first; confirm the right one." -- naming the actual configured radius, never a
+re-hardcoded "30". The operator must still explicitly select a parcel: `FindParcel` never auto-selects
+`SelectedParcelCandidate` after a lookup, exactly as before this change, including for a nearby-tier result.
+The zero-candidates message (`ShowNoParcelCandidatesMessage`) is unchanged in logic and now correctly reads
+"both tiers found nothing" for free, since `ParcelCandidates` is empty in that case by
+`NearbyParcelBoundaryFinder`'s own contract. A new `UsedNearbyTier` property (`[ObservableProperty]`-backed,
+so automatically public) is reset to `false` alongside `ParcelCandidates`/`SelectedParcelCandidate`/
+`_parcelLookupAttempted` whenever `SelectedGeocodeCandidate` changes ("MVVM shape (and why no messenger)"
+above, "Stale-parcel invalidation"), so a stale notice from an earlier confirmed point can never linger for a
+search that has not yet run against the newly confirmed one. `Create` reads
+`SelectedParcelCandidate.Candidate` (the wrapped `ParcelBoundaryCandidate`) when building the AOI and calling
+`AddressParcelProvenanceFactory.Create` -- provenance itself is recorded exactly as before this change; neither
+`DistanceMeters` nor `UsedNearbyTier` is ever threaded into it.
+
+**Public-binding rule (see "MVVM shape (and why no messenger)" above).** `NearbyTierNoticeText` is a
+hand-written computed property, so it is `public`, not `internal`, exactly like `ShowNoParcelCandidatesMessage`/
+`PointBudgetWarningText`/etc. above -- `SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal`
+(see "Tests" above) already covers this generically, with no change needed to that test itself.
+
+**`ResultSetTruncated` caveat (re-check finding, minor, fixed).** `NearbyTierNoticeText`'s own banner used to
+say nothing about the possibility that the shown nearby-parcel list might be incomplete:
+`NearbyParcelBoundaryFinder` discarded the nearby tier's own `ResultSetTruncated` signal entirely (Esri's
+`exceededTransferLimit`, docs/architecture/parcel-boundary-sources.md's "Request construction and response
+handling"), so a county layer configured with an unusually small `maxRecordCount` could truncate the envelope
+query with no indication anywhere that the operator's true closest parcel might not even be in the list Create
+was about to accept. `ParcelProximityAcquisition` now carries its own `ResultSetTruncated` (see
+docs/architecture/parcel-boundary-sources.md's "Nearby-parcel fallback tier" -- "Re-check findings, fixed"); a
+new `[ObservableProperty]`-backed `ResultSetTruncated` view-model property (reset to `false` alongside
+`UsedNearbyTier` on the same `SelectedGeocodeCandidate` change, and set from `acquisition.ResultSetTruncated` in
+`FindParcel` before `ParcelCandidates` is assigned, mirroring `UsedNearbyTier`'s own ordering requirement) feeds
+one short caveat sentence that `NearbyTierNoticeText` appends to its existing banner text when true -- not a
+second, separate banner -- since that existing banner is already the one place this dialog asks the operator to
+look closely before confirming a nearby-tier candidate.
+
+**"Settings interaction: prefill, not override", extended.** `RevitAddressAndParcelSettings` gains
+`NearbySearchRadiusMeters` (nullable `double`); `RevitSettingsIo.ParseAddressAndParcel` decodes
+`addressAndParcel.nearbySearchRadiusMeters`, strictly (must be finite and positive when present, thrown as the
+same kind of `AddressAndParcelDecodeException` an unrecognized `geocoderProvider` token already is), defaulting
+to `null` -- an existing settings file written before this key existed still loads unchanged. `null` means "use
+`NearbyParcelBoundaryFinder.DefaultRadiusMeters` (30 m)"; `SolidGroundDialogHost.ShowModal` resolves
+`settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters` once,
+into a new `SolidGroundDialogInputs.NearbySearchRadiusMeters` field the view-model reads at lookup time. The
+shipped template documents the new key at its own default (`null`).
+
+**CLI unchanged.** `SolidGround.Cli.Commands.ParcelCommand`'s output and exit codes are untouched by this
+follow-up; it does not call `NearbyParcelBoundaryFinder` (a later follow-up may adopt it).
+
+**Tests.** `RevitInteractiveDialogTests.cs` gained source-text checks (this project never references
+`SolidGround.Revit`, so every "Revit host" check reads committed source text directly, per "Purpose and
+boundary" above): `FindParcel`'s own body calls `NearbyParcelBoundaryFinder.FindAsync`, not
+`parcelSource.FindAsync` directly; `NearbyTierNoticeText` is declared `public`; the parcel candidate template
+references `DistanceMeters`; `ParcelCandidates`/`SelectedParcelCandidate` are declared with the
+`ParcelProximityCandidate` type; `RevitAddressAndParcelSettings.cs`/`RevitSettingsIo.cs` declare and decode
+`nearbySearchRadiusMeters` and ship it in the template; `SolidGroundDialogHost.cs` resolves the configured
+value or the Core default.
+
+**Tests (re-check finding fix, additive).** `FindParcel` sets the new `ResultSetTruncated` property from
+`acquisition.ResultSetTruncated` before `ParcelCandidates` is assigned, exactly mirroring `UsedNearbyTier`'s own
+existing ordering check; `OnSelectedGeocodeCandidateChanged`'s existing stale-parcel-state test now also
+asserts `ResultSetTruncated = false` alongside its existing `_parcelLookupAttempted = false` assertion;
+`NearbyTierNoticeText`'s own expression body (extracted by a new balanced-parenthesis helper,
+`ExtractExpressionBodyPropertyText`, since it has no `{ }` block for the existing `ExtractMethodBody` helper to
+find) references `ResultSetTruncated`; `NearbyParcelBoundaryFinder.cs` itself is read directly to confirm both
+`new ParcelProximityAcquisition(...)` call sites forward `resultSetTruncated:` from the tier that actually
+produced its `Candidates`. `NearbyParcelBoundaryFinderTests.cs`'s own runtime coverage is recorded in
+docs/architecture/parcel-boundary-sources.md's "Nearby-parcel fallback tier" -- "Test evidence (this
+follow-up)".
+
 ## Non-goals
 
 - No settings write-back / "remembers last address, candidate, or point budget across sessions".

@@ -361,6 +361,20 @@ internal sealed class SolidGroundDialog : Window
         listBox.ItemTemplate = BuildParcelCandidateTemplate();
         AutomationProperties.SetName(listBox, "Parcel candidates");
 
+        // Nearby-parcel fallback tier (SolidGround Issue #31 follow-up): shown only once a lookup actually
+        // fell back to it and found at least one candidate -- mirrors the buffer/point-budget panels' own
+        // BufferErrorText/PointBudgetRangeErrorText idiom (bind the text itself, convert its presence to
+        // Visibility) rather than a second, separate bool property.
+        TextBlock nearbyTierNotice = new()
+        {
+            Foreground = palette.Highlight,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        nearbyTierNotice.SetBinding(TextBlock.TextProperty, new Binding(nameof(SolidGroundDialogViewModel.NearbyTierNoticeText)));
+        nearbyTierNotice.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.NearbyTierNoticeText)) { Converter = TextPresenceToVisibility });
+
         TextBlock zeroCandidatesMessage = new()
         {
             Text = "No parcel boundary was found at this point; go back and try a different address or candidate.",
@@ -373,6 +387,7 @@ internal sealed class SolidGroundDialog : Window
         StackPanel panel = new();
         panel.Children.Add(BuildHeader("Confirm the parcel boundary.", palette));
         panel.Children.Add(findParcelButton);
+        panel.Children.Add(nearbyTierNotice);
         panel.Children.Add(listBox);
         panel.Children.Add(zeroCandidatesMessage);
         return panel;
@@ -380,30 +395,42 @@ internal sealed class SolidGroundDialog : Window
 
     private static DataTemplate BuildParcelCandidateTemplate()
     {
+        // The bound item is now a ParcelProximityCandidate (SolidGround Issue #31 follow-up), wrapping the
+        // resolved ParcelBoundaryCandidate plus its own distance from the confirmed point -- every existing
+        // ParcelBoundaryCandidate.* binding below gains a "Candidate." path segment; nothing about what each
+        // one displays changes.
         FrameworkElementFactory root = new(typeof(StackPanel));
         root.SetValue(FrameworkElement.MarginProperty, new Thickness(2));
 
         FrameworkElementFactory idLine = new(typeof(TextBlock));
-        idLine.SetBinding(TextBlock.TextProperty, new Binding(nameof(ParcelBoundaryCandidate.ParcelId)) { StringFormat = "Parcel {0}" });
+        idLine.SetBinding(TextBlock.TextProperty, new Binding($"{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.ParcelId)}") { StringFormat = "Parcel {0}" });
         idLine.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
         root.AppendChild(idLine);
 
         FrameworkElementFactory situsLine = new(typeof(TextBlock));
-        situsLine.SetBinding(TextBlock.TextProperty, new Binding(nameof(ParcelBoundaryCandidate.SitusAddress)));
+        situsLine.SetBinding(TextBlock.TextProperty, new Binding($"{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.SitusAddress)}"));
         root.AppendChild(situsLine);
 
         FrameworkElementFactory legalDescriptionLine = new(typeof(TextBlock));
-        legalDescriptionLine.SetBinding(TextBlock.TextProperty, new Binding(nameof(ParcelBoundaryCandidate.LegalDescription)));
+        legalDescriptionLine.SetBinding(TextBlock.TextProperty, new Binding($"{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.LegalDescription)}"));
         legalDescriptionLine.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         root.AppendChild(legalDescriptionLine);
 
         FrameworkElementFactory areaLine = new(typeof(TextBlock));
-        areaLine.SetBinding(TextBlock.TextProperty, new Binding(nameof(ParcelBoundaryCandidate.ComputedAreaSquareMeters)) { StringFormat = "{0:N0} m²" });
+        areaLine.SetBinding(TextBlock.TextProperty, new Binding($"{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.ComputedAreaSquareMeters)}") { StringFormat = "{0:N0} m²" });
         areaLine.SetValue(TextBlock.FontSizeProperty, 11d);
         root.AppendChild(areaLine);
 
+        // Distance from the confirmed point (SolidGround Issue #31 follow-up): 0 for a parcel that actually
+        // contains it (the ordinary case), a positive distance for a nearby-tier candidate -- see
+        // NearbyTierNoticeText above for the accompanying explanatory banner.
+        FrameworkElementFactory distanceLine = new(typeof(TextBlock));
+        distanceLine.SetBinding(TextBlock.TextProperty, new Binding(nameof(ParcelProximityCandidate.DistanceMeters)) { StringFormat = "{0:N1} m from this point" });
+        distanceLine.SetValue(TextBlock.FontSizeProperty, 11d);
+        root.AppendChild(distanceLine);
+
         FrameworkElementFactory accuracyLine = new(typeof(TextBlock));
-        accuracyLine.SetBinding(TextBlock.TextProperty, new Binding(nameof(ParcelBoundaryCandidate.AccuracyLabel)));
+        accuracyLine.SetBinding(TextBlock.TextProperty, new Binding($"{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.AccuracyLabel)}"));
         accuracyLine.SetValue(TextBlock.FontSizeProperty, 11d);
         accuracyLine.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         root.AppendChild(accuracyLine);
@@ -654,13 +681,13 @@ internal sealed class SolidGroundDialog : Window
         TextBlock parcelAccuracy = new() { Foreground = palette.WindowText, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) };
         parcelAccuracy.SetBinding(
             TextBlock.TextProperty,
-            new Binding($"{nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)}.{nameof(ParcelBoundaryCandidate.AccuracyLabel)}"));
+            new Binding($"{nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)}.{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.AccuracyLabel)}"));
         parcelAccuracy.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.AoiSource)) { Converter = visibleWhenFindParcel });
 
         TextBlock parcelDisclaimer = new() { Foreground = palette.WindowText, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
         parcelDisclaimer.SetBinding(
             TextBlock.TextProperty,
-            new Binding($"{nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)}.{nameof(ParcelBoundaryCandidate.LicenseDisclaimerText)}"));
+            new Binding($"{nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)}.{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.LicenseDisclaimerText)}"));
         parcelDisclaimer.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.AoiSource)) { Converter = visibleWhenFindParcel });
 
         TextBlock settingsFileNote = new()
@@ -707,7 +734,7 @@ internal sealed class SolidGroundDialog : Window
         TextBlock parcelSummary = new() { Foreground = palette.WindowText, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
         parcelSummary.SetBinding(
             TextBlock.TextProperty,
-            new Binding($"{nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)}.{nameof(ParcelBoundaryCandidate.ParcelId)}") { StringFormat = "Area of interest: parcel {0}" });
+            new Binding($"{nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)}.{nameof(ParcelProximityCandidate.Candidate)}.{nameof(ParcelBoundaryCandidate.ParcelId)}") { StringFormat = "Area of interest: parcel {0}" });
         parcelSummary.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.AoiSource)) { Converter = visibleWhenFindParcel });
 
         TextBlock settingsFileSummary = new()

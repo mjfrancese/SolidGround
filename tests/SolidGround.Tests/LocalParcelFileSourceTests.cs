@@ -259,6 +259,44 @@ public sealed class LocalParcelFileSourceTests
         Assert.Single(acquisition.Candidates);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // ParcelNearbyQuery (nearby-parcel fallback tier, SolidGround Issue #31 follow-up): the same in-memory
+    // read, tiered by an envelope-vs-boundary intersects test rather than a point-vs-boundary one. This
+    // source never ranks/filters by true distance itself (NearbyParcelBoundaryFinderTests covers that); it
+    // only returns every feature whose geometry intersects the query envelope, exactly mirroring the county
+    // REST source's own envelope query.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ANearbyQueryFindsAFeatureThatTheExactPointQueryMisses()
+    {
+        LocalParcelFileSource source = CreateSource(FixturePath());
+        // ~2.5 m east of the fixture parcel's own east edge -- outside it, but within a 30 m search envelope.
+        const double queryLongitude = -93.603564371d + 0.00003d;
+
+        ParcelBoundaryAcquisition exact = await source.FindAsync(
+            new ParcelPointQuery(41.591194d, queryLongitude), TestContext.Current.CancellationToken);
+        Assert.Empty(exact.Candidates);
+
+        ParcelBoundaryAcquisition nearby = await source.FindAsync(
+            new ParcelNearbyQuery(41.591194d, queryLongitude, 30d), TestContext.Current.CancellationToken);
+
+        ParcelBoundaryCandidate candidate = Assert.Single(nearby.Candidates);
+        Assert.Equal("SYNTHETIC-PARCELNUMB-001", candidate.ParcelId);
+        Assert.False(nearby.ResultSetTruncated);
+    }
+
+    [Fact]
+    public async Task ANearbyQueryFartherThanEveryFeatureEnvelopeReturnsAnEmptyListWithoutThrowing()
+    {
+        LocalParcelFileSource source = CreateSource(FixturePath());
+
+        ParcelBoundaryAcquisition acquisition = await source.FindAsync(
+            new ParcelNearbyQuery(42.0d, -93.0d, 30d), TestContext.Current.CancellationToken);
+
+        Assert.Empty(acquisition.Candidates);
+    }
+
     [Fact]
     public async Task APointQueryStillResolvesAMatchingFeatureWhenAnUnrelatedFeatureHasABlankRequiredField()
     {

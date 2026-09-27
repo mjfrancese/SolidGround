@@ -200,3 +200,70 @@ public sealed record ParcelBoundaryAcquisition
     /// <summary>True when the source's own paging/limit signal (Esri's <c>exceededTransferLimit</c>) indicates more matches may exist than were returned. Always false for <see cref="LocalParcelFile.LocalParcelFileSource"/> (a full local read is never paginated).</summary>
     public bool ResultSetTruncated { get; }
 }
+
+/// <summary>
+/// One <see cref="ParcelBoundaryCandidate"/> plus its distance from the point <see cref="NearbyParcelBoundaryFinder.FindAsync"/>
+/// was asked about -- 0 when the candidate contains (or touches) that point, otherwise the true distance to
+/// its boundary in meters (<see cref="ParcelBoundaryProximity.DistanceMeters"/>).
+/// </summary>
+public sealed record ParcelProximityCandidate
+{
+    public ParcelProximityCandidate(ParcelBoundaryCandidate candidate, double distanceMeters)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (!double.IsFinite(distanceMeters) || distanceMeters < 0d)
+        {
+            throw new ArgumentOutOfRangeException(nameof(distanceMeters), distanceMeters, "Distance must be finite and non-negative.");
+        }
+
+        Candidate = candidate;
+        DistanceMeters = distanceMeters;
+    }
+
+    public ParcelBoundaryCandidate Candidate { get; }
+
+    public double DistanceMeters { get; }
+}
+
+/// <summary>
+/// The result of <see cref="NearbyParcelBoundaryFinder.FindAsync"/>: zero or more candidates, ordered by
+/// increasing <see cref="ParcelProximityCandidate.DistanceMeters"/> (ties broken stably, in whichever order
+/// the underlying source itself returned them), plus whether the nearby (fallback) tier had to run at all.
+/// </summary>
+public sealed record ParcelProximityAcquisition
+{
+    public ParcelProximityAcquisition(IReadOnlyList<ParcelProximityCandidate> candidates, bool usedNearbyTier, bool resultSetTruncated = false)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        Candidates = candidates;
+        UsedNearbyTier = usedNearbyTier;
+        ResultSetTruncated = resultSetTruncated;
+    }
+
+    /// <summary>Zero or more candidates -- empty when neither tier found anything (including when the nearby tier found only candidates farther than the requested radius).</summary>
+    public IReadOnlyList<ParcelProximityCandidate> Candidates { get; }
+
+    /// <summary>
+    /// True when the exact <see cref="ParcelPointQuery"/> tier returned zero candidates and the
+    /// <see cref="ParcelNearbyQuery"/> fallback tier ran as a result -- regardless of whether that fallback
+    /// tier itself then found anything within the requested radius. False whenever the exact tier alone
+    /// already resolved at least one candidate (the fallback tier never runs in that case at all).
+    /// </summary>
+    public bool UsedNearbyTier { get; }
+
+    /// <summary>
+    /// Forwards whichever tier's own <see cref="ParcelBoundaryAcquisition.ResultSetTruncated"/> actually produced
+    /// <see cref="Candidates"/>: the exact tier's own value when it already resolved at least one candidate
+    /// (<see cref="UsedNearbyTier"/> false, so the nearby tier never ran), otherwise the nearby tier's own value.
+    /// True means the source's own paging/limit signal (Esri's <c>exceededTransferLimit</c>) indicated more
+    /// matches may exist than were actually returned for that one request -- so <see cref="Candidates"/>, and
+    /// (when <see cref="UsedNearbyTier"/> is true) possibly the operator's true closest parcel, may be an
+    /// incomplete subset of what the source actually has in range (re-check finding, minor, fixed: this signal
+    /// used to be read from the nearby tier's own <see cref="ParcelBoundaryAcquisition"/> and then discarded
+    /// inside <see cref="NearbyParcelBoundaryFinder.FindAsync"/>, so neither this type nor the interactive
+    /// dialog could ever learn -- or tell the operator -- that the shown candidate list might be incomplete).
+    /// Always false for <see cref="LocalParcelFile.LocalParcelFileSource"/> (a full local read is never
+    /// paginated). See docs/architecture/parcel-boundary-sources.md's "Nearby-parcel fallback tier".
+    /// </summary>
+    public bool ResultSetTruncated { get; }
+}

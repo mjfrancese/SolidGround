@@ -82,6 +82,7 @@ public sealed class CountyParcelRegistrySource : IParcelBoundarySource
             ParcelAddressQuery addressQuery =>
                 $"{baseQuery}&resultRecordCount={MaximumAddressMatches.ToString(CultureInfo.InvariantCulture)}" +
                 $"&where={BuildAddressWhereClause(entry.FieldMap.SitusAddress, addressQuery.SearchText)}",
+            ParcelNearbyQuery nearbyQuery => BuildEnvelopeQueryText(baseQuery, nearbyQuery),
             _ => throw new ArgumentOutOfRangeException(nameof(query), query, "Unsupported parcel boundary query type."),
         };
 
@@ -108,6 +109,25 @@ public sealed class CountyParcelRegistrySource : IParcelBoundarySource
         string layerQueryPath = $"{serviceUri.GetLeftPart(UriPartial.Path)}/{entry.LayerIndex.ToString(CultureInfo.InvariantCulture)}/query";
         string leadingParameters = serviceUri.Query.Length > 0 ? $"{serviceUri.Query[1..]}&" : string.Empty;
         return $"{layerQueryPath}?{leadingParameters}f=json&outFields={outFields}&returnGeometry=true&outSR=4326&spatialRel=esriSpatialRelIntersects";
+    }
+
+    /// <summary>
+    /// Builds the nearby-parcel fallback tier's own envelope query: <c>geometryType=esriGeometryEnvelope</c>
+    /// with the simple/compact <c>xmin,ymin,xmax,ymax</c> syntax (ArcGIS REST APIs: Geometry objects, already
+    /// cited in docs/architecture/parcel-boundary-sources.md), <c>inSR=4326</c>, and the identical
+    /// <c>where=1%3D1</c> "select everything in scope" clause the point query already sends -- every other
+    /// fixed parameter (<c>outFields</c>, <c>returnGeometry</c>, <c>outSR</c>, <c>spatialRel=esriSpatialRelIntersects</c>)
+    /// is already shared by <paramref name="baseQuery"/>, and every downstream step (error-object/transfer-
+    /// limit/redaction handling, owner-field stripping) is the same, unmodified code every query type already
+    /// reaches.
+    /// </summary>
+    private static string BuildEnvelopeQueryText(string baseQuery, ParcelNearbyQuery nearbyQuery)
+    {
+        PlanarEnvelope envelope = ParcelBoundaryProximity.ComputeEnvelope(nearbyQuery.Latitude, nearbyQuery.Longitude, nearbyQuery.RadiusMeters);
+        return $"{baseQuery}&geometryType=esriGeometryEnvelope&geometry=" +
+               $"{FormatCoordinate(envelope.MinX)},{FormatCoordinate(envelope.MinY)}," +
+               $"{FormatCoordinate(envelope.MaxX)},{FormatCoordinate(envelope.MaxY)}" +
+               "&inSR=4326&where=1%3D1";
     }
 
     /// <summary>Every non-null <see cref="CountyParcelFieldMap"/> value, comma-joined, deduplicated (so <c>book</c>/<c>page</c> mapped to the same field is sent once) -- never <c>*</c>.</summary>

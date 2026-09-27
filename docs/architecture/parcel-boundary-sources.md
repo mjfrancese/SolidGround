@@ -358,6 +358,149 @@ directly with an inline, notched ("L-shaped") polygon whose true area and boundi
 well over the 2% tolerance this codebase otherwise uses for area assertions -- a shape a near-rectangular
 fixture could not have exposed.
 
+## Nearby-parcel fallback tier
+
+A live Revit 2027 session against a real, non-synthetic property (Issue #31, PH3-4's own manual evidence plan
+step 15) found that the interactive dialog's parcel step could resolve zero parcels even though the confirmed
+point was clearly on one: the US Census geocoder interpolates along the street centreline, so its own point
+commonly lands a few meters into the street frontage or right-of-way, just outside the true parcel's own
+boundary. This section adds a Revit-free two-tier fallback so that case still resolves, without changing
+today's exact point-in-parcel query's own behavior at all -- no scope reduction to the sources or contracts
+described above.
+
+### `NearbyParcelBoundaryFinder` -- the two-tier orchestrator
+
+`SolidGround.Core.Sources.NearbyParcelBoundaryFinder.FindAsync(source, latitude, longitude, radiusMeters =
+DefaultRadiusMeters, cancellationToken)` wraps any `IParcelBoundarySource`:
+
+1. **Tier 1 (unchanged).** The existing exact `ParcelPointQuery`. A non-empty result returns immediately,
+   each candidate wrapped at distance 0 -- tier 2 never runs at all in this case, not merely "runs but its
+   result is unused".
+2. **Tier 2 (new, only on a zero-candidate tier 1).** A `ParcelNearbyQuery(latitude, longitude,
+   radiusMeters)` -- the identical point plus a search radius. Every returned candidate's true distance to the
+   query point is computed (`ParcelBoundaryProximity.DistanceMeters`); anything farther than `radiusMeters` is
+   dropped (a source's own envelope query is a superset -- a square circumscribes the requested circle); the
+   rest are ordered by increasing distance, ties broken stably (`OrderBy` is a documented stable sort), keeping
+   whichever order the source itself returned them in.
+
+`DefaultRadiusMeters` is `30`, a documented constant, not a survey-grade figure: wide enough to comfortably
+cover a geocoded point's typical street-frontage/right-of-way offset from its true parcel, narrow enough that
+a distant, unrelated parcel is never offered as a candidate. `SolidGround.Revit`'s interactive dialog lets an
+operator override it through `addressAndParcel.nearbySearchRadiusMeters` (see
+docs/architecture/revit-interactive-dialog.md's "Nearby-parcel fallback tier"); `SolidGround.Cli`'s own
+`parcel` command does not call this helper in this issue at all (a later follow-up may adopt it) -- its output
+and exit codes are unchanged.
+
+`ParcelProximityCandidate` (`ParcelBoundaryCandidate Candidate`, `double DistanceMeters`) and
+`ParcelProximityAcquisition` (`IReadOnlyList<ParcelProximityCandidate> Candidates`, `bool UsedNearbyTier`) are
+the new result shapes, declared next to `ParcelBoundaryCandidate`/`ParcelBoundaryAcquisition` in
+`Sources/ParcelBoundaryAcquisition.cs`. `UsedNearbyTier` is true whenever tier 2 ran at all, regardless of
+whether it then found anything within the radius -- it means "tier 2 was attempted", not "tier 2 succeeded".
+
+### `ParcelNearbyQuery` -- the new query shape
+
+`Sources/ParcelBoundaryQuery.cs` gains `ParcelNearbyQuery(double Latitude, double Longitude, double
+RadiusMeters) : ParcelBoundaryQuery`, validated exactly like `ParcelPointQuery` (WGS 84 range) plus a
+finite/positive radius. A source that supports it answers with every candidate whose boundary intersects the
+envelope `ParcelBoundaryProximity.ComputeEnvelope` derives -- an unranked, unfiltered-by-true-distance
+superset; ranking and radius filtering are `NearbyParcelBoundaryFinder`'s own job, never each source's own, so
+the two shipped sources can never disagree about what "nearby" means.
+
+### `ParcelBoundaryProximity` -- the shared distance/envelope math
+
+New file `Sources/ParcelBoundaryProximity.cs`, public, not internal (mirrors `ParcelBoundaryWgs84`'s own
+public-not-internal reasoning above: `SolidGround.Core` grants no `InternalsVisibleTo` to
+`SolidGround.Tests`, and this codebase's own tests call these methods directly rather than re-deriving the
+same formulas independently).
+
+- `ComputeEnvelope(latitude, longitude, radiusMeters)` returns a `PlanarEnvelope` (already public and
+  package-neutral, `Aois/PolygonalRegion.cs`) covering a circle of `radiusMeters` centered on the point:
+  meters converted to degrees with `Wgs84Ellipsoid.MetersPerDegreeLatitude`/`.MetersPerDegreeLongitude` (the
+  same factors "Area computation" above already relies on), evaluated at `latitude`, clamped to the valid
+  geographic range rather than ever producing an out-of-range envelope.
+- `DistanceMeters(boundary, latitude, longitude)` is 0 when the point is inside or touching the boundary
+  (`Intersects`, matching the exact query's own boundary-inclusive convention), otherwise: the nearest point
+  on the boundary to the query point is found in raw WGS 84 degree space
+  (`NetTopologySuite.Operation.Distance.DistanceOp.NearestPoints`) -- a *search*, not a measurement, so the
+  anisotropy between a degree of latitude and a degree of longitude does not affect *which* point is nearest
+  at this short range (tens of meters; a parcel boundary is effectively locally flat at that scale). Only
+  that one already-tiny offset is then converted to meters with the same per-degree ellipsoid factors,
+  evaluated at the query point's own latitude, followed by a plain planar (Pythagorean) distance -- a local,
+  equirectangular-style approximation centered on the query point, not a new geodesic/haversine formula, so
+  this introduces no transcendental math beyond what this codebase's own ellipsoid factors already contribute
+  elsewhere (AGENTS.md's numeric-contract rule).
+
+### Per-source implementation
+
+- **`CountyParcelRegistrySource`.** A `ParcelNearbyQuery` builds
+  `geometryType=esriGeometryEnvelope&geometry=<minX>,<minY>,<maxX>,<maxY>&inSR=4326&where=1%3D1` (the
+  simple/compact envelope syntax; ArcGIS REST APIs: Geometry objects, already cited below) from
+  `ParcelBoundaryProximity.ComputeEnvelope`; every other fixed parameter (`outFields`, `returnGeometry`,
+  `outSR`, `spatialRel=esriSpatialRelIntersects`) and every downstream step (error-object/transfer-limit/
+  redaction handling, owner-field stripping) is the same, unmodified code every query type already reaches --
+  no new request-shape or response-handling code exists for this tier beyond building the geometry parameter
+  itself.
+- **`LocalParcelFileSource`.** The identical relevance-before-validation structure `ParcelPointQuery` already
+  has, tested against the query envelope instead of an exact point: a cheap envelope-vs-envelope reject, then
+  the exact NTS `Intersects` test against a rectangle built from the query envelope
+  (`GeometryFactory.ToGeometry(Envelope)`) -- mirroring the county source's own envelope/
+  `esriSpatialRelIntersects` query exactly, so the two sources never disagree about which features are "in
+  scope" for this tier.
+- **`AutoGeoidCountyParcelSource`.** Its point-query auto-GEOID branch now also accepts `ParcelNearbyQuery`
+  (extracting latitude/longitude from either query shape), since `SolidGround.Revit`'s own
+  `IParcelBoundarySource` is this type and both tiers must work through it, not only tier 1. Because
+  `NearbyParcelBoundaryFinder` calls `FindAsync` twice for the identical point when tier 1 misses, this source
+  remembers the single last (point, resolved GEOID) pair it resolved with no configured override and reuses it
+  verbatim for an exact-match second call, instead of asking Census for the same point's county twice; a
+  different point simply misses that single slot and resolves normally.
+
+### Re-check findings, fixed
+
+**`ResultSetTruncated` forwarded to the proximity acquisition (minor).** `NearbyParcelBoundaryFinder.FindAsync`
+used to read only `Candidates` off both the exact-tier and nearby-tier `ParcelBoundaryAcquisition` it received
+from `source.FindAsync`, never their own `ResultSetTruncated` (Esri's `exceededTransferLimit` signal, "Request
+construction and response handling" above) -- and `ParcelProximityAcquisition` itself had no place to put it
+even if it had been read. A county ArcGIS layer configured with an unusually small `maxRecordCount` can
+legitimately truncate the nearby tier's own envelope query (`BuildEnvelopeQueryText` sets no
+`resultRecordCount`, so it is bound only by whatever limit the layer itself enforces); when it does, the
+dialog's shown candidate list could silently omit the operator's true closest parcel, with nothing telling
+either this type or the interactive dialog that the list might be incomplete -- in exactly the
+parcel-confirmation step this whole follow-up exists to make trustworthy. `ParcelProximityAcquisition` now
+carries its own `ResultSetTruncated`, populated from whichever tier's own acquisition actually produced
+`Candidates`: the exact tier's value when it already resolved at least one candidate (tier 2 never ran that
+time), else the nearby tier's value. `SolidGround.Revit`'s own fix (a short caveat sentence appended to the
+dialog's existing nearby-tier notice) is recorded in docs/architecture/revit-interactive-dialog.md's
+"Nearby-parcel fallback tier (follow-up)".
+
+**`IParcelBoundarySource`'s contract now names all three query shapes (minor).** Its own XML doc comment used
+to describe the contract as resolving "a point or an address substring," with no mention that
+`NearbyParcelBoundaryFinder` unconditionally sends whichever `IParcelBoundarySource` it is given a
+`ParcelNearbyQuery` whenever the exact query misses -- making that third query shape a de facto required
+capability, not an optional extra, for any future third `IParcelBoundarySource` implementation. Both shipped
+sources (`CountyParcelRegistrySource`, `LocalParcelFileSource`) already handle it; `CountyParcelRegistrySource.BuildRequestUri`'s
+own default `switch` arm throws `ArgumentOutOfRangeException` for an unrecognized query type, so a future
+implementation that copied that pattern without adding a `ParcelNearbyQuery` case would throw the first time
+this fallback tier ran against it, with no advance notice from the interface's own contract. The doc comment
+now names all three query types and states this dependency explicitly.
+
+### Test evidence (this follow-up)
+
+New: `ParcelBoundaryProximityTests.cs` (the two math primitives, independent of the finder's own
+orchestration); `NearbyParcelBoundaryFinderTests.cs` (tier routing/ordering/radius-drop/tie-stability against
+a fake `IParcelBoundarySource`, plus one real `LocalParcelFileSource`-backed end-to-end case; extended by the
+re-check fix above with a truncated nearby-tier result, a non-truncated one, and -- for symmetry, since a
+single point-in-parcel hit is the ordinary case, not the primary risk this finding named -- a truncated
+exact-tier result that never reaches tier 2). Additive:
+`ParcelBoundaryQueryTests.cs` (`ParcelNearbyQuery` validation), `CountyParcelRegistrySourceTests.cs` (the
+envelope request's exact query string, owner-field/redaction reuse, error-object/transfer-limit reuse, and an
+exact-hit-makes-one-request case using the real source through the finder), `LocalParcelFileSourceTests.cs`
+(the in-memory envelope tier), `AutoGeoidCountyParcelSourceTests.cs` (GEOID auto-resolution for the new query
+shape too, and that a tier-1-then-tier-2 sequence for the identical point reuses the resolved GEOID instead of
+resolving it from Census twice). No new committed fixture: every new test builds its own small WKT/GeoJSON
+literal inline, or reuses the already-committed `local-parcel-file-standard-schema-synthetic.geojson` parcel
+from a point offset by a few meters -- both already-established conventions above. `PersonalInformationGuardTests.cs`,
+`FixtureSecurityTests.cs`, `ParcelFixtureSecurityTests.cs`, and `ArchitectureTests.cs` are untouched.
+
 ## Fixtures
 
 All new fixtures live under `tests/SolidGround.Tests/Fixtures/`, `*-synthetic*` named, and use the address

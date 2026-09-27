@@ -49,6 +49,11 @@ internal static class SolidGroundDialogHost
 
         (RevitIniToposolidThresholds.Thresholds thresholds, string revitIniPath) = ReadRevitIniThresholds(commandData);
 
+        // A settings-file override wins when configured (already validated finite/positive at decode time,
+        // RevitSettingsIo.ParseAddressAndParcel); otherwise Core's own documented default (SolidGround Issue
+        // #31 follow-up's nearby-parcel fallback tier).
+        double nearbySearchRadiusMeters = settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters;
+
         SolidGroundDialogInputs inputs = new(
             geocoder,
             settings.AddressAndParcel.GeocoderProvider,
@@ -64,7 +69,8 @@ internal static class SolidGroundDialogHost
             thresholds,
             revitIniPath,
             settings.Request.NetworkTimeoutSeconds,
-            settings.Request.AreaOfInterest);
+            settings.Request.AreaOfInterest,
+            nearbySearchRadiusMeters);
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         SolidGroundDialog dialog = new(viewModel);

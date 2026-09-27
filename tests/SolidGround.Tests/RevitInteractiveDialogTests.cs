@@ -204,6 +204,10 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("ParcelCandidates = []", methodBody, StringComparison.Ordinal);
         Assert.Contains("SelectedParcelCandidate = null", methodBody, StringComparison.Ordinal);
         Assert.Contains("_parcelLookupAttempted = false", methodBody, StringComparison.Ordinal);
+        // Re-check finding, minor, fixed: ResultSetTruncated is stale parcel state exactly like UsedNearbyTier
+        // (its sibling reset one line above in the real source) -- a truncation caveat left over from an
+        // earlier confirmed point must not linger for a search that has not yet run against the new one.
+        Assert.Contains("ResultSetTruncated = false", methodBody, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -708,6 +712,143 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("viewModel.NextCommand.CanExecuteChanged -= OnNextCommandCanExecuteChanged;", dialogSource, StringComparison.Ordinal);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Nearby-parcel fallback tier (SolidGround Issue #31 follow-up: a geocoded point commonly lands a few
+    // meters outside its true parcel). See docs/architecture/parcel-boundary-sources.md's "Nearby-parcel
+    // fallback tier" and this note's own "Nearby-parcel fallback tier" section.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void FindParcelCallsTheNearbyParcelBoundaryFinderRatherThanTheParcelSourceDirectly()
+    {
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+        string methodBody = ExtractMethodBody(viewModelSource, "private void FindParcel()");
+
+        Assert.Contains("NearbyParcelBoundaryFinder.FindAsync(", methodBody, StringComparison.Ordinal);
+        // The direct, single-tier call this replaced -- must be gone, not merely joined by the new one.
+        Assert.DoesNotContain("parcelSource.FindAsync(", methodBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogViewModelExposesAPublicNearbyTierNoticeTextReferencedFromTheDialog()
+    {
+        // NearbyTierNoticeText is a hand-written computed property bound by a WPF string-Path Binding, so it
+        // must be public, not internal (see SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal,
+        // which already covers this generically -- this test additionally pins the property's own existence
+        // and its use of the resolved, possibly-configured radius rather than a re-hardcoded "30").
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        Assert.Contains("public string? NearbyTierNoticeText", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal string? NearbyTierNoticeText", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("NearbySearchRadiusMeters", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("new Binding(nameof(SolidGroundDialogViewModel.NearbyTierNoticeText))", dialogSource, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Re-check finding, minor, fixed: ParcelProximityAcquisition.ResultSetTruncated (the nearby tier's own
+    // exceededTransferLimit signal) used to be discarded by NearbyParcelBoundaryFinder, so the dialog could
+    // never learn -- or tell the operator -- that the shown nearby-parcel candidate list might be an
+    // incomplete subset of what the county service actually has within the search radius. See
+    // docs/architecture/parcel-boundary-sources.md's "Nearby-parcel fallback tier" and this note's own
+    // "Nearby-parcel fallback tier (follow-up)" section.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void FindParcelSetsResultSetTruncatedFromTheAcquisitionBeforeAssigningParcelCandidates()
+    {
+        // Mirrors UsedNearbyTier's own existing ordering requirement immediately above it in the real source:
+        // ParcelCandidates's setter is what actually re-evaluates NearbyTierNoticeText (via its own
+        // NotifyPropertyChangedFor), and that property's getter reads ResultSetTruncated too, so
+        // ResultSetTruncated must already hold this lookup's own final value by the time ParcelCandidates is
+        // assigned.
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+        string methodBody = ExtractMethodBody(viewModelSource, "private void FindParcel()");
+
+        int truncatedIndex = RequireIndex(methodBody, "ResultSetTruncated = acquisition.ResultSetTruncated;");
+        int candidatesIndex = RequireIndex(methodBody, "ParcelCandidates = new ObservableCollection<ParcelProximityCandidate>(acquisition.Candidates);");
+        Assert.True(truncatedIndex < candidatesIndex, "Expected ResultSetTruncated to be set before ParcelCandidates, mirroring UsedNearbyTier's own ordering.");
+    }
+
+    [Fact]
+    public void NearbyTierNoticeTextAppendsACaveatWhenTheResultSetWasTruncated()
+    {
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+        string propertyText = ExtractExpressionBodyPropertyText(viewModelSource, "public string? NearbyTierNoticeText =>");
+
+        Assert.Contains("ResultSetTruncated", propertyText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParcelProximityAcquisitionResultSetTruncatedIsForwardedFromEitherTier()
+    {
+        // NearbyParcelBoundaryFinderTests.cs proves the runtime behavior against a fake IParcelBoundarySource;
+        // this pins the Core source text directly, since this project never references SolidGround.Core's own
+        // test assembly and this dialog-facing test file otherwise only reads Revit-host source.
+        string path = Path.Combine(RepositoryRoot, "src", "SolidGround.Core", "Sources", "NearbyParcelBoundaryFinder.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string source = File.ReadAllText(path);
+
+        Assert.Contains("resultSetTruncated: exact.ResultSetTruncated", source, StringComparison.Ordinal);
+        Assert.Contains("resultSetTruncated: nearby.ResultSetTruncated", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParcelCandidateTemplateShowsEachCandidatesDistance()
+    {
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+        string templateBody = ExtractMethodBody(dialogSource, "private static DataTemplate BuildParcelCandidateTemplate()");
+
+        Assert.Contains("nameof(ParcelProximityCandidate.DistanceMeters)", templateBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParcelCandidatesAndSelectedParcelCandidateAreTypedAsParcelProximityCandidate()
+    {
+        // The operator must still explicitly select a parcel -- SelectedParcelCandidate is never assigned a
+        // default after a lookup (docs/architecture/revit-interactive-dialog.md "Content model and sections"
+        // step 3) -- this only pins the type change ParcelCandidates/SelectedParcelCandidate needed to carry
+        // each candidate's own distance through to the bound list.
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        Assert.Contains("ObservableCollection<ParcelProximityCandidate> _parcelCandidates", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("ParcelProximityCandidate? _selectedParcelCandidate", viewModelSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RevitAddressAndParcelSettingsDeclaresTheNearbySearchRadiusMetersField()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Settings", "RevitAddressAndParcelSettings.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string source = File.ReadAllText(path);
+
+        Assert.Contains("double? NearbySearchRadiusMeters", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RevitSettingsIoDecodesNearbySearchRadiusMetersAndShipsItInTheTemplate()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Settings", "RevitSettingsIo.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string source = File.ReadAllText(path);
+
+        Assert.Contains("\"nearbySearchRadiusMeters\"", source, StringComparison.Ordinal);
+        string parseBody = ExtractMethodBody(source, "private static RevitAddressAndParcelSettings ParseAddressAndParcel(JsonNode? node)");
+        Assert.Contains("nearbySearchRadiusMeters", parseBody, StringComparison.Ordinal);
+        // The template's own documented default: absent/null means "let Core pick its own default", never a
+        // second, duplicated "30" literal on the Revit side.
+        Assert.Contains("\"nearbySearchRadiusMeters\": null", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogHostResolvesTheConfiguredRadiusOrFallsBackToTheCoreDefault()
+    {
+        string hostSource = ReadDialogFile("SolidGroundDialogHost.cs");
+
+        Assert.Contains("NearbySearchRadiusMeters", hostSource, StringComparison.Ordinal);
+        Assert.Contains("NearbyParcelBoundaryFinder.DefaultRadiusMeters", hostSource, StringComparison.Ordinal);
+    }
+
     private static string ReadAllDialogSourceConcatenated()
     {
         Assert.True(Directory.Exists(DialogDirectory), $"Missing directory: {DialogDirectory}");
@@ -771,6 +912,49 @@ public sealed class RevitInteractiveDialogTests
         }
 
         throw new InvalidOperationException($"Unbalanced braces while extracting the body of '{methodSignature}'.");
+    }
+
+    /// <summary>
+    /// Returns the exact extent of an expression-bodied member (<c>"... =&gt; ...;"</c>, no braces) whose
+    /// signature is <paramref name="propertySignature"/> -- for example <c>"public string? Foo =&gt;"</c> --
+    /// found by counting balanced parentheses from the signature's own end and stopping at the first
+    /// paren-depth-0 <c>;</c> outside of a string literal, the same balanced-counting technique
+    /// <see cref="ExtractMethodBody"/> uses for braces (plus one addition <see cref="ExtractMethodBody"/> does
+    /// not need: a bare <c>"</c> toggles a simple in-string flag, so a <c>;</c>/<c>(</c>/<c>)</c> character
+    /// that is really just part of an interpolated string's own literal text -- for example
+    /// <c>"nearest first; confirm the right one."</c> -- is never mistaken for real code). Used for
+    /// <c>NearbyTierNoticeText</c>, which (unlike <c>FindParcel</c>) has no <c>{ }</c> block for
+    /// <see cref="ExtractMethodBody"/> to find.
+    /// </summary>
+    private static string ExtractExpressionBodyPropertyText(string source, string propertySignature)
+    {
+        int signatureIndex = source.IndexOf(propertySignature, StringComparison.Ordinal);
+        Assert.True(signatureIndex >= 0, $"Expected to find '{propertySignature}'.");
+
+        int depth = 0;
+        bool inString = false;
+        for (int i = signatureIndex; i < source.Length; i++)
+        {
+            char c = source[i];
+            if (c == '"')
+            {
+                inString = !inString;
+            }
+            else if (!inString && c == '(')
+            {
+                depth++;
+            }
+            else if (!inString && c == ')')
+            {
+                depth--;
+            }
+            else if (!inString && c == ';' && depth == 0)
+            {
+                return source[signatureIndex..(i + 1)];
+            }
+        }
+
+        throw new InvalidOperationException($"No terminating ';' found while extracting the expression body of '{propertySignature}'.");
     }
 
     /// <summary>

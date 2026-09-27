@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -94,7 +95,11 @@ internal static class RevitSettingsIo
             "countyGeoidOverride": null,
             "localParcelFilePath": null,
             "localParcelFileSourceLabel": null,
-            "localParcelFileLicenseDisclaimerText": null
+            "localParcelFileLicenseDisclaimerText": null,
+            // Overrides the nearby-parcel fallback tier's own default search radius (30 m), used only when a
+            // geocoded point resolves zero parcels outright. Must be a finite, positive number of meters when
+            // given. Null (the default) uses NearbyParcelBoundaryFinder.DefaultRadiusMeters.
+            "nearbySearchRadiusMeters": null
           },
 
           "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
@@ -297,18 +302,22 @@ internal static class RevitSettingsIo
     /// <summary>
     /// Decodes the "addressAndParcel" top-level section (SolidGround Issue #31, PH3-4). An absent section
     /// decodes to every field at its documented default (<see cref="AddressGeocoderProvider.Census"/>, every
-    /// path/label/disclaimer <see langword="null"/>) rather than being required, so an existing settings file
-    /// written before this section existed still loads unchanged. <c>"census"|"geocodio"|"esri"</c> matches
-    /// <c>SolidGround.Cli.Commands.GeocodeCommand.ParseProvider</c>'s own existing token spelling exactly, but is
-    /// a small, independent switch here, not a shared call -- <c>SolidGround.Revit</c> cannot reference
-    /// <c>SolidGround.Cli</c> (AGENTS.md architecture table).
+    /// path/label/disclaimer/radius <see langword="null"/>) rather than being required, so an existing
+    /// settings file written before this section (or before "nearbySearchRadiusMeters" specifically,
+    /// SolidGround Issue #31 follow-up) existed still loads unchanged. <c>"census"|"geocodio"|"esri"</c>
+    /// matches <c>SolidGround.Cli.Commands.GeocodeCommand.ParseProvider</c>'s own existing token spelling
+    /// exactly, but is a small, independent switch here, not a shared call -- <c>SolidGround.Revit</c> cannot
+    /// reference <c>SolidGround.Cli</c> (AGENTS.md architecture table).
     /// </summary>
-    /// <exception cref="AddressAndParcelDecodeException">"geocoderProvider" is present but not one of the three documented tokens.</exception>
+    /// <exception cref="AddressAndParcelDecodeException">
+    /// "geocoderProvider" is present but not one of the three documented tokens, or "nearbySearchRadiusMeters"
+    /// is present but not finite and positive.
+    /// </exception>
     private static RevitAddressAndParcelSettings ParseAddressAndParcel(JsonNode? node)
     {
         if (node is null)
         {
-            return new RevitAddressAndParcelSettings(AddressGeocoderProvider.Census, null, null, null, null, null);
+            return new RevitAddressAndParcelSettings(AddressGeocoderProvider.Census, null, null, null, null, null, null);
         }
 
         string? providerToken = (string?)node["geocoderProvider"];
@@ -321,13 +330,21 @@ internal static class RevitSettingsIo
                 $"addressAndParcel.geocoderProvider '{providerToken}' is not recognized; it must be one of: census, geocodio, esri."),
         };
 
+        double? nearbySearchRadiusMeters = (double?)node["nearbySearchRadiusMeters"];
+        if (nearbySearchRadiusMeters is { } radius && (!double.IsFinite(radius) || radius <= 0d))
+        {
+            throw new AddressAndParcelDecodeException(
+                $"addressAndParcel.nearbySearchRadiusMeters '{radius.ToString(CultureInfo.InvariantCulture)}' must be finite and positive.");
+        }
+
         return new RevitAddressAndParcelSettings(
             provider,
             (string?)node["countyRegistryPath"],
             (string?)node["countyGeoidOverride"],
             (string?)node["localParcelFilePath"],
             (string?)node["localParcelFileSourceLabel"],
-            (string?)node["localParcelFileLicenseDisclaimerText"]);
+            (string?)node["localParcelFileLicenseDisclaimerText"],
+            nearbySearchRadiusMeters);
     }
 
     /// <summary>Raised only by <see cref="ParseAddressAndParcel"/>, caught by <see cref="TryLoad"/> alone -- never surfaces past this file.</summary>

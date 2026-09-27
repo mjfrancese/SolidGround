@@ -54,4 +54,49 @@ public sealed class ParcelBoundaryQueryTests
         Assert.Equal("100 Example Loop", query.SearchText);
         Assert.IsAssignableFrom<ParcelBoundaryQuery>(query);
     }
+
+    // ------------------------------------------------------------------------------------------------
+    // ParcelNearbyQuery (nearby-parcel fallback tier, SolidGround Issue #31 follow-up: a geocoded point
+    // commonly lands a few meters outside its true parcel). Mirrors ParcelPointQuery's own validation
+    // exactly, plus a radius bound.
+    // ------------------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(double.NaN, -93.603806d, 30d)]
+    [InlineData(90.0001d, -93.603806d, 30d)]
+    [InlineData(-90.0001d, -93.603806d, 30d)]
+    public void ParcelNearbyQueryRejectsAnOutOfRangeOrNonFiniteLatitude(double latitude, double longitude, double radiusMeters)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParcelNearbyQuery(latitude, longitude, radiusMeters));
+    }
+
+    [Theory]
+    [InlineData(41.591194d, double.NaN, 30d)]
+    [InlineData(41.591194d, 180.0001d, 30d)]
+    [InlineData(41.591194d, -180.0001d, 30d)]
+    public void ParcelNearbyQueryRejectsAnOutOfRangeOrNonFiniteLongitude(double latitude, double longitude, double radiusMeters)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParcelNearbyQuery(latitude, longitude, radiusMeters));
+    }
+
+    [Theory]
+    [InlineData(0d)]
+    [InlineData(-1d)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void ParcelNearbyQueryRejectsANonFiniteOrNonPositiveRadius(double radiusMeters)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ParcelNearbyQuery(41.591194d, -93.603806d, radiusMeters));
+    }
+
+    [Fact]
+    public void ParcelNearbyQueryAcceptsThePublicExampleSiteCoordinateAndADocumentedRadius()
+    {
+        var query = new ParcelNearbyQuery(41.591194d, -93.603806d, 30d);
+
+        Assert.Equal(41.591194d, query.Latitude);
+        Assert.Equal(-93.603806d, query.Longitude);
+        Assert.Equal(30d, query.RadiusMeters);
+        Assert.IsAssignableFrom<ParcelBoundaryQuery>(query);
+    }
 }

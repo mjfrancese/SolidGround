@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -513,6 +514,179 @@ public sealed class CountyParcelRegistrySourceTests
             File.Delete(path);
         }
     }
+
+    // ------------------------------------------------------------------------------------------------
+    // ParcelNearbyQuery (nearby-parcel fallback tier, SolidGround Issue #31 follow-up): the same request/
+    // response contract as the point query above, minus the geometry shape itself, reused end to end.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task NearbyQueryBuildsTheDocumentedEnvelopeRequestAndParsesTheFixtureIntoOneCandidate()
+    {
+        string path = WriteTempRegistry(RegistryJson);
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(path);
+            string fixtureBody = ReadFixture("county-parcel-registry-point-hit-synthetic.json");
+            var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.OK, fixtureBody));
+            using var httpClient = new HttpClient(handler);
+            var source = new CountyParcelRegistrySource(httpClient, registry, "99999");
+
+            var envelope = ParcelBoundaryProximity.ComputeEnvelope(41.591194d, -93.603806d, 30d);
+            ParcelBoundaryAcquisition acquisition = await source.FindAsync(
+                new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken);
+
+            HttpRequestMessage sent = Assert.Single(handler.Requests);
+            Assert.Equal(HttpMethod.Get, sent.Method);
+            string expectedUri =
+                "https://parcels.example-county.invalid/arcgis/rest/services/Parcels/FeatureServer/0/query" +
+                "?f=json&outFields=PARCEL_ID,SITUS_ADDR,SUBDIVISION,LOT_NUMBER,BLOCK,PLAT_NUMBER,DEED_BOOK_PAGE,LEGAL,ACRES,ZONING" +
+                "&returnGeometry=true&outSR=4326&spatialRel=esriSpatialRelIntersects" +
+                "&geometryType=esriGeometryEnvelope&geometry=" +
+                $"{FormatCoordinate(envelope.MinX)},{FormatCoordinate(envelope.MinY)}," +
+                $"{FormatCoordinate(envelope.MaxX)},{FormatCoordinate(envelope.MaxY)}" +
+                "&inSR=4326&where=1%3D1";
+            Assert.Equal(expectedUri, sent.RequestUri!.AbsoluteUri);
+            // Same field map as the point query above -- never a wider outFields list, never '*', and no
+            // owner-like field (OwnerFieldNameGuard already rejects one at registry-load time, but this
+            // confirms the request itself carries only the mapped, non-owner fields).
+            Assert.Contains("outFields=PARCEL_ID,SITUS_ADDR,SUBDIVISION,LOT_NUMBER,BLOCK,PLAT_NUMBER,DEED_BOOK_PAGE,LEGAL,ACRES,ZONING", sent.RequestUri.Query);
+            Assert.DoesNotContain('*', sent.RequestUri.Query);
+
+            ParcelBoundaryCandidate candidate = Assert.Single(acquisition.Candidates);
+            Assert.Equal("SYNTHETIC-PARCEL-001", candidate.ParcelId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ANearbyQueryServiceBaseUrlContainingAFakeTokenNeverLeaksItIntoARedactedUriOrExceptionMessage()
+    {
+        const string fakeToken = "fixture-fake-token-nearby-0123456789";
+        string path = WriteTempRegistry(RegistryJsonWithLeadingToken(fakeToken));
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(path);
+            var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.InternalServerError, "boom"));
+            using var httpClient = new HttpClient(handler);
+            var source = new CountyParcelRegistrySource(httpClient, registry, "99999");
+
+            CountyParcelRegistryServerException error = await Assert.ThrowsAsync<CountyParcelRegistryServerException>(
+                () => source.FindAsync(new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken).AsTask());
+
+            Assert.DoesNotContain(fakeToken, error.Message, StringComparison.Ordinal);
+            Assert.NotNull(error.RedactedRequestUri);
+            Assert.DoesNotContain(fakeToken, error.RedactedRequestUri, StringComparison.Ordinal);
+            Assert.Contains("REDACTED", error.RedactedRequestUri, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"error":{"code":400,"message":"Invalid query parameters."}}""")]
+    [InlineData("""{"error":{"code":500,"message":"Internal error."}}""")]
+    public async Task ANearbyQueryReusesTheSameErrorObjectClassification(string errorBody)
+    {
+        string path = WriteTempRegistry(RegistryJson);
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(path);
+            var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.OK, errorBody));
+            using var httpClient = new HttpClient(handler);
+            var source = new CountyParcelRegistrySource(httpClient, registry, "99999");
+
+            await Assert.ThrowsAnyAsync<CountyParcelRegistryException>(
+                () => source.FindAsync(new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken).AsTask());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ANearbyQueryReusesTheExceededTransferLimitHandling()
+    {
+        string path = WriteTempRegistry(RegistryJson);
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(path);
+            var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.OK, ReadFixture("county-parcel-registry-exceeded-transfer-limit-synthetic.json")));
+            using var httpClient = new HttpClient(handler);
+            var source = new CountyParcelRegistrySource(httpClient, registry, "99999");
+
+            ParcelBoundaryAcquisition acquisition = await source.FindAsync(
+                new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken);
+
+            Assert.True(acquisition.ResultSetTruncated);
+            Assert.Single(acquisition.Candidates);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ANearbyQueryWrapsAnHttpRequestExceptionAsTheSameNetworkExceptionThePointQueryDoes()
+    {
+        // SendGetAsync's transport-failure catch blocks branch on nothing query-specific (they wrap whatever
+        // HttpClient.GetAsync itself threw, regardless of which query built the request URI), but this proves
+        // that sharing directly for ParcelNearbyQuery too, rather than trusting it by inspection alone.
+        const string fakeToken = "fixture-fake-token-nearby-transport-0123456789";
+        string path = WriteTempRegistry(RegistryJsonWithLeadingToken(fakeToken));
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(path);
+            var handler = new FakeHttpMessageHandler((HttpRequestMessage request, CancellationToken _) =>
+                throw new HttpRequestException($"Connection dropped while sending request to {request.RequestUri}"));
+            using var httpClient = new HttpClient(handler);
+            var source = new CountyParcelRegistrySource(httpClient, registry, "99999");
+
+            CountyParcelRegistryNetworkException error = await Assert.ThrowsAsync<CountyParcelRegistryNetworkException>(
+                () => source.FindAsync(new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken).AsTask());
+
+            Assert.IsType<HttpRequestException>(error.InnerException);
+            AssertNetworkExceptionNeverLeaksTheToken(error, fakeToken);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task AnExactHitThroughTheNearbyParcelBoundaryFinderMakesExactlyOneRequestToTheCountySource()
+    {
+        string path = WriteTempRegistry(RegistryJson);
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(path);
+            string fixtureBody = ReadFixture("county-parcel-registry-point-hit-synthetic.json");
+            var handler = new FakeHttpMessageHandler((_, _) => TextResponse(HttpStatusCode.OK, fixtureBody));
+            using var httpClient = new HttpClient(handler);
+            var source = new CountyParcelRegistrySource(httpClient, registry, "99999");
+
+            ParcelProximityAcquisition acquisition = await NearbyParcelBoundaryFinder.FindAsync(
+                source, 41.591194d, -93.603806d, cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Single(handler.Requests);
+            Assert.False(acquisition.UsedNearbyTier);
+            Assert.Single(acquisition.Candidates);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static string FormatCoordinate(double value) => value.ToString("R", CultureInfo.InvariantCulture);
 
     private static string ReadFixture(string fileName) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName));
 

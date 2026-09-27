@@ -30,4 +30,5 @@ internal sealed record SolidGroundDialogInputs(
     RevitIniToposolidThresholds.Thresholds RevitIniThresholds,
     string RevitIniPath,
     int NetworkTimeoutSeconds,
-    AoiSettings ConfiguredAreaOfInterest);
+    AoiSettings ConfiguredAreaOfInterest,
+    double NearbySearchRadiusMeters);

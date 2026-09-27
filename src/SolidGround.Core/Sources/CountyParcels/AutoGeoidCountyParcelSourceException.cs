@@ -2,7 +2,8 @@ namespace SolidGround.Core.Sources.CountyParcels;
 
 /// <summary>
 /// Raised by <see cref="AutoGeoidCountyParcelSource"/> itself: either no configured GEOID override was given
-/// and the query was not a <see cref="ParcelPointQuery"/> (nothing to resolve a GEOID from), or the underlying
+/// and the query carries no point coordinates (neither a <see cref="ParcelPointQuery"/> nor a
+/// <see cref="ParcelNearbyQuery"/>) to resolve a GEOID from, or the underlying
 /// <see cref="Census.CensusCountyLookup"/> call raised its own <see cref="Census.CensusCountyLookupException"/>,
 /// wrapped here so a caller that catches the base <see cref="ParcelBoundarySourceException"/> type -- as
 /// <c>SolidGround.Revit</c>'s interactive dialog does -- observes one consistent exception family regardless of

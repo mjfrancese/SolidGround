@@ -124,6 +124,72 @@ public sealed class AutoGeoidCountyParcelSourceTests
     }
 
     [Fact]
+    public async Task BlankOverrideResolvesTheGeoidFromTheCensusCountyLookupForANearbyQueryToo()
+    {
+        // Mirrors BlankOverrideResolvesTheGeoidFromTheCensusCountyLookupThenQueriesTheRegistry above, but for
+        // a ParcelNearbyQuery (SolidGround Issue #31 follow-up): the Revit dialog's own IParcelBoundarySource
+        // is this type, and NearbyParcelBoundaryFinder's own tier 2 must work through it exactly like tier 1.
+        string registryPath = WriteTempRegistry(RegistryJson);
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(registryPath);
+            var handler = new FakeHttpMessageHandler((request, _) => request.RequestUri!.Host switch
+            {
+                CensusEndpointHost => TextResponse(HttpStatusCode.OK, CensusGeoidHitBody),
+                CountyEndpointHost => TextResponse(HttpStatusCode.OK, CountyFeaturesBody),
+                _ => throw new InvalidOperationException($"Unexpected request host '{request.RequestUri!.Host}'."),
+            });
+            using var httpClient = new HttpClient(handler);
+            var source = new AutoGeoidCountyParcelSource(httpClient, registry, geoidOverride: "  ");
+
+            ParcelBoundaryAcquisition acquisition = await source.FindAsync(
+                new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken);
+
+            Assert.Equal(2, handler.Requests.Count);
+            Assert.Equal(CensusEndpointHost, handler.Requests[0].RequestUri!.Host);
+            Assert.Equal(CountyEndpointHost, handler.Requests[1].RequestUri!.Host);
+            Assert.Single(acquisition.Candidates);
+        }
+        finally
+        {
+            File.Delete(registryPath);
+        }
+    }
+
+    [Fact]
+    public async Task BlankOverrideReusesTheResolvedGeoidForASubsequentNearbyQueryAtTheIdenticalPoint()
+    {
+        // Mirrors the exact sequence NearbyParcelBoundaryFinder itself performs when tier 1 (a
+        // ParcelPointQuery) returns zero candidates: it calls FindAsync again on the same IParcelBoundarySource
+        // instance with a ParcelNearbyQuery for the identical coordinates. A blank geoidOverride must resolve
+        // the county GEOID from Census only once in total across both calls, not once per tier.
+        string registryPath = WriteTempRegistry(RegistryJson);
+        try
+        {
+            CountyParcelRegistry registry = CountyParcelRegistry.Load(registryPath);
+            var handler = new FakeHttpMessageHandler((request, _) => request.RequestUri!.Host switch
+            {
+                CensusEndpointHost => TextResponse(HttpStatusCode.OK, CensusGeoidHitBody),
+                CountyEndpointHost => TextResponse(HttpStatusCode.OK, CountyFeaturesBody),
+                _ => throw new InvalidOperationException($"Unexpected request host '{request.RequestUri!.Host}'."),
+            });
+            using var httpClient = new HttpClient(handler);
+            var source = new AutoGeoidCountyParcelSource(httpClient, registry, geoidOverride: "  ");
+
+            await source.FindAsync(new ParcelPointQuery(41.591194d, -93.603806d), TestContext.Current.CancellationToken);
+            await source.FindAsync(new ParcelNearbyQuery(41.591194d, -93.603806d, 30d), TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, handler.Requests.Count(request => request.RequestUri!.Host == CensusEndpointHost));
+            Assert.Equal(2, handler.Requests.Count(request => request.RequestUri!.Host == CountyEndpointHost));
+            Assert.Equal(3, handler.Requests.Count);
+        }
+        finally
+        {
+            File.Delete(registryPath);
+        }
+    }
+
+    [Fact]
     public async Task NoOverrideAndAnAddressQueryThrowsBeforeAnyNetworkCall()
     {
         string registryPath = WriteTempRegistry(RegistryJson);

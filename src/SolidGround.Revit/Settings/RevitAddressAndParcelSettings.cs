@@ -21,10 +21,18 @@ namespace SolidGround.Revit.Settings;
 /// <param name="LocalParcelFilePath">A local GeoJSON parcel export path (see <c>LocalParcelFileOptions.Path</c>), used only when <see cref="CountyRegistryPath"/> is blank.</param>
 /// <param name="LocalParcelFileSourceLabel">A human-readable label for <see cref="LocalParcelFilePath"/> (see <c>LocalParcelFileOptions.SourceLabel</c>).</param>
 /// <param name="LocalParcelFileLicenseDisclaimerText">The local file's own license/disclaimer text, surfaced verbatim (see <c>LocalParcelFileOptions.LicenseDisclaimerText</c>).</param>
+/// <param name="NearbySearchRadiusMeters">
+/// Overrides <see cref="SolidGround.Core.Sources.NearbyParcelBoundaryFinder.DefaultRadiusMeters"/> for this
+/// dialog's own nearby-parcel fallback tier (SolidGround Issue #31 follow-up: a geocoded point commonly lands
+/// a few meters outside its true parcel), or <see langword="null"/> to use that documented default. Must be
+/// finite and positive when given -- <c>RevitSettingsIo</c> validates this at decode time, so every other
+/// reader of this record can trust it is already either <see langword="null"/> or valid.
+/// </param>
 internal sealed record RevitAddressAndParcelSettings(
     AddressGeocoderProvider GeocoderProvider,
     string? CountyRegistryPath,
     string? CountyGeoidOverride,
     string? LocalParcelFilePath,
     string? LocalParcelFileSourceLabel,
-    string? LocalParcelFileLicenseDisclaimerText);
+    string? LocalParcelFileLicenseDisclaimerText,
+    double? NearbySearchRadiusMeters);
