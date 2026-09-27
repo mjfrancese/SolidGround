@@ -1,33 +1,590 @@
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using SolidGround.Core.Aois;
+using SolidGround.Core.Hosting;
+using SolidGround.Core.Processing;
+using SolidGround.Core.Provenance;
+using SolidGround.Core.Sources;
+using SolidGround.Core.Units;
+using SolidGround.Revit.Diagnostics;
 
 namespace SolidGround.Revit.Dialog;
 
 /// <summary>
-/// View-model shell for the interactive Revit-host dialog (SolidGround Issue #31, PH3-4:
-/// docs/architecture/revit-interactive-dialog.md). Deliberately minimal in this stage: a plain
-/// <see cref="ObservableObject"/> subclass (never <c>ObservableRecipient</c>; no
-/// <c>IMessenger</c>/<c>WeakReferenceMessenger</c> anywhere in this feature -- see
-/// docs/architecture/revit-interactive-dialog.md "MVVM shape (and why no messenger)") carrying a single
-/// generator-backed placeholder property, whose only purpose is to prove that
-/// <c>CommunityToolkit.Mvvm</c>'s <c>[ObservableProperty]</c> source generator actually runs against this
-/// project's real <c>net10.0-windows7.0</c>/<c>UseWPF=true</c> build (docs/architecture/revit-interactive-dialog.md
-/// "Package: CommunityToolkit.Mvvm 8.4.2"). The full content model -- address/geocode, parcel, buffer,
-/// point budget, unit, level/toposolid-type, shared-coordinates opt-in, provenance preview, and Preflight
-/// summary, each with its own bound properties and relay commands -- and the synchronous network bridge are
-/// a later stage's own scope, not this one (docs/architecture/revit-interactive-dialog.md "Content model
-/// and sections", "Threading and the network bridge").
+/// View-model for the interactive Revit-host dialog (SolidGround Issue #31, PH3-4: see
+/// docs/architecture/revit-interactive-dialog.md). A plain <see cref="ObservableObject"/> subclass -- never
+/// <see langword="ObservableRecipient"/>; no <c>IMessenger</c>/<c>WeakReferenceMessenger</c> anywhere in this
+/// feature (see "MVVM shape (and why no messenger)") -- so it never depends on the Revit API at all: every
+/// input arrives through <see cref="SolidGroundDialogInputs"/> as a plain Core type or primitive, and every
+/// decision this type makes calls only Core types (<see cref="NamedElevationSelector"/>,
+/// <see cref="NamedSelector"/>, <see cref="LinearDistance"/>, <see cref="RevitIniToposolidThresholds"/>,
+/// <see cref="ParcelBoundaryAoiFactory"/>, <see cref="AddressParcelProvenanceFactory"/>,
+/// <see cref="LatitudeLongitudePointParser"/>). This type itself never references the Revit API; within this
+/// feature, only <see cref="SolidGroundDialog"/> (which reads <c>UIThemeManager.CurrentTheme</c> once, at
+/// construction) and its <see cref="DialogTheme"/> helper are Revit-API-typed.
 /// </summary>
 /// <remarks>
-/// This type is never constructed except by <see cref="SolidGroundDialog"/>'s own shell constructor. It is
+/// This type is never constructed except by a later stage's own <c>SolidGroundDialogHost.ShowModal</c> (not
+/// implemented yet) or this stage's own throwaway, uncommitted local WPF host used for visual iteration. It is
 /// not reachable from <c>CreateToposolidCommand</c>, the ribbon, or any other command in this stage.
 /// </remarks>
 internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 {
+    private readonly SolidGroundDialogInputs _inputs;
+
     /// <summary>
-    /// Stage B placeholder only. A later stage's real content model (docs/architecture/revit-interactive-dialog.md
-    /// "Content model and sections") replaces this with the full set of bound properties named in that
-    /// section; nothing in this codebase reads or writes this property today.
+    /// True only when <see cref="SelectedGeocodeCandidate"/> came from an actual
+    /// <see cref="IAddressGeocoder.GeocodeAsync"/> call; false when the operator entered a "latitude,
+    /// longitude" pair directly (<see cref="LatitudeLongitudePointParser"/>), so
+    /// <see cref="AddressParcelProvenanceFactory.Create"/> never attributes a real geocoding provider to a
+    /// point nobody actually geocoded (docs/architecture/revit-interactive-dialog.md "AOI and provenance:
+    /// two AOI paths, dialog-resolved or settings-driven"). Exposed to the view through
+    /// <see cref="AddressWasGeocoded"/>; changes are manually notified by
+    /// <see cref="NotifyAddressWasGeocodedChanged"/>.
     /// </summary>
+    private bool _addressWasGeocoded;
+
+    /// <summary>The address text actually submitted to <see cref="SolidGroundDialogInputs.Geocoder"/>, or null when <see cref="_addressWasGeocoded"/> is false.</summary>
+    private string? _geocodedAddressText;
+
+    /// <summary>
+    /// The trimmed address text that actually produced whichever candidate is currently confirmed in
+    /// <see cref="SelectedGeocodeCandidate"/> -- set alongside both success branches inside <see cref="Geocode"/>
+    /// (a real geocode, or a validated direct "latitude, longitude" entry) -- compared against the live
+    /// <see cref="AddressText"/> by <see cref="CanGoNext"/>'s <see cref="SolidGroundDialogStep.AddressEntry"/>
+    /// case (review finding, blocker: editing <see cref="AddressText"/> after confirming a candidate, without a
+    /// fresh successful <see cref="Geocode"/>, previously left the stale candidate/parcel pairing reachable all
+    /// the way to <see cref="Create"/>). Deliberately a separate field from <see cref="_geocodedAddressText"/>,
+    /// which is left <see langword="null"/> on the direct-point-entry path by contract -- reusing it here would
+    /// wrongly keep Next disabled forever after a valid direct-point confirmation. Null before any candidate has
+    /// ever been confirmed.
+    /// </summary>
+    private string? _confirmedAddressText;
+
+    /// <summary>
+    /// This dialog's fixed step order when <see cref="AoiSource"/> is <see cref="DialogAoiSource.FindParcel"/>:
+    /// every one of the ten originally designed sections.
+    /// </summary>
+    private static readonly SolidGroundDialogStep[] FindParcelStepOrder =
+    [
+        SolidGroundDialogStep.AoiSourceChoice,
+        SolidGroundDialogStep.AddressEntry,
+        SolidGroundDialogStep.GeocodeCandidates,
+        SolidGroundDialogStep.ParcelCandidates,
+        SolidGroundDialogStep.Buffer,
+        SolidGroundDialogStep.PointBudget,
+        SolidGroundDialogStep.UnitChoice,
+        SolidGroundDialogStep.LevelAndToposolidType,
+        SolidGroundDialogStep.SharedCoordinatesOptIn,
+        SolidGroundDialogStep.ProvenancePreview,
+        SolidGroundDialogStep.PreflightSummary,
+    ];
+
+    /// <summary>
+    /// This dialog's fixed step order when <see cref="AoiSource"/> is <see cref="DialogAoiSource.UseSettingsFile"/>:
+    /// address entry, geocode candidates, parcel candidates, and buffer (steps 1-4) never apply, since the run's
+    /// area of interest is not being resolved interactively at all.
+    /// </summary>
+    private static readonly SolidGroundDialogStep[] SettingsFileStepOrder =
+    [
+        SolidGroundDialogStep.AoiSourceChoice,
+        SolidGroundDialogStep.PointBudget,
+        SolidGroundDialogStep.UnitChoice,
+        SolidGroundDialogStep.LevelAndToposolidType,
+        SolidGroundDialogStep.SharedCoordinatesOptIn,
+        SolidGroundDialogStep.ProvenancePreview,
+        SolidGroundDialogStep.PreflightSummary,
+    ];
+
+    /// <summary>
+    /// The one, small, clearly named place this dialog's AOI-source choice (owner decision 1, implemented
+    /// with its recommended default) actually changes the flow -- everything else in this view-model
+    /// navigates by index into whichever of the two fixed arrays above this property returns, so changing the
+    /// skip rule later means editing only this property and the two arrays above it.
+    /// </summary>
+    internal SolidGroundDialogStep[] ActiveStepOrder =>
+        AoiSource == DialogAoiSource.FindParcel ? FindParcelStepOrder : SettingsFileStepOrder;
+
+    /// <summary>Raised exactly once, by <see cref="Create"/> or <see cref="Cancel"/>, telling the view to close itself.</summary>
+    internal event EventHandler? CloseRequested;
+
+    /// <summary>Exposed read-only so <see cref="SolidGroundDialog"/> can render display-only text (for example the settings-file AOI summary) without duplicating these values as separate bound properties.</summary>
+    internal SolidGroundDialogInputs Inputs => _inputs;
+
+    /// <summary>True once <see cref="FindParcel"/> has completed a lookup that returned zero candidates -- lets the view show docs/architecture/revit-interactive-dialog.md "Content model and sections" step 3's "no parcel boundary was found" message only after a real attempt, never merely because the operator has not searched yet.</summary>
+    private bool _parcelLookupAttempted;
+
+    /// <summary>See <see cref="_parcelLookupAttempted"/>. Manually notified from <see cref="FindParcel"/> (not itself an <c>[ObservableProperty]</c>, since <see cref="_parcelLookupAttempted"/> is plain private state, not bound directly).</summary>
+    internal bool ShowNoParcelCandidatesMessage => _parcelLookupAttempted && ParcelCandidates.Count == 0;
+
+    internal SolidGroundDialogViewModel(SolidGroundDialogInputs inputs)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        _inputs = inputs;
+
+        // Never LengthUnit.Meter (AGENTS.md's two documented foot definitions only); a settings file
+        // configured with Meter falls back to UsSurveyFoot here, same as the design's own documented fallback.
+        _selectedOutputUnit = inputs.PrefilledOutputUnit == LengthUnit.InternationalFoot
+            ? LengthUnit.InternationalFoot
+            : LengthUnit.UsSurveyFoot;
+        _pointBudget = inputs.PrefilledPointBudget;
+
+        // Disabled-and-forced-off when the document already looks coordinated -- the operator cannot enable
+        // what SharedCoordinatesCheckboxEnabled reports as disabled (see the panel builder for the inline
+        // explanatory text this pairs with).
+        _writeSharedCoordinatesIfAbsent = !inputs.DocumentAlreadyHasSharedCoordinates && inputs.PrefilledWriteSharedCoordinatesIfAbsent;
+
+        _selectedLevel = NamedElevationSelector.SelectLowestElevation(inputs.LevelCandidates, inputs.ConfiguredLevelName);
+        _selectedToposolidType = NamedSelector.SelectFirstByOrdinalName(inputs.ToposolidTypeCandidates, inputs.ConfiguredToposolidTypeName);
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Bound state
+    // ------------------------------------------------------------------------------------------------------
+
     [ObservableProperty]
-    private string? _placeholderStatusText;
+    [NotifyCanExecuteChangedFor(nameof(NextCommand), nameof(BackCommand), nameof(CreateCommand))]
+    private SolidGroundDialogStep _currentStep = SolidGroundDialogStep.AoiSourceChoice;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand), nameof(BackCommand))]
+    [NotifyPropertyChangedFor(nameof(ShowFindParcelGeocodedIntro), nameof(ShowFindParcelDirectPointIntro))]
+    private DialogAoiSource _aoiSource = DialogAoiSource.FindParcel;
+
+    // NotifyCanExecuteChangedFor also names NextCommand (review finding, blocker's own recommended companion
+    // fix): CanGoNext's AddressEntry case now also compares AddressText against _confirmedAddressText, so Next's
+    // enabled state must be re-evaluated as the operator types, not only at the next unrelated command
+    // re-evaluation.
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(GeocodeCommand), nameof(NextCommand))]
+    private string _addressText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(GeocodeCommand), nameof(FindParcelCommand))]
+    private bool _isBusy;
+
+    [ObservableProperty]
+    private string? _errorText;
+
+    [ObservableProperty]
+    private ObservableCollection<AddressGeocodeCandidate> _geocodeCandidates = [];
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand), nameof(FindParcelCommand))]
+    private AddressGeocodeCandidate? _selectedGeocodeCandidate;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowNoParcelCandidatesMessage))]
+    private ObservableCollection<ParcelBoundaryCandidate> _parcelCandidates = [];
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
+    private ParcelBoundaryCandidate? _selectedParcelCandidate;
+
+    [ObservableProperty]
+    private double _bufferMeters;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
+    private string? _bufferErrorText;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowPointBudgetWarning))]
+    [NotifyPropertyChangedFor(nameof(PointBudgetWarningText))]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
+    private int _pointBudget;
+
+    [ObservableProperty]
+    private LengthUnit _selectedOutputUnit;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
+    private NamedElevationCandidate? _selectedLevel;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
+    private NamedCandidate? _selectedToposolidType;
+
+    [ObservableProperty]
+    private bool _writeSharedCoordinatesIfAbsent;
+
+    /// <summary>Non-null only after <see cref="Create"/> runs; the caller reads this once <see cref="CloseRequested"/> fires.</summary>
+    [ObservableProperty]
+    private SolidGroundDialogResult? _result;
+
+    // ------------------------------------------------------------------------------------------------------
+    // Read-only, computed state (never itself an [ObservableProperty]; each depends on an
+    // [ObservableProperty] above that already lists it under [NotifyPropertyChangedFor])
+    // ------------------------------------------------------------------------------------------------------
+
+    internal IReadOnlyList<NamedElevationCandidate> Levels => _inputs.LevelCandidates;
+
+    internal IReadOnlyList<NamedCandidate> ToposolidTypes => _inputs.ToposolidTypeCandidates;
+
+    internal bool SharedCoordinatesCheckboxEnabled => !_inputs.DocumentAlreadyHasSharedCoordinates;
+
+    /// <summary>
+    /// Visible exactly when <see cref="PointBudget"/> exceeds this machine's own configured
+    /// <c>NativeToposolidMaxPointThreshold</c> -- the same rule <c>CreateToposolidCommand</c>'s Preflight
+    /// guard applies (<see cref="RevitIniToposolidThresholds.ExceedsNativeThreshold"/>), so ignoring this
+    /// warning and proceeding anyway always leads to the identical predicted Preflight rejection.
+    /// </summary>
+    internal bool ShowPointBudgetWarning => RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds);
+
+    /// <summary>The exact sentence Preflight's own rejection uses (<see cref="RevitIniToposolidThresholds.DescribeExceedance"/>), or null when <see cref="ShowPointBudgetWarning"/> is false.</summary>
+    internal string? PointBudgetWarningText => _inputs.RevitIniThresholds.NativeToposolidMaxPointThreshold is { } native && ShowPointBudgetWarning
+        ? RevitIniToposolidThresholds.DescribeExceedance(PointBudget, native, _inputs.RevitIniPath)
+        : null;
+
+    /// <summary>
+    /// Exposes <see cref="_addressWasGeocoded"/> to the view so the provenance-preview panel
+    /// (<see cref="ShowFindParcelGeocodedIntro"/>, <see cref="ShowFindParcelDirectPointIntro"/>) can
+    /// distinguish a geocoded address from a directly entered "latitude, longitude" pair, even though both
+    /// leave <see cref="AoiSource"/> at <see cref="DialogAoiSource.FindParcel"/> and both leave
+    /// <see cref="SelectedGeocodeCandidate"/> non-null (review finding, major). Manually notified by
+    /// <see cref="NotifyAddressWasGeocodedChanged"/>, since <see cref="_addressWasGeocoded"/> is plain private
+    /// state, not itself an <c>[ObservableProperty]</c>.
+    /// </summary>
+    internal bool AddressWasGeocoded => _addressWasGeocoded;
+
+    /// <summary>
+    /// True exactly when the provenance-preview panel should show the geocoded-address wording: an
+    /// interactive parcel lookup (<see cref="AoiSource"/> is <see cref="DialogAoiSource.FindParcel"/>) whose
+    /// confirmed point actually came from <see cref="AddressWasGeocoded"/>. See
+    /// <see cref="ShowFindParcelDirectPointIntro"/> for the mutually exclusive direct-entry sibling (review
+    /// finding, major: the panel previously showed one unconditional "the confirmed address will be included"
+    /// sentence regardless of this distinction, which is false whenever the operator entered coordinates
+    /// directly -- <see cref="AddressParcelProvenanceFactory.Create"/> never attaches address data in that
+    /// case).
+    /// </summary>
+    internal bool ShowFindParcelGeocodedIntro => AoiSource == DialogAoiSource.FindParcel && AddressWasGeocoded;
+
+    /// <summary>
+    /// True exactly when the provenance-preview panel should show the direct-point-entry wording: an
+    /// interactive parcel lookup whose confirmed point was entered directly as coordinates and never geocoded.
+    /// See <see cref="ShowFindParcelGeocodedIntro"/>.
+    /// </summary>
+    internal bool ShowFindParcelDirectPointIntro => AoiSource == DialogAoiSource.FindParcel && !AddressWasGeocoded;
+
+    /// <summary>
+    /// Manually raises property-change notifications for <see cref="AddressWasGeocoded"/> and its two
+    /// dependent provenance-preview visibility properties -- <see cref="_addressWasGeocoded"/> is plain
+    /// private state, not itself an <c>[ObservableProperty]</c>, so nothing notifies these automatically.
+    /// Called from both assignment sites inside <see cref="Geocode"/>.
+    /// </summary>
+    private void NotifyAddressWasGeocodedChanged()
+    {
+        OnPropertyChanged(nameof(AddressWasGeocoded));
+        OnPropertyChanged(nameof(ShowFindParcelGeocodedIntro));
+        OnPropertyChanged(nameof(ShowFindParcelDirectPointIntro));
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Buffer validation: reuses LinearDistance.Meters's own constructor guard rather than reimplementing it
+    // (docs/architecture/revit-interactive-dialog.md "Content model and sections" step 4).
+    // ------------------------------------------------------------------------------------------------------
+
+    partial void OnBufferMetersChanged(double value)
+    {
+        try
+        {
+            _ = LinearDistance.Meters(value);
+            BufferErrorText = null;
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            BufferErrorText = ex.Message;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Geocode / FindParcel: the synchronous network bridge (docs/architecture/revit-interactive-dialog.md
+    // "Threading and the network bridge"). Deliberately near-duplicated, not shared through a common
+    // higher-order helper -- FindParcel "mirrors this exactly", per that section's own wording, and keeping
+    // both bodies literal and independent is what lets
+    // SolidGroundDialogNetworkLookupsCatchTimeoutAndNeverRethrowInsideTheirOwnMethodBodies check each one on
+    // its own, real merits.
+    // ------------------------------------------------------------------------------------------------------
+
+    private bool CanGeocode() => !IsBusy && !string.IsNullOrWhiteSpace(AddressText);
+
+    [RelayCommand(CanExecute = nameof(CanGeocode))]
+    private void Geocode()
+    {
+        ErrorText = null;
+        string addressText = AddressText.Trim();
+
+        if (LatitudeLongitudePointParser.TryParse(addressText, out double latitude, out double longitude))
+        {
+            // A direct point entry never touches the network at all -- see
+            // docs/architecture/revit-interactive-dialog.md "Content model and sections" step 1: this is what
+            // lets the dialog be exercised offline against the local parcel file source.
+            AddressGeocodeCandidate syntheticCandidate = new(
+                latitude,
+                longitude,
+                FormatCoordinatePair(latitude, longitude),
+                "Coordinates entered directly by the operator; not resolved through any address geocoding provider.");
+            GeocodeCandidates = new ObservableCollection<AddressGeocodeCandidate>([syntheticCandidate]);
+            SelectedGeocodeCandidate = syntheticCandidate;
+            _addressWasGeocoded = false;
+            _geocodedAddressText = null;
+            _confirmedAddressText = addressText;
+            NotifyAddressWasGeocodedChanged();
+            return;
+        }
+
+        if (LatitudeLongitudePointParser.LooksLikeAttemptedCoordinatePair(addressText))
+        {
+            ErrorText = LatitudeLongitudePointParser.CoordinatePairOutOfRangeMessage;
+            return;
+        }
+
+        IsBusy = true;
+        // Review finding (docs/architecture/revit-interactive-dialog.md "Threading and the network bridge"):
+        // a WPF property change alone cannot paint before a blocking call on the same UI thread with no
+        // message loop pumping. This pumps one Render-priority frame explicitly, so IsBusy's visual actually
+        // has a chance to appear before the freeze (Manual Evidence step 1 confirms this live).
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Render);
+        AddInLog.Info(
+            $"Address lookup: Revit will be unresponsive for up to {_inputs.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} " +
+            "second(s) while SolidGround looks up this address.");
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(_inputs.NetworkTimeoutSeconds));
+        try
+        {
+            // IAddressGeocoder.GeocodeAsync returns ValueTask<T>, not Task<T>, so the bridge needs this extra
+            // .AsTask() call before Task.Run -- Task.Run(Func<ValueTask<T>>) would otherwise bind to
+            // Task.Run<TResult>(Func<TResult>) with TResult inferred as ValueTask<T> itself, which does not
+            // compile back down to a plain T (docs/architecture/revit-interactive-dialog.md "Threading and
+            // the network bridge", review finding, blocker, corrected here).
+            AddressGeocodeAcquisition acquisition = Task.Run(
+                    () => _inputs.Geocoder.GeocodeAsync(new AddressGeocodeRequest(addressText), cts.Token).AsTask(),
+                    cts.Token)
+                .GetAwaiter().GetResult();
+            GeocodeCandidates = new ObservableCollection<AddressGeocodeCandidate>(acquisition.Candidates);
+            SelectedGeocodeCandidate = GeocodeCandidates[0];
+            _addressWasGeocoded = true;
+            _geocodedAddressText = addressText;
+            _confirmedAddressText = addressText;
+            NotifyAddressWasGeocodedChanged();
+        }
+        catch (AddressGeocoderException ex)
+        {
+            ErrorText = ex.Message; // Shown inline; never rethrown.
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // Every shipped IAddressGeocoder implementation rethrows the raw, unwrapped
+            // OperationCanceledException/TaskCanceledException -- never its own AddressGeocoderException --
+            // when the caller's own token (cts.Token here) is the one that fired
+            // (docs/architecture/revit-interactive-dialog.md "Threading and the network bridge", review
+            // finding, blocker: CensusGeocoder.cs:98, EsriGeocoder.cs:100, GeocodioGeocoder.cs:95 all
+            // confirmed). Without this clause, that raw exception would escape this method uncaught.
+            ErrorText =
+                $"The address lookup did not complete within {_inputs.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} " +
+                "second(s). Check network connectivity and retry.";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Invalidates any previously found parcel candidates whenever the confirmed geocode candidate changes --
+    /// whether from a fresh <see cref="Geocode"/> call or the operator picking a different existing item from
+    /// the bound <c>GeocodeCandidates</c> list after navigating back -- so <see cref="Create"/> can never pair
+    /// a parcel found for a different location with the address/point actually confirmed (review finding,
+    /// major, see docs/architecture/revit-interactive-dialog.md "MVVM shape (and why no messenger)":
+    /// <see cref="CanGoNext"/>'s <see cref="SolidGroundDialogStep.ParcelCandidates"/> case only checked
+    /// <see cref="SelectedParcelCandidate"/> for non-null, never that it corresponded to the current
+    /// <see cref="SelectedGeocodeCandidate"/>, so a stale parcel/geocode pairing could otherwise reach
+    /// <see cref="Create"/> silently). CommunityToolkit.Mvvm's source generator invokes this automatically on
+    /// every write to <see cref="SelectedGeocodeCandidate"/>, including both call sites inside
+    /// <see cref="Geocode"/> and the <c>GeocodeCandidates</c> list's own two-way-bound selection.
+    /// </summary>
+    partial void OnSelectedGeocodeCandidateChanged(AddressGeocodeCandidate? value)
+    {
+        ParcelCandidates = [];
+        SelectedParcelCandidate = null;
+        _parcelLookupAttempted = false;
+        OnPropertyChanged(nameof(ShowNoParcelCandidatesMessage));
+    }
+
+    private bool CanFindParcel() => !IsBusy && SelectedGeocodeCandidate is not null;
+
+    [RelayCommand(CanExecute = nameof(CanFindParcel))]
+    private void FindParcel()
+    {
+        ErrorText = null;
+
+        if (SelectedGeocodeCandidate is not { } geocodeCandidate)
+        {
+            return;
+        }
+
+        if (_inputs.ParcelSource is not { } parcelSource)
+        {
+            // A configuration problem, not a lookup failure -- reported the first time a parcel lookup is
+            // attempted, never at settings-load time (mirrors how a missing OPENTOPOGRAPHY_API_KEY is only
+            // ever reported, never thrown, at the point a fetch is attempted).
+            ErrorText =
+                "No parcel boundary source is configured for this dialog; set addressAndParcel in the " +
+                "settings file and reopen SolidGround.";
+            return;
+        }
+
+        IsBusy = true;
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Render);
+        AddInLog.Info(
+            $"Parcel lookup: Revit will be unresponsive for up to {_inputs.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} " +
+            "second(s) while SolidGround looks up this parcel.");
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(_inputs.NetworkTimeoutSeconds));
+        try
+        {
+            ParcelPointQuery query = new(geocodeCandidate.Latitude, geocodeCandidate.Longitude);
+            ParcelBoundaryAcquisition acquisition = Task.Run(
+                    () => parcelSource.FindAsync(query, cts.Token).AsTask(),
+                    cts.Token)
+                .GetAwaiter().GetResult();
+            ParcelCandidates = new ObservableCollection<ParcelBoundaryCandidate>(acquisition.Candidates);
+            // No default selection here (docs/architecture/revit-interactive-dialog.md "Content model and
+            // sections" step 3, unlike Geocode's own best-match default): a zero-candidate result is a
+            // normal, non-exceptional outcome, and even a single candidate still requires the operator's own
+            // explicit confirmation.
+            SelectedParcelCandidate = null;
+            _parcelLookupAttempted = true;
+            OnPropertyChanged(nameof(ShowNoParcelCandidatesMessage));
+        }
+        catch (ParcelBoundarySourceException ex)
+        {
+            ErrorText = ex.Message;
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            ErrorText =
+                $"The parcel lookup did not complete within {_inputs.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} " +
+                "second(s). Check network connectivity and retry.";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private static string FormatCoordinatePair(double latitude, double longitude) =>
+        latitude.ToString("F6", CultureInfo.InvariantCulture) + ", " + longitude.ToString("F6", CultureInfo.InvariantCulture);
+
+    // ------------------------------------------------------------------------------------------------------
+    // Navigation
+    // ------------------------------------------------------------------------------------------------------
+
+    private bool CanGoNext() => CurrentStep switch
+    {
+        SolidGroundDialogStep.AoiSourceChoice => true,
+        // Also requires AddressText to still match _confirmedAddressText (review finding, blocker): without
+        // this, editing the address after confirming a candidate -- without a fresh successful Geocode --
+        // left the stale SelectedGeocodeCandidate/SelectedParcelCandidate pairing reachable all the way to
+        // Create, silently building the AOI and AddressParcelProvenance for a different, earlier-confirmed
+        // location than what is currently displayed in the address field.
+        SolidGroundDialogStep.AddressEntry => SelectedGeocodeCandidate is not null && AddressText.Trim() == _confirmedAddressText,
+        SolidGroundDialogStep.GeocodeCandidates => SelectedGeocodeCandidate is not null,
+        SolidGroundDialogStep.ParcelCandidates => SelectedParcelCandidate is not null,
+        SolidGroundDialogStep.Buffer => BufferErrorText is null,
+        SolidGroundDialogStep.PointBudget => PointBudget > 0,
+        SolidGroundDialogStep.UnitChoice => true,
+        SolidGroundDialogStep.LevelAndToposolidType => SelectedLevel is not null && SelectedToposolidType is not null,
+        SolidGroundDialogStep.SharedCoordinatesOptIn => true,
+        SolidGroundDialogStep.ProvenancePreview => true,
+        SolidGroundDialogStep.PreflightSummary => false, // Create replaces Next on the final step.
+        _ => false,
+    };
+
+    [RelayCommand(CanExecute = nameof(CanGoNext))]
+    private void Next()
+    {
+        SolidGroundDialogStep[] order = ActiveStepOrder;
+        int index = Array.IndexOf(order, CurrentStep);
+        if (index < 0 || index >= order.Length - 1)
+        {
+            return;
+        }
+
+        CurrentStep = order[index + 1];
+    }
+
+    private bool CanGoBack() => ActiveStepOrder is [var first, ..] && first != CurrentStep;
+
+    [RelayCommand(CanExecute = nameof(CanGoBack))]
+    private void Back()
+    {
+        SolidGroundDialogStep[] order = ActiveStepOrder;
+        int index = Array.IndexOf(order, CurrentStep);
+        if (index <= 0)
+        {
+            return;
+        }
+
+        CurrentStep = order[index - 1];
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Create / Cancel
+    // ------------------------------------------------------------------------------------------------------
+
+    private bool CanCreate() => CurrentStep == SolidGroundDialogStep.PreflightSummary;
+
+    [RelayCommand(CanExecute = nameof(CanCreate))]
+    private void Create()
+    {
+        if (SelectedLevel is not { } level || SelectedToposolidType is not { } toposolidType)
+        {
+            return;
+        }
+
+        AreaOfInterest? aoi = null;
+        AddressParcelProvenance? addressParcel = null;
+        if (AoiSource == DialogAoiSource.FindParcel)
+        {
+            if (SelectedParcelCandidate is not { } parcelCandidate)
+            {
+                return;
+            }
+
+            aoi = ParcelBoundaryAoiFactory.FromCandidate(parcelCandidate, LinearDistance.Meters(BufferMeters));
+
+            // The caller supplies the clock value -- this view-model is not SolidGround.Core, but it follows
+            // that project's own established convention anyway (CreateToposolidCommand.ReportSuccess's
+            // identical DateTime.UtcNow call), so AddressParcelProvenanceFactory itself stays clock-free and
+            // directly testable with an injected date.
+            addressParcel = AddressParcelProvenanceFactory.Create(
+                DateOnly.FromDateTime(DateTime.UtcNow),
+                _addressWasGeocoded,
+                _inputs.GeocoderProvider,
+                _geocodedAddressText,
+                _addressWasGeocoded ? SelectedGeocodeCandidate : null,
+                parcelCandidate);
+        }
+
+        Result = new SolidGroundDialogResult(
+            AoiSource,
+            aoi,
+            level,
+            toposolidType,
+            SelectedOutputUnit,
+            PointBudget,
+            WriteSharedCoordinatesIfAbsent,
+            addressParcel);
+
+        CloseRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void Cancel()
+    {
+        Result = null;
+        CloseRequested?.Invoke(this, EventArgs.Empty);
+    }
 }
