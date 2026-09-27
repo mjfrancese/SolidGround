@@ -166,14 +166,21 @@ public sealed class RevitHostFilesTests
     }
 
     [Fact]
-    public void CsprojDeclaresNoPackageReferenceBeyondTheTwoCiOnlyNice3PointPackages()
+    public void CsprojDeclaresNoPackageReferenceBeyondTheTwoCiOnlyNice3PointPackagesAndOneUnconditionalCommunityToolkitMvvm()
     {
+        // SolidGround Issue #31 (PH3-4) added the interactive dialog's one real, shipped runtime dependency,
+        // CommunityToolkit.Mvvm, alongside the two pre-existing CI-only Nice3point compile stand-ins -- see
+        // RevitInteractiveDialogTests.cs for the CommunityToolkit.Mvvm-specific placement/version/lock-file
+        // checks (docs/architecture/revit-interactive-dialog.md "Package: CommunityToolkit.Mvvm 8.4.2").
+        // Renamed from this fact's original, narrower name (which asserted exactly the two Nice3point
+        // entries and nothing else) to keep this file's own convention of exact, literal test names.
         XElement root = LoadXmlRoot(CsprojPath);
         string[] includes = [.. root.Descendants("PackageReference").Select(element => (string?)element.Attribute("Include") ?? string.Empty)];
 
-        Assert.Equal(2, includes.Length);
+        Assert.Equal(3, includes.Length);
         Assert.Contains(ExpectedNice3PointRevitApi, includes);
         Assert.Contains(ExpectedNice3PointRevitApiUi, includes);
+        Assert.Contains("CommunityToolkit.Mvvm", includes);
     }
 
     [Fact]

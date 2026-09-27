@@ -45,7 +45,39 @@
       ("MSB3277... The conflict is benign... there is no runtime binding to unify here").
     -->
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+
+    <!--
+      SolidGround Issue #31 (PH3-4): the interactive Revit-host dialog is an actual Window/view-model
+      surface (code-behind only, zero .xaml/BAML; docs/architecture/revit-interactive-dialog.md "Purpose
+      and boundary"), so UseWPF replaces the narrower FrameworkReference this project used while its only
+      WPF need was System.Windows.Media.Imaging for the ribbon icon. Must be set together with deleting the
+      explicit FrameworkReference this project previously declared, in the same change: leaving both in
+      place emits NETSDK1086, which this project's inherited TreatWarningsAsErrors=true above turns into a
+      build failure (confirmed empirically during Issue #31 prep; docs/architecture/revit-interactive-dialog.md
+      "Package: CommunityToolkit.Mvvm 8.4.2").
+    -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <!--
+    SolidGround Issue #31 (PH3-4): the installed .NET 10 SDK's own
+    Sdks\Microsoft.NET.Sdk.WindowsDesktop\targets\Microsoft.NET.Sdk.WindowsDesktop.WPF.props removes the
+    System.IO/System.Net.Http implicit global usings the moment UseWPF=true (its own comment: "Generates
+    implicit global namespace imports file <projectname>.ImplicitGlobalNamespaceImports.cs"; presumably to
+    avoid an unqualified "Path" colliding with System.Windows.Shapes.Path for a project that also uses WPF
+    shapes). Every pre-existing file in this project (AddInLog.cs, RevitSettingsIo.cs, CreateToposolidCommand.cs,
+    and others) relies on File/Directory/Path/Stream/HttpClient/IOException resolving as plain, unqualified
+    Microsoft.NET.Sdk implicit usings, unrelated to this issue's own dialog work; restoring both namespaces
+    here keeps every one of those files compiling with zero source-line changes, rather than adding an
+    explicit `using System.IO;`/`using System.Net.Http;` to each one individually
+    (docs/architecture/revit-interactive-dialog.md "Package: CommunityToolkit.Mvvm 8.4.2"). No file in this
+    project uses System.Windows.Shapes today (confirmed by this same build succeeding with zero warnings), so
+    reinstating System.IO's implicit Path/File/Directory names creates no live ambiguity.
+  -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
+  </ItemGroup>
 
   <!--
     CI-only compile gate. AGENTS.md "Dependency policy": "The Nice3point.Revit.Api.RevitAPI and
@@ -110,14 +142,21 @@
   </Target>
 
   <!--
-    No <UseWPF>: the only WPF surface this milestone needs is System.Windows.Media.Imaging for the
-    ribbon icon (BitmapFrame/ImageSource), confirmed to compile cleanly against a bare FrameworkReference
-    (Issue #13 item 7; verification note "Thin-host design" section). UseWPF stays reserved for when an
-    actual XAML/Window surface exists (AGENTS.md "Revit add-in conventions": "UseWPF is set only once a
-    WPF surface exists").
+    SolidGround Issue #31 (PH3-4): CommunityToolkit.Mvvm supplies the INotifyPropertyChanged/ICommand
+    boilerplate (source-generated [ObservableProperty]/[RelayCommand] members) the interactive dialog's
+    view-model needs, exactly the "small, well-bounded" boilerplate case AGENTS.md's dependency policy
+    asks a package to justify replacing, not a case the standard library alone covers as concisely. MIT
+    licensed, authored by Microsoft/.NET Foundation, confirmed zero transitive package dependencies and no
+    native/BAML content under this project's real net10.0-windows7.0 target moniker
+    (docs/architecture/revit-interactive-dialog.md "Package: CommunityToolkit.Mvvm 8.4.2"). Added
+    unconditionally, in both local and CI (-p:UseRevitReferenceAssemblies=true) builds: unlike the two
+    Nice3point.Revit.Api.* packages above, this is a real, shipped runtime dependency of SolidGround.Revit
+    itself, never a CI-only compile stand-in, so it is never scoped to that condition. Exact-pinned per
+    AGENTS.md's "Dependency policy" ("the agent must pin every package version"); THIRD-PARTY-NOTICES
+    carries its required notice.
   -->
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
   <ItemGroup>
