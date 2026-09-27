@@ -8,8 +8,11 @@ before today's Preflight/transaction. No new command, ribbon button, or panel (P
 `SolidGround.Core` and `SolidGround.Cli` are otherwise untouched except for the small, Revit-free Core
 additions this note names below.
 
-**Status: Stages A, B, C, and D landed; the dialog is wired into `CreateToposolidCommand.Execute`. Stage E's live
-Revit 2027 session then ran and found four defects, all fixed in Stage F.** This note records the whole accepted
+**Status: complete.** Stages A, B, C, and D landed; the dialog is wired into `CreateToposolidCommand.Execute`.
+Stage E's live Revit 2027 session then ran and found four defects, all fixed in Stage F. The full manual
+evidence plan, the nearby-parcel-fallback follow-up, and a private real-property confirmation all finished
+2026-09-27; see "Manual evidence (Revit 2027, 2026-09-27)" below for the executed session's full results and
+the acceptance-criteria table (AC1-AC5, all met). This note records the whole accepted
 design so later stages' code comments can cite its section titles verbatim; every stage below, including Stage
 F's fix pass, has now been carried out:
 
@@ -755,6 +758,11 @@ every test below was confirmed to fail against the pre-Stage-F source and pass a
 
 ## Manual evidence plan
 
+**Status: complete (2026-09-27).** See "Manual evidence (Revit 2027, 2026-09-27)" below for the executed
+session's full results, including the four Stage E/F defects' live re-confirmation, the nearby-parcel-fallback
+verification (step 15's own private finding and its synthetic reproduction), and the private real-property
+confirmation itself (step 15).
+
 **Finalized for AC5 (Stage D); run against a real Revit 2027 process (Stage E), which found four defects fixed
 in Stage F -- see "Stage E live-session findings and Stage F fixes" below.** Follows this repository's existing
 numbered-step convention (for example `docs/architecture/revit-toposolid-creation.md`'s
@@ -1016,6 +1024,146 @@ find) references `ResultSetTruncated`; `NearbyParcelBoundaryFinder.cs` itself is
 produced its `Candidates`. `NearbyParcelBoundaryFinderTests.cs`'s own runtime coverage is recorded in
 docs/architecture/parcel-boundary-sources.md's "Nearby-parcel fallback tier" -- "Test evidence (this
 follow-up)".
+
+## Manual evidence (Revit 2027, 2026-09-27)
+
+Executed against the installed Revit 2027 application (build `27.0.10.13`), the same reference installation
+this repository's other Phase 2/3 manual-evidence sessions cite. Three commits were tested as the session's own
+findings were fixed forward: the pre-Stage-F build (commit `5559ec3`, deployed build id
+`20260927-095754-42dbc8bf`, `SolidGround.Revit.dll` SHA-256 prefix `42DBC8BF...`, `SolidGround.Core.dll` SHA-256
+prefix `B05E3134...`, `CommunityToolkit.Mvvm.dll` SHA-256 prefix `19B2144F...`, signed Valid, `deploy -Verify`
+OK on 7 files); the Stage F fix (commit `149163d`, CI run `36339343482` green, 1585 tests (1579 passing, 6
+skipped, 0 failed), deployed build id `20260927-130531-d9f00d57`, `SolidGround.Revit.dll` SHA-256 prefix
+`D9F00D57...`, `SolidGround.Core.dll` SHA-256 prefix `544B4563...`, signed, `deploy -Verify` OK on 7 files); and
+the nearby-parcel-fallback follow-up (commit `ae12f7c`, CI run `36346923151` green, 1645 tests (1639 passing, 6
+skipped, 0 failed), deployed build id `20260927-150843-98868f29`, `SolidGround.Revit.dll` SHA-256 prefix
+`98868F29...`, `SolidGround.Core.dll` SHA-256 prefix `86D87159...`, signed, `deploy -Verify` OK on 7 files). All
+six of this issue's commits (`348fc71`, `19acf6d`, `bb66acf`, `5559ec3`, `149163d`, `ae12f7c`) are CI-green.
+
+**Method.** Automation acted on Revit's own window and control handles directly (a handle-only method, matching
+`docs/architecture/revit-property-line-and-shared-coordinates.md`'s own Step 14 method), using purpose-built UI
+Automation helpers plus a throwaway, non-repository probe add-in for helper commands (state dumps and a
+"Set Coordinated State" helper), in the same spirit as Issue #30's own Step 14 probe. **Capture limitation.**
+Unlike a native Revit element, this dialog's own WPF client area could not be captured as an image from the
+automation tooling used: `PrintWindow` rendered it either solid black (`PW_RENDERFULLCONTENT`) or solid white
+(no flag), and `CopyFromScreen` failed ("The handle is invalid") from the same process. Every claim below is
+therefore UI Automation state -- control names, `IsEnabled`, `IsOffscreen`, values, and bounding rectangles --
+never a pixel, matching the same limitation "Stage E live-session findings and Stage F fixes" above already
+records. Revit's own licensing reminder was dismissed at each launch during the session; it is unrelated to
+SolidGround or to signing. One Revit process was closed from outside the session during a pause (Revit's own
+journal recorded `ID_APP_EXIT`); no document was modified, and the session continued after relaunching Revit.
+
+**Owner-approved skips.** The owner approved this session on 2026-09-27 ("Go") and accepted three of the manual
+evidence plan's system-wide checks as skipped this session, each with a stand-in: step 7's Windows High
+Contrast toggle stands on `SolidGroundDialogSourceBranchesOnHighContrastAndOnTheRevitUiTheme` ("Tests" above)
+plus the Stage C-era design review, not a fresh live render -- the capture limitation above means this session
+could not have visually confirmed High Contrast legibility either way; step 8's audible Narrator pass stands on
+the same UI Automation name/state tree a screen reader itself consumes, read directly during this session, plus
+`SolidGroundDialogSourceSetsAutomationPropertiesNameOnEveryDeclaredInteractiveControl`'s zero-slack count check;
+and step 12(b)'s live network-disable timeout stands on the existing offline test,
+`SolidGroundDialogNetworkLookupsCatchTimeoutAndNeverRethrowInsideTheirOwnMethodBodies`, which reads
+`Geocode()`/`FindParcel()`'s own real method bodies rather than exercising a real timeout live. Manual evidence
+plan steps 5 and 6 (the Light/Dark theme palettes) are not among these owner-approved skips: a dedicated
+closeout pass exercised both live (see "Theme branches" below); the same capture limitation above means only
+that pass's pixel/color legibility remains unconfirmed, not the theme branches themselves.
+
+**Exploratory pass (commit `5559ec3`) -- four defects found, all fixed in Stage F.** This pass confirmed,
+alongside the four defects "Stage E live-session findings and Stage F fixes" above already records in full:
+modal ownership (Revit's main window `IsWindowEnabled=False` while the dialog is open, `True` again after it
+closes); section 0 defaults to "Find a parcel," with "Use the area in the settings file" offered and its own
+summary accurate; the `FindParcel` path end to end against the committed synthetic example-site fixtures,
+through Create ("SolidGround created the toposolid."), creating `PropertyLine` `317352` (17222.25 sq ft) with
+`sharedCoordinatesWrite.attempted=false` and the exported `addressParcel` populated (geocode half null for a
+direct coordinate entry; parcel half carrying the synthetic fixture's own stable id, legal description, and
+disclaimer); a second run in the same session opening to fresh state (AC5); Cancel closing quietly, with no
+`TaskDialog`, from both the address step and the parcel step after a full forward walk; a misconfigured county
+registry path surfacing its error inline, with no `TaskDialog` and the dialog staying open; a point budget of
+60,000 disabling Next; an already-coordinated document showing the shared-coordinates checkbox disabled, off,
+with its explanation visible; and Esc closing the dialog with no `TaskDialog`.
+
+**Formal run (commit `149163d`, Stage F fix) -- every defect confirmed fixed, no workaround needed.** Repeating
+the `FindParcel` coordinate-entry path: Next enabled immediately after a successful Find (defect A fixed); the
+parcel step showed no zero-candidates message once a candidate was listed (defect C fixed); the provenance
+preview showed only the direct-coordinates sentence, not every conditional sentence at once (defect B fixed);
+the Preflight summary was correct; Create produced "SolidGround created the toposolid." with the same exported
+`addressParcel`/`PropertyLine 317352` shape as the exploratory pass. A second run in the same session (AC5)
+again opened to fresh state; posting Enter to the dialog triggered each step's own primary action (Next on
+step 0, Find on step 1, then Next), confirming `IsDefault` tracks the current step. The point-budget step
+(defect D): 25,000 showed the `Revit.ini` warning text with Next still enabled; 60,000 showed "pointBudget must
+be between 1 and 50000 inclusive." alongside the warning, with Next disabled; 15,000 showed neither (defect D
+fixed); Cancel from this step closed quietly. The settings-file AOI path showed only its own settings-file
+sentence in the provenance preview, and Create produced a toposolid with `propertyLine.created=false` and
+`addressParcel` null. The misconfigured registry again surfaced only its inline error, with no zero-candidates
+message and no `TaskDialog`. The already-coordinated-document checkbox again showed disabled, off, with its
+explanation shown.
+
+**Nearby-parcel-fallback verification (commit `ae12f7c`).** A synthetic point roughly 2.5 m east of the
+synthetic parcel fixture (N1) -- the offline reproduction of the private finding "Nearby-parcel fallback tier
+(follow-up)" above records -- showed the parcel step's new notice, "No parcel contains this point. These
+nearby parcels are within 30 m, nearest first; confirm the right one." -- with the listed candidate reading
+"2.6 m from this point"; the operator still had to select a candidate explicitly, and Create produced
+"SolidGround created the toposolid." A second synthetic point placed exactly inside the parcel fixture showed
+no nearby-tier notice, confirming the fallback engages only when the exact point-in-parcel query finds
+nothing; its own listed candidate read "0.0 m from this point" rather than a phrase that says outright that it
+contains the point -- see "Known limitations" below.
+
+**Private real-property confirmation (manual evidence plan step 15).** Private end-to-end runs against a real
+property (coordinates, and a county-recorded address through the Census geocoder; live terrain fetch; a
+machine-local county registry) passed on `ae12f7c`; no identifying detail is recorded.
+
+**Theme branches (commit `ae12f7c`, same deployed build as above), run last as a closeout gap-check.** A review
+at closeout found that manual evidence plan steps 5 and 6 (Revit's own Light/Dark UI theme) had not yet been
+exercised live, so they were run under the owner's same "Go" for this session, using the synthetic
+example-site scenario and no Create. Toggling Revit's theme needed the Issue #19 theme probe, which is not
+signed, so it was installed for this pass only (its load prompt answered "Load Once," leaving no lasting
+trust), and the machine's `Revit.ini` and `UIState.dat` were backed up first. The pass's first launch crashed
+during Revit's own startup, before any document opened or any SolidGround command ran, with the same
+`ntdll.dll` `0xc0000374` signature as the intermittent Revit 2027 startup crash already documented in
+`docs/architecture/revit-extensible-storage-provenance.md` and
+`docs/architecture/revit-release-packaging-and-signing.md`; a relaunch continued the pass. A theme report taken
+before any change read Dark, following the Windows apps theme, which indicates that the earlier runs in this
+session, made under the same Windows setting, also used the Dark branch. Under Dark, a fresh dialog walked all
+eleven sections forward with no exception: step 3's, step 9's, and step 10's own texts read correctly, and the
+shared-coordinates checkbox showed enabled and off. After stepping back to the level and toposolid-type step,
+both `ComboBox` dropdowns (Level and Toposolid type) opened, listed their item, and collapsed. Cancel from that
+step then closed the dialog quietly, with no `TaskDialog` and Revit's main window re-enabled. Revit's theme was
+then switched to Light, and an identical walk in a fresh dialog produced identical results, again ending in a
+quiet Cancel. The theme was restored afterward and read back as the pre-pass Dark state. Revit had added an
+explicit theme section to `Revit.ini` and had changed `UIState.dat`; both were restored from the pre-pass
+backup and re-verified equal to it. The pass's closing checks matched the rest of the session: Revit closed
+with no save prompt, the probe was uninstalled, the settings file was restored to its original content, the
+default template's hash was unchanged, and `deploy -Verify` passed on all 7 files again. As elsewhere in this
+session, pixel/color legibility was not captured (the capture limitation described above), and Windows High
+Contrast remained an owner-approved skip.
+
+**Session hygiene.** Every dialog/document close answered "Save changes to `Default_I_ENU.rte`?" with No; the
+default template's own hash was unchanged throughout. The probe add-in was uninstalled afterward. The
+machine's settings file, temporarily altered for the session, was restored to its original content, confirmed
+by `deploy -Verify` passing on 7 files at the session's close. The session's own log was checked for secret
+leakage afterward: the API key value itself appeared zero times, and every logged query-string parameter that
+should be redacted was confirmed redacted.
+
+### Acceptance criteria (PH3-4 / Issue #31)
+
+All five of `docs/planning/phase-3-draft-issues.md`'s own PH3-4 acceptance criteria are met, with evidence from
+this note's own sections plus this session:
+
+| # | Criterion | Evidence |
+| --- | --- | --- |
+| AC1 | `UseWPF` is true, the project still compiles under the CI Nice3point reference-assembly gate unchanged, and the dialog contains zero `.xaml` files, verified by a repository check. | Landed Stage B (`UseWPF` true; `RevitProjectContainsNoXamlFiles`, "Tests" above); every one of this issue's six commits, through `ae12f7c`, is CI-green (CI run `36339343482` for `149163d`, `36346923151` for `ae12f7c`, both above). |
+| AC2 | `CommunityToolkit.Mvvm` 8.4.2 is referenced only from `SolidGround.Revit.csproj`; both lock files are updated; the Core-never-references-Revit test passes. | Landed Stage B; `CommunityToolkitMvvmPackageReferenceAppearsInExactlyOneCsprojInTheRepository`, `BothRevitPackageLockFilesContainCommunityToolkitMvvmAtTheApprovedVersion`, `CsprojDeclaresNoPackageReferenceBeyondTheTwoCiOnlyNice3PointPackagesAndOneUnconditionalCommunityToolkitMvvm` ("Tests" above). |
+| AC3 | Only an uncaught failure reaches `Result.Failed`; an in-dialog lookup failure never reaches `Execute`'s top-level catch. | "Result-code mapping" above (structural guarantee plus tests); live-confirmed this session: the misconfigured registry surfaced inline with no `TaskDialog` on both `5559ec3` and `149163d`, and Cancel at every exercised point (the address step, the parcel step, the point-budget step, and the level and toposolid-type step) closed the dialog quietly with no `TaskDialog`. |
+| AC4 | `AutomationProperties` and a HighContrast/SystemColors branch are present on every control. | `SolidGroundDialogSourceSetsAutomationPropertiesNameOnEveryDeclaredInteractiveControl`, `SolidGroundDialogSourceBranchesOnHighContrastAndOnTheRevitUiTheme` ("Tests" above). The High Contrast toggle itself was an owner-approved skip this session ("Manual evidence (Revit 2027, 2026-09-27)" above); it rests on this source check plus the Stage C-era design review, not a fresh live render. |
+| AC5 | A manual-evidence step confirms modal ownership, both theme branches, and the checkbox's default-off state render without exception, and running `CreateToposolidCommand` twice in one session shows clean teardown on repeat invocation. | Met under the owner-accepted reading recorded in "MVVM shape (and why no messenger)" above: this design introduces no messenger at all, so there is no messenger state for a second invocation to leak. Modal ownership, the checkbox's default-off state, and its disabled/explained state on an already-coordinated document are all confirmed above; a second run in the same session opened to fresh state (Find a parcel selected, address empty, Next disabled) on both `5559ec3` and `149163d`. Both theme branches were exercised live in a dedicated closeout pass (see "Theme branches" above): a fresh dialog walked all eleven sections with no exception under both Dark and Light, and the theme was restored and verified afterward; only pixel/color legibility is unconfirmed, because of the capture limitation above. |
+
+## Known limitations
+
+- **Cosmetic (2026-09-27, manual evidence): a parcel that actually contains the queried point reads "0.0 m from
+  this point."** The nearby-parcel-fallback verification's exact-hit regression (see "Manual evidence (Revit
+  2027, 2026-09-27)" above) confirmed the containing case shows no nearby-tier notice, but its own listed
+  candidate still carries the same `DistanceMeters` template text used for a genuine nearby-tier result,
+  reading "0.0 m from this point" rather than a phrase that says outright that it contains the point (for
+  example "contains this point"). Not fixed in this closeout; a low-priority wording follow-up.
 
 ## Non-goals
 
