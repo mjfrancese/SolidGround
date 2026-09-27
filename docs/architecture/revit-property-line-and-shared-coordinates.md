@@ -10,7 +10,7 @@ defensive Core-side geometry cleanup (dedupe/collinear-collapse) this issue's sc
 reaches Revit's `CurveLoop` APIs. Cross-references `docs/architecture/revit-toposolid-creation.md` for the
 shared six-stage command flow, transaction/rollback policy, and dialog helpers this note only amends.
 
-Landed in three stages. **Stage 1** (commit `c81abb1`) added the Revit-free `LocalBoundaryCleaner` and
+Landed in four stages. **Stage 1** (commit `c81abb1`) added the Revit-free `LocalBoundaryCleaner` and
 `LocalBoundaryValidator`'s optional `minimumEdgeLength` parameter in `SolidGround.Core` —
 `src/SolidGround.Core/Exports/LocalBoundaryCleaner.cs` (new) and the additive parameter on
 `LocalBoundaryValidator.Validate` (`src/SolidGround.Core/Exports/LocalBoundaryValidator.cs`) — plus their
@@ -23,7 +23,14 @@ detection proxy misread a brand-new document opened from Revit's own default tem
 because that template ships its survey point already clipped. The decision moved into a pure, Revit-free,
 unit-tested Core function that never reads a "clipped" flag of any kind, and the writer no longer sets one
 either — see "Shared-coordinates detection" and "Why `Write` no longer sets `Clipped`" below, and "Known
-limitations" for the full, plain-English record of the live finding.
+limitations" for the full, plain-English record of the live finding. **Stage 4** (this closeout) completes Step
+14's live Revit 2027 evidence session and corrects a second finding from that same session: the opted-in
+write's own success-dialog/placement-record sentence claimed the project base point, survey point, and site
+location were "otherwise left unchanged," but the session's own log showed `ProjectLocation.SetProjectPosition`
+moves the survey point's own internal `Position` as an intrinsic side effect of that one call, so the claim was
+false, not merely imprecise. The sentence now states the move plainly instead of denying it — see "Post-commit
+reporting" below, "Known limitations" for the full record, and "Manual evidence (Revit 2027, 2026-09-26/27)"
+below for Step 14's complete results.
 
 Every Revit API member below was verified against the installed Revit 2027 `RevitAPI.dll` (FileVersion
 `27.0.10.13`) via `MetadataLoadContext`/`System.Reflection.Metadata` reflection, cross-checked against
@@ -42,7 +49,10 @@ The owner's own instruction on Issue #30: "Regarding #30, go with all recommende
    (see "Manual evidence plan" below, Step 14.6). **Corrected 2026-09-27 (live-evidence fix):** that live
    confirmation found the `unclipped` term misread Revit's own default template as already coordinated; the
    accepted proxy's formula was replaced and no longer reads the survey point's clipped state in any form — see
-   "Shared-coordinates detection" below.
+   "Shared-coordinates detection" below. **Condition met, 2026-09-26/27:** Step 14.6's re-run against the
+   corrected proxy (both an already-coordinated scratch document and the Step 14.5 document's own prior write)
+   confirmed the opt-in correctly refuses in both cases; see "Manual evidence (Revit 2027, 2026-09-26/27)"
+   below.
 2. **The value written, when opted in, is the terrain's own local-frame source origin at zero rotation** — the
    same coordinate already in the placement record's `localOrigin.sourceX`/`sourceY`/`sourceElevation`. Zero
    rotation means SolidGround treats the terrain's projected grid north as Revit's true north: no
@@ -437,6 +447,20 @@ point's own internal-coordinate `Position` away from `(0,0,0)` at all — confir
 own doc comment, and the exact mechanism "Why `Write` no longer sets `Clipped`" below relies on. A proxy that
 looked at the survey point alone would miss that case entirely; this one does not.
 
+**Corrected 2026-09-26/27 (live-evidence fix, Stage 4):** manual evidence Step 14.5's re-run (see "Manual
+evidence (Revit 2027, 2026-09-26/27)" below) found that `SetProjectPosition` — the exact call
+`SharedCoordinatesWriter.Write` issues — does move the survey point's own internal `Position`, from `(0,0,0)`
+to the negative of the newly written coordinates, as an intrinsic side effect of that one call.
+`BasePoint.SharedPosition`'s doc comment (a member this note's own API-surface table above does not list,
+unlike `.Position`) does not, therefore, support reading `SetProjectPosition` as a mechanism that sets shared
+coordinates without ever moving the survey point's `Position`; that specific example is withdrawn. The proxy
+remains strictly stronger for a reason independent of it: testing the active `ProjectPosition` directly, rather
+than inferring coordination from the survey point's `Position` alone, means detection does not depend on
+whether a given mechanism happens to move `Position` as a side effect the way `SetProjectPosition` now
+demonstrably does — Revit's own "Specify Coordinates at Point" and Acquire Coordinates commands have not been
+separately verified against this document's own live evidence, and this proxy relies on neither behaving one
+way or the other.
+
 **Caveats the owner accepted knowingly (owner decision 1), reduced but not eliminated by this fix:** a user can
 manually run "Specify Coordinates at Point" (moving the project position, the survey point, or both) without
 ever truly acquiring or publishing coordinates from a real survey, so this remains a heuristic, not a certified
@@ -454,6 +478,14 @@ SolidGround's own prior write would be self-defeating: `SetProjectPosition` chan
 transform, not the survey point's own internal-coordinate `Position` (confirmed by `BasePoint.SharedPosition`'s
 own doc comment), so the survey point's `Position` would most likely still read `(0,0,0)` afterward, and the
 pre-2026-09-27 proxy depended on `Clipped` alone to notice the change.
+
+**Further corrected 2026-09-26/27 (live-evidence fix, Stage 4):** the premise above — that `SetProjectPosition`
+leaves the survey point's own internal-coordinate `Position` unchanged — is itself now known false. Manual
+evidence Step 14.5's re-run (see "Manual evidence (Revit 2027, 2026-09-26/27)" below) found `Position` moves
+from `(0, 0, 0)` to the negative of the newly written east-west/north-south as an intrinsic side effect of that
+same call. This does not revive the pre-2026-09-27 reasoning for setting `Clipped`, and the conclusion below is
+unchanged: the corrected proxy still does not depend on `Clipped`, because it reads the genuinely non-zero
+`ProjectPosition` `Write` leaves behind directly, regardless of whether `Position` also moves alongside it.
 
 The corrected proxy above no longer needs any such marker: `Write`'s own `SetProjectPosition` call leaves a
 genuinely non-zero, real `ProjectPosition` behind — that is the entire point of the write — so a subsequent
@@ -653,6 +685,16 @@ path. When `true`, it skips `Unchanged`'s comparison (which would otherwise misr
 fires, or a new sentence naming that SolidGround wrote shared coordinates this run, when it does — and the
 success dialog's own body text is now built from that same `draft.SharedCoordinatesStatement` field instead of
 carrying a second, independent, hardcoded copy of the disclaimer sentence, so the two can never drift apart.
+**Corrected 2026-09-26/27 (live-evidence fix, Stage 4).** Through this closeout, the written-branch sentence
+additionally claimed the project base point, survey point, and site location were "otherwise left unchanged."
+Manual evidence Step 14.5's re-run log showed that is false: `ProjectLocation.SetProjectPosition` moves the
+survey point's own internal `Position` from `(0, 0, 0)` to the negative of the newly written east-west/
+north-south as an intrinsic side effect of that one call (see "Why `Write` no longer sets `Clipped`" above for
+the related, already-corrected `Clipped` behavior — this is the survey point's `Position`, a different member).
+The sentence now reads: "SolidGround wrote this run's terrain origin as this model's shared coordinates
+(sharedCoordinates.writeIfAbsent). Revit moved the survey point to the new shared origin as part of that write;
+SolidGround made no other change to the project base point or site location." The off-path (opt-in never fired)
+sentence is untouched.
 
 The success dialog also states the `PropertyLine` outcome, computed at render time from `draft.PropertyLine`
 (the same structural field `BuildPlacementDraft` already threads through), placed as its own line immediately
@@ -875,6 +917,13 @@ API at all):
 - `SharedCoordinatesWriterNeverSetsTheSurveyPointsClippedProperty` (2026-09-27 live-evidence fix) — the
   companion guard: slices out the `SharedCoordinatesWriter` class body (from its own class declaration to end of
   file) and asserts `.Clipped` does not appear anywhere in that slice either.
+- `SharedCoordinatesStatementAccuratelyDescribesTheSurveyPointMove` (2026-09-26/27 live-evidence fix, Stage 4)
+  — asserts the old, inaccurate "the project base point, survey point, and site location were otherwise left
+  unchanged" substring is absent from `CreateToposolidCommand.cs`, that the corrected sentence's "Revit moved
+  the survey point to the new shared origin as part of that write" and "SolidGround made no other change to
+  the project base point or site location." both appear, and that the off-path (opt-in never fired) sentence
+  is unchanged — the same falsifiable, plain-text technique as the two guards immediately above, for the same
+  reason (a test assembly that cannot reference the Revit API).
 
 Each of these three checks above (`CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting`,
 `CreateToposolidCommandCatchesSharedCoordinatesWriteExceptionAlongsideItsSiblings`, and
@@ -896,9 +945,15 @@ code and only pass once each class stopped referencing the property. The 2026-09
 added to `SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated` above were verified live,
 in the ordinary red-then-green sense: added while `CreateToposolidCommand.cs` still carried the pre-fix message,
 confirmed failing (`Assert.DoesNotContain` found `"is clipped"`), then confirmed passing once the message was
+corrected. `SharedCoordinatesStatementAccuratelyDescribesTheSurveyPointMove` was verified the same way during
+this closeout: added while the sentence still read "otherwise left unchanged" (confirmed failing — the
+`Assert.DoesNotContain` assertion found the old substring), then confirmed passing once the sentence was
 corrected.
 
 ## Manual evidence plan — Step 14 (continues Steps 1-8b, 9-13; settles AC4)
+
+**Status: complete (2026-09-26/27).** See "Manual evidence (Revit 2027, 2026-09-26/27)" below for the executed
+session's full results, including the 14.5 finding, its fix, and the 14.5/14.6 re-run.
 
 Run first in `process` mode against the committed `example-site-synthetic.*` fixtures (opt-in off), then
 repeated with `sharedCoordinates.writeIfAbsent: true` against (a) a brand-new document and (b) a document
@@ -965,6 +1020,125 @@ already run once, by hand, through Revit's own "Specify Coordinates at a Point" 
 Record every dialog verbatim, matching the dialog-verbatim discipline `revit-toposolid-creation.md`'s own
 Steps 5/7/8 establish.
 
+## Manual evidence (Revit 2027, 2026-09-26/27)
+
+Executed against the installed Revit 2027 application (build `27.0.10.13`), the same reference installation
+this note's API-surface table above was verified against. Two builds were tested: the pre-fix Stage 2 build
+(commit `842cadc`, deployed build id `20260926-203758-fbd1280f`, `SolidGround.Revit.dll` SHA-256
+`FBD1280FC4E938E0B3C885716BD9065DC989219119B3D41E20EE97025CD55DF1`, `SolidGround.Core.dll` SHA-256
+`6E754B81317745A4043956D3680BC23294614F38A019E23F897E88DEB56C860B`, signed Valid/timestamped, `deploy -Verify`
+OK on 6 files) and the fixed Stage 3 build (commit `2ffc101`, CI run `36291195288` green, deployed build id
+`20260926-222218-d44e7bcc`, `SolidGround.Revit.dll` SHA-256
+`D44E7BCCEAFF72A002B2C126E2A7C35FAD6237D488927B36BE1ECD7FABAC9CEB`, `SolidGround.Core.dll` SHA-256
+`D091922335D24E8D0B0A65DF62DD394E0238206775E822F7E29F96A9EC08A729`, signed Valid, `deploy -Verify` OK). The
+default template `Default_I_ENU.rte` (SHA-256 `1e7520d6...d000c4cd`) was confirmed unchanged after every close
+during the session.
+
+**Method.** Automation acted on Revit's own window and control handles directly (a handle-only method), never
+simulated keystrokes into a menu. A throwaway probe add-in (`SolidGroundStep14Probe`, build `d27b5870`, kept
+entirely outside this repository) exposed its own dedicated ribbon tab ("SG Step14") for helper commands —
+state dumps, Undo/Redo triggers, and a scripted "Specify Coordinates at a Point" stand-in — because Revit's
+built-in External Tools pulldown is not UI-Automation reachable. No computer-use window or other Revit version
+was active on the desktop during the session. An Autodesk licensing notice had to be dismissed at each Revit
+launch during the session; it is unrelated to SolidGround or to signing.
+
+**Step order.** 14.3 (Undo/Redo) was run before 14.2 (Save/Reopen), reversing the plan's own listed order,
+because closing the document clears the Undo stack — running Save/Reopen first would have made 14.3
+unobservable. The probe's own "Reopen Document" helper could not substitute for a real close/reopen at 14.2
+either: Revit's API reports "The active document may not be closed from the API." Reopening was instead done
+by closing Revit gracefully and launching a fresh process against the saved `.rvt` file.
+
+**14.1 (baseline creation, opt-in off) — PASS, both branches.** **1a (parcel AOI):** both a `Toposolid`
+(element id `317345`) and a `PropertyLine` (element id `317352`) were created; the success dialog showed the
+element-id form of the property-line statement, and the placement record's `propertyLine.created` was `true`
+with a matching `elementId`/`areaInternal` (area `17222.252111310587` sq ft internal, consistent with the
+synthetic parcel's ~1,600 m², `IsClosedLoop=True`).
+Both Revit-native-tolerance log lines appeared: Stage 1 (Document Preflight) logged
+`Application.ShortCurveTolerance=0.0025602645572916664` and `Application.VertexTolerance=0.0005233832795` (raw
+internal feet); Stage 3 (Geometry Preflight) separately logged the run's own converted-to-`usSurveyFoot`
+cleanup tolerances (`vertex=0.000523382232733441`, `minimumEdgeLength=0.005120518873525104`). **1b
+(bounding-box and radius AOI):** a `Toposolid` was created for each (element ids `317371` and `317379`) with
+no `PropertyLine`, no Preflight/transaction problem of any kind, the success dialog's "not created" sentence
+verbatim, and `propertyLine: {"created": false}` with no `elementId`/`areaInternal`; a state dump after all
+three 14.1 runs read `Toposolids=3, PropertyLines=1`.
+
+**14.3 (Undo/Redo, run before 14.2 — see "Step order" above) — PASS.** Two Undo operations removed the two 1b
+`Toposolid`s one at a time (down to `Toposolids=1, PropertyLines=1` — 1a's own pair); a third Undo then removed
+the 1a `Toposolid` and `PropertyLine` together as a single Undo entry (down to `0`/`0` overall), confirming
+they share one Undo entry; Redo restored the 1a pair together, reproducing the same `PropertyLine` element id
+(`317352`) and area. A read-only probe state dump does not itself clear the Redo stack.
+
+**14.2 (Save/Reopen) — PASS.** `SaveAs` (by API) left `IsModified=False`; after a graceful close and a fresh
+Revit process opened against the saved file (see "Step order" above for why this substituted for an in-process
+reopen), the `PropertyLine` (`317352`) and its area were unchanged and exactly one `Toposolid` remained.
+
+**14.4 (rejected boundary, parcel AOI only) — PASS, as predicted.** The engineered self-intersecting
+multi-polygon parcel fixture was rejected by Core's own parcel-validity check before any transaction opened
+("SolidGround could not acquire terrain data."); element counts were unchanged (`1`/`1`). A direct probe call
+confirmed `PropertyLine.IsValidBoundary` returns `False` for the overlapping-squares fixture and `True` for a
+disjoint control fixture.
+
+**14.5 (opt-in write against a never-coordinated document) — FAIL on the pre-fix build, PASS after the fix.**
+Against the pre-fix build (`842cadc`), a brand-new document opened from `Default_I_ENU.rte` read
+`ActiveProjectLocation.GetProjectPosition(XYZ.Zero)` as all zero, survey point `Position=(0, 0, 0)`,
+`ProjectLocations.Size=1`, and survey point `Clipped=True`; the pre-fix proxy's `!surveyPoint.Clipped` term
+made `LooksAlreadyCoordinated` return `True` for this genuinely uncoordinated document, and Preflight refused
+the opt-in on exactly the case it exists to allow (the finding "Purpose and status" and "Known limitations"
+above already record). Fixed in commit `2ffc101`. Re-run against the fixed build on an equivalent fresh
+document: PASS. Preflight logged the identical before-state (`Clipped` no longer read) with
+`LooksAlreadyCoordinated=False`; the run proceeded, and the write logged "SolidGround wrote shared coordinates
+this run: EastWest=1475308.3989501311, NorthSouth=15106833.98950131, Elevation=0 (decimal feet)" — the example
+site's own local origin converted to decimal feet (`449674` m / `0.3048`, `4604563` m / `0.3048` exactly).
+`ProjectPosition.Angle` round-tripped as exactly `0`. The placement record recorded `sharedCoordinatesWrite`
+`{"attempted":true,"eastWest":449674,"northSouth":4604563,"elevation":0,"angleInternal":0,"horizontalUnit":
+"meter","verticalUnit":"meter","verified":true}` — the example-site written values, verified.
+`SharedCoordinatesWriter.VerifyWritten`'s read-back matched on the first attempt.
+
+The same re-run surfaced the second finding this closeout fixes: the survey point's own internal `Position`
+read `(0, 0, 0)` before the write and `(-1475308.3989501311, -15106833.98950131, 0)` afterward — still
+`Clipped=True` throughout — confirming `ProjectLocation.SetProjectPosition` moves the survey point as an
+intrinsic side effect. The success dialog shown during this run accordingly read the pre-fix sentence verbatim:
+"SolidGround wrote this run's terrain origin as this model's shared coordinates (sharedCoordinates.writeIfAbsent);
+the project base point, survey point, and site location were otherwise left unchanged." — false, given the
+survey-point move just observed. "Post-commit reporting" above records the corrected sentence this closeout
+ships instead.
+
+**14.6 (opt-in refusal against an already-coordinated document) — PASS, both sub-tests.** **Sub-test A (fresh
+document, coordinated by an API test helper):** the probe's "Set Coordinated State" helper wrote
+`ProjectPosition(100, 200, 5, 0)` and moved the survey point to `(-100, -200, -5)` (`ProjectLocations.Size` `1`
+→ `2`); the opted-in run then correctly refused at Preflight (`LooksAlreadyCoordinated=True`), created nothing,
+and left `ProjectPosition`, the survey point, and `ProjectLocations.Size=2` unchanged. **Sub-test B (the Step
+14.5 document, SolidGround's own prior write, not a manual UI action):** the opted-in run again correctly
+refused ("SolidGround Preflight found a problem." … "a non-zero shared project position or angle, a moved
+survey point, or more than one project location"), with `LooksAlreadyCoordinated=True` logged from the
+non-zero position left by 14.5's own write, and the document's shared coordinates unchanged (same
+`EastWest`/`NorthSouth`, `Angle=0`, still one `Toposolid`). Together these empirically confirm the corrected
+detection proxy for both a manually-coordinated document and SolidGround's own prior write.
+
+**14.7 (private real-property confirmation).** A private end-to-end run against a real property (live
+OpenTopography fetch, parcel boundary from a machine-local county registry, opt-in off) passed on both the
+pre-fix and fixed builds. No location, county, parcel id, area, coordinates, file path, or screenshot is
+recorded here or elsewhere in this repository.
+
+**Session hygiene.** Every close answered "Save changes to `Default_I_ENU.rte`?" with No; the template hash
+was unchanged throughout (see above). The probe add-in was uninstalled afterward (its manifest and versioned
+folder removed). The machine's settings file (temporarily altered for the session) was restored to its
+original content. A final `deploy -Verify` passed. The session's own log was checked for secret leakage
+afterward: the API key value itself appeared zero times; its two logged markers were confirmed redacted.
+
+### Decisions recorded from evidence (2026-09-26/27)
+
+- **AC4 (the shared-coordinates detection proxy) is settled.** Step 14.5's re-run and Step 14.6's two
+  sub-tests together confirm the corrected, `Clipped`-free proxy: it no longer misdetects a brand-new
+  default-template document as already coordinated (14.5), and it still correctly refuses on both a
+  manually-coordinated document and SolidGround's own prior write (14.6). Owner decision 1's condition above is
+  met.
+- **The `sharedCoordinatesStatement` wording defect Step 14.5 surfaced is fixed in this closeout**, not left as
+  a known limitation: the opted-in sentence no longer denies the survey-point move Step 14.5's own session
+  recorded; see "Post-commit reporting" above for the corrected sentence and
+  `SharedCoordinatesStatementAccuratelyDescribesTheSurveyPointMove` (in "Tests" above) for its regression guard.
+- **Step 14 is complete; no further manual evidence is pending for Issue #30 (PH3-3).**
+
 ## Known limitations
 
 - **Live finding (2026-09-27, Revit 2027 build `27.0.10.13`, manual evidence Step 14.5): the original detection
@@ -978,13 +1152,23 @@ Steps 5/7/8 establish.
   `SolidGround.Core.Transformations.SharedCoordinateDetection.LooksAlreadyCoordinated`, which never takes a
   "clipped" flag of any kind, and `SharedCoordinatesWriter.Write` no longer sets one either — see
   "Shared-coordinates detection" and "Why `Write` no longer sets `Clipped`" above for the corrected design.
+- **Live finding (2026-09-26/27, Revit 2027 build `27.0.10.13`, manual evidence Step 14.5 re-run): the opted-in
+  write's own success-dialog/placement-record sentence inaccurately claimed the survey point was left
+  unchanged.** The same re-run that confirmed the fix above also showed the survey point's own internal
+  `Position` moves from `(0, 0, 0)` to the negative of the newly written east-west/north-south as an intrinsic
+  side effect of `ProjectLocation.SetProjectPosition` — yet the sentence shown that run still read "...the
+  project base point, survey point, and site location were otherwise left unchanged," which is false. Fixed in
+  this closeout: the sentence now states the move plainly instead of denying it — see "Post-commit reporting"
+  above for the corrected wording and "Manual evidence (Revit 2027, 2026-09-26/27)" above for the finding.
 - **The shared-coordinates detection proxy remains a heuristic, not a certified fact** (owner decision 1,
   narrowed by the 2026-09-27 fix above): a user who manually runs "Specify Coordinates at Point" (moving the
   project position, the survey point, or both) without ever truly acquiring/publishing coordinates from a real
   survey is indistinguishable from a genuinely coordinated document; the theoretical acquire-at-exactly-the-
   origin-and-zero-rotation case would still produce a false negative, though it now requires every one of the
   corrected proxy's four signals to simultaneously read as "uncoordinated," rather than depending on one single
-  flag the way the pre-2026-09-27 proxy did. Accepted subject to Step 14.6's live confirmation.
+  flag the way the pre-2026-09-27 proxy did. Accepted subject to Step 14.6's live confirmation, which passed
+  2026-09-26/27 against both a manually-coordinated document and SolidGround's own prior write — see "Manual
+  evidence (Revit 2027, 2026-09-26/27)" above.
 - **`ProjectPosition.Angle` is always `0`; grid-convergence correction is not computed.** See "Zero rotation,
   stated plainly" above; a model's true-north rotation carries whatever error the site's distance from its UTM
   zone's central meridian implies.

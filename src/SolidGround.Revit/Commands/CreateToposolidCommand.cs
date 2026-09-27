@@ -1009,7 +1009,14 @@ public sealed class CreateToposolidCommand : IExternalCommand
             revitCoordinates,
             sharedCoordinatesWritten is null
                 ? "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run."
-                : "SolidGround wrote this run's terrain origin as this model's shared coordinates (sharedCoordinates.writeIfAbsent); the project base point, survey point, and site location were otherwise left unchanged.",
+                // 2026-09-27 live-evidence fix (manual evidence Step 14.5 re-run): the prior sentence claimed
+                // the survey point was "otherwise left unchanged," but the same live session's log showed
+                // ProjectLocation.SetProjectPosition moves the survey point's own internal Position from
+                // (0, 0, 0) to the negative of the newly written east-west/north-south as an intrinsic side
+                // effect of that one Revit API call -- see docs/architecture/revit-property-line-and-shared-coordinates.md's
+                // "Why Write no longer sets Clipped" section. The sentence below states that move plainly
+                // instead of denying it.
+                : "SolidGround wrote this run's terrain origin as this model's shared coordinates (sharedCoordinates.writeIfAbsent). Revit moved the survey point to the new shared origin as part of that write; SolidGround made no other change to the project base point or site location.",
             pointCounts,
             extensibleStorage,
             propertyLineRecord,

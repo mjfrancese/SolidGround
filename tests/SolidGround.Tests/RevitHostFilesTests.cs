@@ -810,6 +810,36 @@ public sealed class RevitHostFilesTests
         Assert.DoesNotContain(".Clipped", writerBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SharedCoordinatesStatementAccuratelyDescribesTheSurveyPointMove()
+    {
+        // 2026-09-27 live-evidence fix (manual evidence Step 14.5 re-run): the opted-in write's own
+        // dialog/placement-record sentence previously claimed "the project base point, survey point, and
+        // site location were otherwise left unchanged" -- but the same live session's own log showed
+        // ProjectLocation.SetProjectPosition moves the survey point's own internal Position from (0, 0, 0)
+        // to the negative of the newly written east-west/north-south as an intrinsic side effect of that
+        // one Revit API call (docs/architecture/revit-property-line-and-shared-coordinates.md's "Why Write
+        // no longer sets Clipped" section). The old sentence was false, not merely imprecise. This
+        // backstops the corrected sentence and guards against the old, inaccurate claim ever coming back.
+        string source = ReadCreateToposolidCommandSource();
+
+        Assert.DoesNotContain(
+            "the project base point, survey point, and site location were otherwise left unchanged",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            "Revit moved the survey point to the new shared origin as part of that write",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            "SolidGround made no other change to the project base point or site location.",
+            source, StringComparison.Ordinal);
+
+        // The off (opt-in never fired) path's own sentence is a separate, unrelated branch untouched by
+        // this fix -- only the opted-in, shared-coordinates-written branch's wording was ever wrong.
+        Assert.Contains(
+            "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
+            source, StringComparison.Ordinal);
+    }
+
     private static string ReadSharedCoordinatesGateSource()
     {
         string path = Path.Combine(RevitProjectDirectory, "Transactions", "SharedCoordinatesGate.cs");
