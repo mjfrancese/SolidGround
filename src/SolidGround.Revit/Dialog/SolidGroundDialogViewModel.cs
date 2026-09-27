@@ -22,14 +22,17 @@ namespace SolidGround.Revit.Dialog;
 /// decision this type makes calls only Core types (<see cref="NamedElevationSelector"/>,
 /// <see cref="NamedSelector"/>, <see cref="LinearDistance"/>, <see cref="RevitIniToposolidThresholds"/>,
 /// <see cref="ParcelBoundaryAoiFactory"/>, <see cref="AddressParcelProvenanceFactory"/>,
-/// <see cref="LatitudeLongitudePointParser"/>). This type itself never references the Revit API; within this
-/// feature, only <see cref="SolidGroundDialog"/> (which reads <c>UIThemeManager.CurrentTheme</c> once, at
+/// <see cref="LatitudeLongitudePointParser"/>, <see cref="SimplificationSettings"/>). This type itself never
+/// references the Revit API; within this feature, only <see cref="SolidGroundDialog"/> (which reads
+/// <c>UIThemeManager.CurrentTheme</c> once, at
 /// construction) and its <see cref="DialogTheme"/> helper are Revit-API-typed.
 /// </summary>
 /// <remarks>
-/// This type is never constructed except by a later stage's own <c>SolidGroundDialogHost.ShowModal</c> (not
-/// implemented yet) or this stage's own throwaway, uncommitted local WPF host used for visual iteration. It is
-/// not reachable from <c>CreateToposolidCommand</c>, the ribbon, or any other command in this stage.
+/// Stage D wires this type in (review finding, minor, fixed): <see cref="SolidGroundDialogHost.ShowModal"/>
+/// constructs it and shows <see cref="SolidGroundDialog"/> modally from
+/// <c>CreateToposolidCommand.ExecuteCore</c>'s Stage 0.5, after Stage 0 (<c>LoadDocumentAndSettings</c>) and
+/// before Stage 1 Preflight -- see docs/architecture/revit-interactive-dialog.md's "Result-code mapping". It
+/// is therefore reachable from the ribbon via <c>CreateToposolidCommand.Execute</c>.
 /// </remarks>
 internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 {
@@ -194,6 +197,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPointBudgetWarning))]
     [NotifyPropertyChangedFor(nameof(PointBudgetWarningText))]
+    [NotifyPropertyChangedFor(nameof(PointBudgetRangeErrorText))]
     [NotifyCanExecuteChangedFor(nameof(NextCommand))]
     private int _pointBudget;
 
@@ -238,6 +242,27 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     internal string? PointBudgetWarningText => _inputs.RevitIniThresholds.NativeToposolidMaxPointThreshold is { } native && ShowPointBudgetWarning
         ? RevitIniToposolidThresholds.DescribeExceedance(PointBudget, native, _inputs.RevitIniPath)
         : null;
+
+    /// <summary>
+    /// Non-null exactly when <see cref="PointBudget"/> falls outside <see cref="SimplificationSettings.MinPointBudget"/>/
+    /// <see cref="SimplificationSettings.MaxPointBudget"/>'s own inclusive bound -- the identical bound
+    /// <c>TerrainRequestSettings.Validate()</c> already enforces for every settings-file-sourced value. Unlike
+    /// <see cref="PointBudgetWarningText"/> (this machine's own <c>Revit.ini</c>-native threshold, tolerant-by-
+    /// design whenever that file could not be read this session), this check is always on: it depends on
+    /// nothing but the entered number, so it can never be silently skipped the way the Revit.ini-native warning
+    /// can (SolidGround Issue #31, PH3-4, Stage D, re-check finding: the dialog's own Point Budget step
+    /// previously enforced only <c>PointBudget &gt; 0</c> in <see cref="CanGoNext"/>, so a value above 50,000
+    /// was caught only after the whole ten-step wizard completed and the operator pressed Create, by
+    /// <c>CreateToposolidCommand</c>'s post-merge <c>effectiveSettings.Request.Validate()</c> call -- discarding
+    /// the entire interactive session, with no retained state, for a mistake this step could have caught
+    /// immediately instead). Deliberately reuses <see cref="SimplificationSettings"/>'s own literal bound rather
+    /// than a second, dialog-local constant, so the two can never drift apart.
+    /// </summary>
+    internal string? PointBudgetRangeErrorText =>
+        PointBudget is >= SimplificationSettings.MinPointBudget and <= SimplificationSettings.MaxPointBudget
+            ? null
+            : $"pointBudget must be between {SimplificationSettings.MinPointBudget.ToString(CultureInfo.InvariantCulture)} " +
+              $"and {SimplificationSettings.MaxPointBudget.ToString(CultureInfo.InvariantCulture)} inclusive.";
 
     /// <summary>
     /// Exposes <see cref="_addressWasGeocoded"/> to the view so the provenance-preview panel
@@ -493,7 +518,13 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         SolidGroundDialogStep.GeocodeCandidates => SelectedGeocodeCandidate is not null,
         SolidGroundDialogStep.ParcelCandidates => SelectedParcelCandidate is not null,
         SolidGroundDialogStep.Buffer => BufferErrorText is null,
-        SolidGroundDialogStep.PointBudget => PointBudget > 0,
+        // Re-check finding, minor, fixed (SolidGround Issue #31, PH3-4, Stage D): this used to enforce only a
+        // bare positivity check; PointBudgetRangeErrorText is null exactly when PointBudget also satisfies
+        // SimplificationSettings.MinPointBudget/.MaxPointBudget's own inclusive bound (which subsumes that old
+        // check, since MinPointBudget is 1), so an out-of-range entry is now caught in this same step, not only
+        // after the whole wizard completes and Create runs CreateToposolidCommand's post-merge
+        // effectiveSettings.Request.Validate() call.
+        SolidGroundDialogStep.PointBudget => PointBudgetRangeErrorText is null,
         SolidGroundDialogStep.UnitChoice => true,
         SolidGroundDialogStep.LevelAndToposolidType => SelectedLevel is not null && SelectedToposolidType is not null,
         SolidGroundDialogStep.SharedCoordinatesOptIn => true,

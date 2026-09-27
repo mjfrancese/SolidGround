@@ -17,6 +17,7 @@ using SolidGround.Core.Terrain;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Diagnostics;
+using SolidGround.Revit.Dialog;
 using SolidGround.Revit.Elements;
 using SolidGround.Revit.Geometry;
 using SolidGround.Revit.Provenance;
@@ -80,8 +81,63 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
     private static Result ExecuteCore(ExternalCommandData commandData)
     {
-        // ==== Stage 1: Document Preflight (read-only, no network, no transaction) =========================
-        DocumentContext? context = RunDocumentPreflight(commandData, out List<string> preflightProblems);
+        // ==== Stage 0: load settings + open-document check (hoisted; SolidGround Issue #31, PH3-4, Stage D) ===
+        // Hoisted out of RunDocumentPreflight so the interactive dialog (Stage 0.5) can use the loaded settings
+        // and the read-once geometry tolerances before Preflight formally runs. See
+        // docs/architecture/revit-toposolid-creation.md's "Command flow" and
+        // docs/architecture/revit-interactive-dialog.md's "Result-code mapping".
+        LoadResult loaded = LoadDocumentAndSettings(commandData);
+        if (loaded.Document is null || loaded.Settings is null || loaded.Problems.Count > 0)
+        {
+            ShowProblemList("SolidGround Preflight found a problem.", "Nothing changed. Correct every problem below and run this command again.", loaded.Problems);
+            return Result.Cancelled;
+        }
+
+        // ==== Stage 0.5: interactive dialog (SolidGround Issue #31, PH3-4) =====================================
+        SolidGroundDialogResult? dialogResult = SolidGroundDialogHost.ShowModal(
+            commandData, loaded.Document, loaded.Settings, loaded.VertexToleranceInternal);
+        if (dialogResult is null)
+        {
+            // Operator cancelled (window X button, Esc, or the Cancel button) -- no TaskDialog, they already know.
+            return Result.Cancelled;
+        }
+
+        // The operator's own dialog choices override the settings file's values for this run only -- never
+        // written back (docs/architecture/revit-interactive-dialog.md's "Settings interaction: prefill, not
+        // override"). RevitSettings/TerrainRequestSettings/SimplificationSettings/RevitSharedCoordinatesSettings
+        // are all already sealed records with init-only properties, so these `with` expressions are ordinary,
+        // already-idiomatic C#.
+        RevitSettings effectiveSettings = loaded.Settings with
+        {
+            Request = loaded.Settings.Request with
+            {
+                OutputUnit = dialogResult.OutputUnit,
+                Simplification = loaded.Settings.Request.Simplification with { PointBudget = dialogResult.PointBudget },
+            },
+            SharedCoordinates = new RevitSharedCoordinatesSettings(dialogResult.WriteSharedCoordinatesIfAbsent),
+        };
+
+        // Re-validate the dialog-merged settings (review fix, SolidGround Issue #31, PH3-4, Stage D): the
+        // dialog's own Point Budget step only enforces PointBudget > 0
+        // (docs/architecture/revit-interactive-dialog.md's "Settings interaction: prefill, not override"), so a
+        // dialog-supplied override could otherwise bypass the 1-50000 bound TerrainRequestSettings.Validate()
+        // already enforces for every settings-file-sourced value (RevitSettingsIo.TryLoad's own call, above, at
+        // Stage 0). Reusing that exact rule here -- rather than duplicating a second literal bound into the
+        // dialog/WPF layer -- keeps this a single source of truth and restores the invariant that every
+        // TerrainRequestSettings reaching Stage 2 satisfies Validate(), regardless of which of the two paths
+        // above (settings file only, or dialog-overridden) produced it.
+        IReadOnlyList<string> effectiveSettingsProblems = effectiveSettings.Request.Validate();
+        if (effectiveSettingsProblems.Count > 0)
+        {
+            ShowProblemList("SolidGround Preflight found a problem.", "Nothing changed. Correct every problem below and run this command again.", effectiveSettingsProblems);
+            return Result.Cancelled;
+        }
+
+        // ==== Stage 1: Document Preflight (slimmed -- AOI/level/type now dialog-supplied on the FindParcel
+        // ==== path; still settings-derived on the UseSettingsFile path) ==========================================
+        DocumentContext? context = RunDocumentPreflight(
+            commandData, loaded.Document, effectiveSettings, loaded.SettingsPath, dialogResult,
+            loaded.ShortCurveToleranceInternal, loaded.VertexToleranceInternal, out List<string> preflightProblems);
         if (context is null || preflightProblems.Count > 0)
         {
             ShowProblemList("SolidGround Preflight found a problem.", "Nothing changed. Correct every problem below and run this command again.", preflightProblems);
@@ -101,7 +157,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         {
             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(context.Settings.Request.NetworkTimeoutSeconds));
             acquisition = Task.Run(
-                    () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, cts.Token),
+                    () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, dialogResult.AddressParcel, cts.Token),
                     cts.Token)
                 .GetAwaiter().GetResult();
         }
@@ -202,8 +258,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // itself reject that run's otherwise-valid Toposolid boundary. isParcelAoi is evaluated inline here and
         // again at its Stage 5 call sites (RunTransaction), deliberately not cached as a new DocumentContext
         // field -- see docs/architecture/revit-property-line-and-shared-coordinates.md's "AOI-kind gate: how the
-        // command knows, and what a non-parcel run does" section.
-        bool isParcelAoi = context.Settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel;
+        // command knows, and what a non-parcel run does" section. Recomputed against context.Aoi's own resolved
+        // type (SolidGround Issue #31, PH3-4, Stage D), not context.Settings.Request.AreaOfInterest.Kind: once
+        // the interactive dialog can supply an AOI directly (the FindParcel path), that settings-derived kind no
+        // longer names every reachable run's real AOI type -- context.Aoi always does, on both dialog paths.
+        bool isParcelAoi = context.Aoi is ParcelGeometryAoi;
         IList<CurveLoop>? propertyLineProfiles = null;
         if (isParcelAoi) // a second, independent CurveLoop list -- never `profiles`, already consumed below.
         {
@@ -241,17 +300,40 @@ public sealed class CreateToposolidCommand : IExternalCommand
         double VertexToleranceInternal);
 
     /// <summary>
-    /// Read-only by construction: reads document state, the settings file, and Core-level defaults only,
-    /// opens no <see cref="Transaction"/>, and never reads the OpenTopography API key's value into any
-    /// string -- only whether <see cref="IOpenTopographyApiKeyProvider.GetApiKey"/> returned a non-null key
-    /// at all. Every problem found is accumulated into <paramref name="problems"/> rather than stopping at
-    /// the first (design record §6.1); returns <see langword="null"/> only when a structural problem (no
-    /// document, or the settings file itself could not be created/decoded) makes the remaining checks
-    /// impossible to run.
+    /// <see cref="LoadDocumentAndSettings"/>'s own return shape (SolidGround Issue #31, PH3-4, Stage D: Stage
+    /// 0, hoisted out of <see cref="RunDocumentPreflight"/> so the interactive dialog can use
+    /// <see cref="Settings"/>/<see cref="VertexToleranceInternal"/> before Preflight formally runs). Mirrors
+    /// <see cref="DocumentContext"/>'s own "accumulate every problem, structural failures return early" shape.
     /// </summary>
-    private static DocumentContext? RunDocumentPreflight(ExternalCommandData commandData, out List<string> problems)
+    private sealed record LoadResult(
+        Document? Document,
+        RevitSettings? Settings,
+        string SettingsPath,
+        List<string> Problems,
+        double ShortCurveToleranceInternal,
+        double VertexToleranceInternal);
+
+    /// <summary>
+    /// Read-only by construction: the document-null/family-document check, <see cref="RevitSettingsLocator.Resolve"/>,
+    /// <see cref="RevitSettingsIo.EnsureTemplateExists"/>/<see cref="RevitSettingsIo.TryLoad"/>, and the
+    /// read-once geometry-tolerance read (<see cref="LogAndReadGeometryTolerances"/>) -- moved here, hoisted
+    /// earlier than <see cref="RunDocumentPreflight"/>, so <c>ExecuteCore</c>'s Stage 0.5 interactive dialog can
+    /// read the loaded settings and <see cref="LoadResult.VertexToleranceInternal"/> before Preflight formally
+    /// runs (SolidGround Issue #31, PH3-4, Stage D; a review finding in the accepted design: an earlier draft
+    /// put the dialog before Preflight without ever saying where the dialog's own already-coordinated check
+    /// would get its length tolerance from). Also guards "this document has at least one Level/ToposolidType"
+    /// here, before the dialog opens, rather than only discovering an empty chooser after the operator has
+    /// already navigated to that step -- the interactive dialog itself always resolves a specific Level/
+    /// ToposolidType from whatever candidates exist (see docs/architecture/revit-interactive-dialog.md's
+    /// "Content model and sections" step 7), so it has no way to report "this project has none at all" on its
+    /// own. Returns a structural, <see langword="null"/>-<see cref="LoadResult.Document"/>/<see cref="LoadResult.Settings"/>
+    /// result only when a problem (no document, or the settings file itself could not be created/decoded) makes
+    /// every later check impossible to run -- exactly <see cref="RunDocumentPreflight"/>'s own former contract
+    /// for the same class of problem.
+    /// </summary>
+    private static LoadResult LoadDocumentAndSettings(ExternalCommandData commandData)
     {
-        problems = [];
+        List<string> problems = [];
 
         Document? document = commandData.Application.ActiveUIDocument?.Document;
         if (document is null)
@@ -269,26 +351,76 @@ public sealed class CreateToposolidCommand : IExternalCommand
         if (justCreated)
         {
             problems.Add($"A starting template was written to '{settingsPath}'. Edit it and run this command again.");
-            return null;
+            return new LoadResult(null, null, settingsPath, problems, 0, 0);
         }
 
         if (writeError is not null)
         {
             problems.Add(writeError);
-            return null;
+            return new LoadResult(null, null, settingsPath, problems, 0, 0);
         }
 
         if (!RevitSettingsIo.TryLoad(settingsPath, out RevitSettings? settings, out string? loadError))
         {
             problems.AddRange((loadError ?? "The settings file could not be loaded.").Split(Environment.NewLine));
-            return null;
+            return new LoadResult(null, null, settingsPath, problems, 0, 0);
         }
 
         if (document is null)
         {
             // The document problem above already explains why nothing further can run.
-            return null;
+            return new LoadResult(null, settings, settingsPath, problems, 0, 0);
         }
+
+        (double shortCurveToleranceInternal, double vertexToleranceInternal) = LogAndReadGeometryTolerances(commandData);
+
+        if (LevelAndTypeResolver.ListLevels(document).Count == 0)
+        {
+            problems.Add("This project has no Level. SolidGround needs at least one Level to assign the created toposolid to.");
+        }
+
+        if (LevelAndTypeResolver.ListToposolidTypes(document).Count == 0)
+        {
+            problems.Add("This project has no ToposolidType. SolidGround needs at least one ToposolidType to create the toposolid with.");
+        }
+
+        return new LoadResult(document, settings, settingsPath, problems, shortCurveToleranceInternal, vertexToleranceInternal);
+    }
+
+    /// <summary>
+    /// Read-only by construction: reads document state and Core-level defaults only, opens no
+    /// <see cref="Transaction"/>, and never reads the OpenTopography API key's value into any string -- only
+    /// whether <see cref="IOpenTopographyApiKeyProvider.GetApiKey"/> returned a non-null key at all. Every
+    /// problem found is accumulated into <paramref name="problems"/> rather than stopping at the first (design
+    /// record §6.1). <paramref name="settings"/> is <c>ExecuteCore</c>'s own dialog-merged
+    /// <c>effectiveSettings</c> (SolidGround Issue #31, PH3-4, Stage D) -- still named <c>settings</c> here,
+    /// unchanged, so this method's own source text keeps reading identically to before that stage.
+    /// </summary>
+    /// <param name="dialogResult">
+    /// The confirmed interactive-dialog result (Stage 0.5, always non-null by the time this runs). Supplies
+    /// <see cref="DocumentContext.Level"/>/<see cref="DocumentContext.ToposolidType"/> unconditionally (the
+    /// dialog resolves both on every run, regardless of <see cref="SolidGroundDialogResult.AoiSource"/>); supplies
+    /// <see cref="DocumentContext.Aoi"/> directly when <see cref="SolidGroundDialogResult.AoiSource"/> is
+    /// <see cref="DialogAoiSource.FindParcel"/>, or leaves this method to derive it from
+    /// <paramref name="settings"/>'s own <c>areaOfInterest</c> section -- unchanged from before this issue --
+    /// when it is <see cref="DialogAoiSource.UseSettingsFile"/> (owner decision 1's refinement: both AOI paths
+    /// remain available; see docs/architecture/revit-interactive-dialog.md's "AOI and provenance"). No
+    /// defensive re-verification that the dialog's chosen Level/ToposolidType still belong to <paramref name="document"/>
+    /// is performed (owner decision 4): the same already-open <see cref="Document"/>, inside the same
+    /// synchronous call, with no <see cref="Transaction"/> opened on any path that could invalidate an element
+    /// reference.
+    /// </param>
+    private static DocumentContext? RunDocumentPreflight(
+        ExternalCommandData commandData,
+        Document document,
+        RevitSettings settings,
+        string settingsPath,
+        SolidGroundDialogResult dialogResult,
+        double shortCurveToleranceInternal,
+        double vertexToleranceInternal,
+        out List<string> problems)
+    {
+        problems = [];
 
         if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && new EnvironmentOpenTopographyApiKeyProvider().GetApiKey() is null)
         {
@@ -297,30 +429,41 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
 
-        string? parcelGeometryText = null;
-        if (settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel)
+        // AOI: dialog-supplied directly on the FindParcel path; derived from settings, exactly as before this
+        // issue, on the UseSettingsFile path (owner decision 1's refinement -- see this method's own doc
+        // comment above and docs/architecture/revit-interactive-dialog.md's "AOI and provenance").
+        AreaOfInterest? aoi;
+        if (dialogResult.AoiSource == DialogAoiSource.FindParcel)
         {
-            string parcelPath = settings.Request.AreaOfInterest.Parcel!.Path;
-            try
-            {
-                parcelGeometryText = File.ReadAllText(parcelPath);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                problems.Add($"Could not read '{parcelPath}': {ex.Message}");
-            }
+            aoi = dialogResult.Aoi;
         }
-
-        AreaOfInterest? aoi = null;
-        if (settings.Request.AreaOfInterest.Kind != AreaOfInterestKind.Parcel || parcelGeometryText is not null)
+        else
         {
-            try
+            string? parcelGeometryText = null;
+            if (settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel)
             {
-                aoi = AoiSettingsFactory.Build(settings.Request.AreaOfInterest, wgs84Reference, parcelGeometryText);
+                string parcelPath = settings.Request.AreaOfInterest.Parcel!.Path;
+                try
+                {
+                    parcelGeometryText = File.ReadAllText(parcelPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    problems.Add($"Could not read '{parcelPath}': {ex.Message}");
+                }
             }
-            catch (Exception ex) when (ex is FormatException or ArgumentException)
+
+            aoi = null;
+            if (settings.Request.AreaOfInterest.Kind != AreaOfInterestKind.Parcel || parcelGeometryText is not null)
             {
-                problems.Add($"The configured area of interest is invalid: {ex.Message}");
+                try
+                {
+                    aoi = AoiSettingsFactory.Build(settings.Request.AreaOfInterest, wgs84Reference, parcelGeometryText);
+                }
+                catch (Exception ex) when (ex is FormatException or ArgumentException)
+                {
+                    problems.Add($"The configured area of interest is invalid: {ex.Message}");
+                }
             }
         }
 
@@ -353,38 +496,35 @@ public sealed class CreateToposolidCommand : IExternalCommand
             }
         }
 
-        Level? level = LevelAndTypeResolver.ResolveLevel(document, settings.Target.LevelName);
+        // Level/ToposolidType: the interactive dialog already resolved both, on every run (SolidGround Issue
+        // #31, PH3-4, Stage D) -- this maps its confirmed NamedElevationCandidate/NamedCandidate ids back to
+        // the real elements (LoadDocumentAndSettings's own "at least one exists" guard already ran before the
+        // dialog ever opened). Neither branch below is expected to be reachable in practice (see this method's
+        // own doc comment on owner decision 4); each is still a fail-loud Preflight problem, never a crash, if
+        // it somehow is.
+        Level? level = LevelAndTypeResolver.FindLevelById(document, dialogResult.Level.Id);
         if (level is null)
         {
-            problems.Add("This project has no Level. SolidGround needs at least one Level to assign the created toposolid to.");
-        }
-        else if (!string.IsNullOrWhiteSpace(settings.Target.LevelName) && !string.Equals(level.Name, settings.Target.LevelName, StringComparison.Ordinal))
-        {
-            problems.Add($"No Level named '{settings.Target.LevelName}' was found in this project.");
+            problems.Add("SolidGround could not find the previously selected Level in this document.");
         }
 
-        ToposolidType? toposolidType = LevelAndTypeResolver.ResolveToposolidType(document, settings.Target.ToposolidTypeName);
+        ToposolidType? toposolidType = LevelAndTypeResolver.FindToposolidTypeById(document, dialogResult.ToposolidType.Id);
         if (toposolidType is null)
         {
-            problems.Add("This project has no ToposolidType. SolidGround needs at least one ToposolidType to create the toposolid with.");
-        }
-        else if (!string.IsNullOrWhiteSpace(settings.Target.ToposolidTypeName) && !string.Equals(toposolidType.Name, settings.Target.ToposolidTypeName, StringComparison.Ordinal))
-        {
-            problems.Add($"No ToposolidType named '{settings.Target.ToposolidTypeName}' was found in this project.");
+            problems.Add("SolidGround could not find the previously selected ToposolidType in this document.");
         }
 
         int? nativeToposolidMaxPointThreshold = CheckRevitIniPointThreshold(
             commandData, settings.Request.Simplification.PointBudget, problems);
-
-        (double shortCurveToleranceInternal, double vertexToleranceInternal) = LogAndReadGeometryTolerances(commandData);
 
         // Error catalogue row 9b (SolidGround Issue #30, PH3-3): a Preflight-only, pre-transaction,
         // document-state-dependent refusal, alongside row 9a's own identical precedent. See
         // docs/architecture/revit-property-line-and-shared-coordinates.md's "Preflight refusal" section.
         // 2026-09-27 live-evidence fix: LooksAlreadyCoordinated no longer reads the survey point's clipped
         // state at all (see that method's own doc comment and "Shared-coordinates detection" in the note
-        // above); it reuses vertexToleranceInternal, already read just above, as its length tolerance instead
-        // of reading Application.VertexTolerance a second time.
+        // above); it reuses vertexToleranceInternal -- now a parameter, read once at Stage 0
+        // (LoadDocumentAndSettings), not a local variable read here -- as its length tolerance instead of
+        // reading Application.VertexTolerance a second time.
         if (settings.SharedCoordinates.WriteIfAbsent)
         {
             bool looksAlreadyCoordinated = SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal);
@@ -410,10 +550,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
     }
 
     /// <summary>
-    /// Reads and logs <c>Application.ShortCurveTolerance</c>/<c>.VertexTolerance</c> once, at Preflight
-    /// (SolidGround Issue #30, PH3-3): Revit-internal decimal feet, unconverted -- <c>SolidGround.Core</c> never
-    /// references either <see cref="Autodesk.Revit.ApplicationServices.Application"/> member directly. Reached
-    /// from command-time code the same way <c>CheckRevitIniPointThreshold</c> above already reaches
+    /// Reads and logs <c>Application.ShortCurveTolerance</c>/<c>.VertexTolerance</c> once, at Stage 0
+    /// (<see cref="LoadDocumentAndSettings"/>; called from <c>RunDocumentPreflight</c> itself before SolidGround
+    /// Issue #31, PH3-4, Stage D hoisted the call here so the interactive dialog's own already-coordinated
+    /// check could use the same one read): Revit-internal decimal feet, unconverted -- <c>SolidGround.Core</c>
+    /// never references either <see cref="Autodesk.Revit.ApplicationServices.Application"/> member directly.
+    /// Reached from command-time code the same way <c>CheckRevitIniPointThreshold</c> above already reaches
     /// <c>CurrentUsersDataFolderPath</c>: <c>commandData.Application.Application.&lt;member&gt;</c>. See
     /// docs/architecture/revit-property-line-and-shared-coordinates.md's "Geometry cleanup contract" section,
     /// "Tolerance sourcing" subsection.
@@ -476,14 +618,14 @@ public sealed class CreateToposolidCommand : IExternalCommand
             $"'{revitIniPath}' [Misc]: NativeToposolidMaxPointThreshold={DescribeThreshold(thresholds.NativeToposolidMaxPointThreshold)}, " +
             $"LinkToposolidMaxPointThreshold={DescribeThreshold(thresholds.LinkToposolidMaxPointThreshold)}.");
 
-        if (thresholds.NativeToposolidMaxPointThreshold is { } nativeThreshold && pointBudget > nativeThreshold)
+        // SolidGround Issue #31, PH3-4, Stage D: this comparison and its problem-line text moved into Core
+        // (RevitIniToposolidThresholds.ExceedsNativeThreshold/.DescribeExceedance, landed Stage A) so
+        // SolidGroundDialog's own inline point-budget warning can share the identical rule and wording and
+        // never drift apart from Preflight's own rejection -- a pure extraction, not a reword; the sentence
+        // itself is unchanged.
+        if (RevitIniToposolidThresholds.ExceedsNativeThreshold(pointBudget, thresholds))
         {
-            string budgetText = pointBudget.ToString(CultureInfo.InvariantCulture);
-            string thresholdText = nativeThreshold.ToString(CultureInfo.InvariantCulture);
-            problems.Add(
-                $"pointBudget {budgetText} exceeds this machine's NativeToposolidMaxPointThreshold of {thresholdText} in " +
-                $"'{revitIniPath}'; lower pointBudget to at most {thresholdText} or raise the Revit.ini value within " +
-                "Autodesk's documented 10,000 to 50,000 range and restart Revit.");
+            problems.Add(RevitIniToposolidThresholds.DescribeExceedance(pointBudget, thresholds.NativeToposolidMaxPointThreshold!.Value, revitIniPath));
         }
 
         return thresholds.NativeToposolidMaxPointThreshold;
@@ -496,15 +638,17 @@ public sealed class CreateToposolidCommand : IExternalCommand
     // -------------------------------------------------------------------------------------------------------
 
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunPipelineAsync(
-        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi, CancellationToken cancellationToken)
+        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
+        AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
     {
         return request.Mode == TerrainAcquisitionMode.Fetch
-            ? await RunFetchPipelineAsync(request, wgs84Reference, aoi, cancellationToken).ConfigureAwait(false)
-            : await RunProcessPipelineAsync(request, aoi, cancellationToken).ConfigureAwait(false);
+            ? await RunFetchPipelineAsync(request, wgs84Reference, aoi, addressParcel, cancellationToken).ConfigureAwait(false)
+            : await RunProcessPipelineAsync(request, aoi, addressParcel, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunFetchPipelineAsync(
-        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi, CancellationToken cancellationToken)
+        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
+        AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
     {
         (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(aoi);
 
@@ -559,14 +703,14 @@ public sealed class CreateToposolidCommand : IExternalCommand
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
                 grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, aoi,
                 request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
-                request.Simplification.CoverageFloorFraction, cancellationToken)
+                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel)
             .ConfigureAwait(false);
 
         return (grid, outcome);
     }
 
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunProcessPipelineAsync(
-        TerrainRequestSettings request, AreaOfInterest aoi, CancellationToken cancellationToken)
+        TerrainRequestSettings request, AreaOfInterest aoi, AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
     {
         ProcessInputSettings process = request.Process!;
         string ascPath = process.Asc;
@@ -624,7 +768,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
                 grid, transform, verticalReference, referenceOrigins, sourceMetadata, aoi,
                 request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
-                request.Simplification.CoverageFloorFraction, cancellationToken)
+                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel)
             .ConfigureAwait(false);
 
         return (grid, outcome);
@@ -708,10 +852,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
         Document document = context.Document;
         ToposolidCreationFailureLog failureLog = new();
 
-        // Re-evaluated from context.Settings (the same expression Stage 4 already used), rather than threaded
-        // as a new parameter -- see docs/architecture/revit-property-line-and-shared-coordinates.md's
-        // "AOI-kind gate: how the command knows, and what a non-parcel run does" section.
-        bool isParcelAoi = context.Settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel;
+        // Re-evaluated from context.Aoi (the same expression Stage 4 already uses, SolidGround Issue #31,
+        // PH3-4, Stage D), rather than threaded as a new parameter -- see
+        // docs/architecture/revit-property-line-and-shared-coordinates.md's "AOI-kind gate: how the command
+        // knows, and what a non-parcel run does" section.
+        bool isParcelAoi = context.Aoi is ParcelGeometryAoi;
 
         using Transaction transaction = new(document, "SolidGround: Create Toposolid");
         transaction.SetFailureHandlingOptions(

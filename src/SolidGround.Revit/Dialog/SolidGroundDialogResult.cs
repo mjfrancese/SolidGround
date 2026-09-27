@@ -8,9 +8,9 @@ namespace SolidGround.Revit.Dialog;
 /// <summary>
 /// The interactive dialog's final output, constructed only when the operator confirms "Create" on the last
 /// step (SolidGround Issue #31, PH3-4: see docs/architecture/revit-interactive-dialog.md "Flow/state model",
-/// "Result-code mapping"). A later stage's own <c>SolidGroundDialogHost.ShowModal</c> returns this (or
-/// <see langword="null"/> on Cancel) to <c>CreateToposolidCommand</c> -- not implemented in this stage, which
-/// builds and populates this type but wires it into no command.
+/// "Result-code mapping"). Stage D wires this type in (review finding, minor, fixed):
+/// <see cref="SolidGroundDialogHost.ShowModal"/> constructs the dialog and returns this record (or
+/// <see langword="null"/> on Cancel) to <c>CreateToposolidCommand.ExecuteCore</c>'s Stage 0.5.
 /// </summary>
 /// <param name="AoiSource">
 /// Which of the dialog's two top-level paths produced this result. When <see cref="DialogAoiSource.UseSettingsFile"/>,

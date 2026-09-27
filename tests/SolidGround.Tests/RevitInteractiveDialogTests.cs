@@ -227,6 +227,56 @@ public sealed class RevitInteractiveDialogTests
         Assert.Equal(2, confirmedAddressTextAssignmentCount);
     }
 
+    [Fact]
+    public void SolidGroundDialogViewModelCanGoNextEnforcesTheFullInclusivePointBudgetRangeNotJustPositive()
+    {
+        // Re-check finding, minor, fixed (SolidGround Issue #31, PH3-4, Stage D): this step's own CanGoNext
+        // case previously enforced only `PointBudget > 0`, so a value above
+        // SimplificationSettings.MaxPointBudget was caught only after the whole ten-step wizard completed and
+        // Create ran CreateToposolidCommand's post-merge effectiveSettings.Request.Validate() call, discarding
+        // the entire interactive session with no retained state for a mistake this step could have caught
+        // immediately instead. CanGoNext's PointBudget case must now depend on PointBudgetRangeErrorText, which
+        // subsumes the old `> 0` check (SimplificationSettings.MinPointBudget is 1).
+        string concatenatedSource = ReadAllDialogSourceConcatenated();
+
+        string canGoNextBody = ExtractMethodBody(concatenatedSource, "private bool CanGoNext() => CurrentStep switch");
+        Assert.Contains(
+            "SolidGroundDialogStep.PointBudget => PointBudgetRangeErrorText is null,", canGoNextBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("PointBudget > 0", canGoNextBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogViewModelPointBudgetRangeErrorTextReusesSimplificationSettingsBoundsNotADuplicatedLiteral()
+    {
+        // Re-check finding, minor, fixed: reuses SimplificationSettings' own MinPointBudget/MaxPointBudget
+        // constants -- the identical bound TerrainRequestSettings.Validate() already enforces for every
+        // settings-file-sourced value -- rather than a second, dialog-local literal that could silently drift
+        // out of sync with it.
+        string concatenatedSource = ReadAllDialogSourceConcatenated();
+
+        int propertyIndex = RequireIndex(concatenatedSource, "internal string? PointBudgetRangeErrorText =>");
+        const int MaxFollowingDistance = 200; // covers the range condition itself (measured: 154 chars).
+        string window = concatenatedSource[propertyIndex..Math.Min(concatenatedSource.Length, propertyIndex + MaxFollowingDistance)];
+
+        Assert.Contains("SimplificationSettings.MinPointBudget", window, StringComparison.Ordinal);
+        Assert.Contains("SimplificationSettings.MaxPointBudget", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogSourceBindsAnAlwaysOnPointBudgetRangeErrorAlongsideTheRevitIniWarning()
+    {
+        // Re-check finding: the view-model's always-on range check needs a bound control the operator can
+        // actually see -- mirroring the buffer panel's own BufferErrorText/TextPresenceToVisibility idiom,
+        // not the Revit.ini-native warning's tolerant-by-design ShowPointBudgetWarning/BooleanToVisibility one.
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+        string panelBody = ExtractMethodBody(dialogSource, "private static StackPanel BuildPointBudgetPanel(DialogPalette palette)");
+
+        Assert.Contains(
+            "new Binding(nameof(SolidGroundDialogViewModel.PointBudgetRangeErrorText))", panelBody, StringComparison.Ordinal);
+        Assert.Contains("Converter = TextPresenceToVisibility", panelBody, StringComparison.Ordinal);
+        Assert.Contains("rangeErrorText", panelBody, StringComparison.Ordinal);
+    }
+
     // ------------------------------------------------------------------------------------------------
     // Stage C review fixes: SolidGroundDialog.cs's own control theming (docs/architecture/revit-interactive-dialog.md
     // "Theming and accessibility"). Plain-text scans, for the same cross-platform reason as the checks above.
@@ -376,6 +426,142 @@ public sealed class RevitInteractiveDialogTests
             StringComparison.Ordinal);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Stage D review fix (major, fixed): BuildParcelSource must never let a bad countyRegistryPath escape
+    // ShowModal uncaught -- docs/architecture/revit-interactive-dialog.md "Settings interaction: prefill, not
+    // override" and "Result-code mapping".
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void BuildParcelSourceCatchesARegistryLoadFailureAndNeverLetsItEscapeShowModal()
+    {
+        // Before this fix, CountyParcelRegistry.Load ran with no surrounding try/catch, so a missing or
+        // malformed countyRegistryPath threw CountyParcelRegistryFormatException straight out of ShowModal --
+        // reaching only CreateToposolidCommand.Execute's generic top-level catch, and blocking the whole
+        // dialog (including the unrelated "Use the area in the settings file" AOI path) -- instead of the
+        // documented "reported the first time a parcel lookup is attempted, never here at construction time"
+        // contract this same method's own doc comment already promised.
+        string dialogHostSource = ReadDialogFile("SolidGroundDialogHost.cs");
+        string methodBody = ExtractMethodBody(
+            dialogHostSource,
+            "private static IParcelBoundarySource? BuildParcelSource(RevitAddressAndParcelSettings settings, HttpClient httpClient)");
+
+        int loadIndex = RequireIndex(methodBody, "CountyParcelRegistry.Load(settings.CountyRegistryPath)");
+        int catchIndex = RequireIndex(methodBody, "catch (CountyParcelRegistryFormatException");
+        Assert.True(catchIndex > loadIndex, "Expected a catch (CountyParcelRegistryFormatException ...) after the Load( call site.");
+
+        // The caught failure must still reach the operator, not be silently swallowed: it becomes a deferred
+        // FailedParcelSource whose own FindAsync raises AutoGeoidCountyParcelSourceException -- caught inline
+        // by SolidGroundDialogViewModel.FindParcel's existing, unchanged "catch (ParcelBoundarySourceException
+        // ex)" clause, exactly like any other parcel-lookup failure.
+        Assert.Contains("return new FailedParcelSource(ex.Message);", methodBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailedParcelSourceThrowsAutoGeoidCountyParcelSourceExceptionFromFindAsync()
+    {
+        string dialogHostSource = ReadDialogFile("SolidGroundDialogHost.cs");
+        string classBody = ExtractMethodBody(
+            dialogHostSource,
+            "private sealed class FailedParcelSource(string message) : IParcelBoundarySource");
+
+        Assert.Contains("throw new AutoGeoidCountyParcelSourceException(message);", classBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogClassRemarksDescribeStageDWiringNotStageCsUnreachableState()
+    {
+        // Stage D wires this type in (SolidGroundDialogHost.ShowModal constructs and shows it from
+        // CreateToposolidCommand.ExecuteCore's Stage 0.5), so the class-level doc comment inherited from
+        // Stage C's own commit -- written when the type genuinely was "not constructed anywhere ... remains
+        // unreachable from a running add-in" -- must no longer claim that (review finding, minor, fixed).
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+
+        Assert.DoesNotContain("remains unreachable from a running add-in", dialogSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("is a later stage's own scope", dialogSource, StringComparison.Ordinal);
+        Assert.Contains("SolidGroundDialogHost.ShowModal", dialogSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogResultViewModelAndInputsDocCommentsDescribeStageDWiringNotStageCUnwiredState()
+    {
+        // The same class of staleness the test immediately above guards against in SolidGroundDialog.cs was
+        // also present, byte-for-byte, in three sibling doc comments that this fix's own review missed the
+        // first time: SolidGroundDialogResult.cs said ShowModal was "not implemented in this stage, which
+        // builds and populates this type but wires it into no command"; SolidGroundDialogViewModel.cs said it
+        // was "never constructed except by a later stage's own SolidGroundDialogHost.ShowModal (not
+        // implemented yet) ... not reachable from CreateToposolidCommand"; SolidGroundDialogInputs.cs said it
+        // was gathered by "a later stage's SolidGroundDialogHost.ShowModal ... Stage C". All three are now
+        // false: SolidGroundDialogHost.ShowModal is the real, landed Stage D call site inside
+        // CreateToposolidCommand.ExecuteCore's Stage 0.5 (review finding, minor, fixed).
+        string resultSource = ReadDialogFile("SolidGroundDialogResult.cs");
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+        string inputsSource = ReadDialogFile("SolidGroundDialogInputs.cs");
+
+        foreach (string source in new[] { resultSource, viewModelSource, inputsSource })
+        {
+            Assert.DoesNotContain("not implemented in this stage", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("not implemented yet", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("a later stage's own", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("wires it into no command", source, StringComparison.Ordinal);
+            Assert.Contains("SolidGroundDialogHost.ShowModal", source, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("not reachable from", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Stage C:", inputsSource, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Stage D: IsCancel/IsDefault (SolidGround Issue #31, PH3-4; see docs/architecture/revit-interactive-dialog.md "Purpose and boundary").
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SolidGroundDialogSourceSetsIsCancelOnTheCancelButton()
+    {
+        // Esc invokes cancelButton's own Click -- which, via ButtonBase's own ICommand-execution handling,
+        // runs the bound CancelCommand exactly as a mouse click would -- from any control in the dialog.
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+
+        Assert.Contains("cancelButton.IsCancel = true;", dialogSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UpdateDefaultButtonSetsIsDefaultOnExactlyOnePerStepPrimaryActionAtATime()
+    {
+        // Never a fixed, always-true IsDefault on more than one of Find/Find parcel/Next/Create at once: the
+        // AddressEntry/ParcelCandidates steps each have a real window where their own panel-local search
+        // button and the persistent Next button are simultaneously visible and enabled (after a successful
+        // search, before Next is pressed), so a fixed assignment would leave Enter's behavior genuinely
+        // ambiguous. UpdateDefaultButton instead clears all four, then sets exactly one, every time
+        // CurrentStep or NextCommand's own CanExecute result might have changed.
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+        string methodBody = ExtractMethodBody(dialogSource, "private void UpdateDefaultButton()");
+
+        Assert.Contains("_findButton.IsDefault = false;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_findParcelButton.IsDefault = false;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_nextButton.IsDefault = false;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_createButton.IsDefault = false;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_findButton.IsDefault = true;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_findParcelButton.IsDefault = true;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_nextButton.IsDefault = true;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("_createButton.IsDefault = true;", methodBody, StringComparison.Ordinal);
+        // Reuses NextCommand's own CanExecute rather than re-deriving CanGoNext's completion rule a second
+        // time, so the two can never drift apart on a future step-completion-rule change.
+        Assert.Contains("_viewModel.NextCommand.CanExecute(null)", methodBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogRecomputesTheDefaultButtonWheneverCurrentStepOrNextCommandCanExecuteChanges()
+    {
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+
+        Assert.Contains("viewModel.PropertyChanged += OnViewModelPropertyChanged;", dialogSource, StringComparison.Ordinal);
+        Assert.Contains("viewModel.NextCommand.CanExecuteChanged += OnNextCommandCanExecuteChanged;", dialogSource, StringComparison.Ordinal);
+        // Unsubscribed on Close, mirroring CloseRequested's own existing discipline immediately above.
+        Assert.Contains("viewModel.PropertyChanged -= OnViewModelPropertyChanged;", dialogSource, StringComparison.Ordinal);
+        Assert.Contains("viewModel.NextCommand.CanExecuteChanged -= OnNextCommandCanExecuteChanged;", dialogSource, StringComparison.Ordinal);
+    }
+
     private static string ReadAllDialogSourceConcatenated()
     {
         Assert.True(Directory.Exists(DialogDirectory), $"Missing directory: {DialogDirectory}");
@@ -392,6 +578,19 @@ public sealed class RevitInteractiveDialogTests
         Assert.True(File.Exists(path), $"Missing file: {path}");
 
         return File.ReadAllText(path);
+    }
+
+    /// <summary>
+    /// The same small, self-contained substring-index helper <c>RevitHostFilesTests.RequireIndex</c> already
+    /// uses, duplicated here (rather than shared) for the identical reason <see cref="ReadLockFilePackages"/>'s
+    /// own doc comment gives: that method is <see langword="private"/> to its own file and this file is
+    /// deliberately kept independent of it.
+    /// </summary>
+    private static int RequireIndex(string source, string needle)
+    {
+        int index = source.IndexOf(needle, StringComparison.Ordinal);
+        Assert.True(index >= 0, $"Expected to find '{needle}'.");
+        return index;
     }
 
     /// <summary>

@@ -349,19 +349,48 @@ Issue #16 hook throwing, or `Commit()` itself throwing"); `Result` is still deri
 `TransactionStatus` (`Cancelled` if `RolledBack`, else `Failed`), and only `ex.Message` differs per sub-case.
 No new catch clause and no new dialog were added for Issue #16.
 
+**Update, SolidGround Issue #31 (PH3-4), Stage D (2026-09-27):** the two new pre-Preflight stages (`ExecuteCore`'s
+Stage 0 `LoadDocumentAndSettings` and Stage 0.5 `SolidGroundDialogHost.ShowModal`) are not a new `Result`-code
+branch either — both are ordinary checked early returns, not exceptions, but both fall under this table's own
+first row ("Never reached `Start()`" → "Nothing began" → `Cancelled`) exactly the same way a Stage 1 Preflight
+rejection already did: no `Transaction` is ever constructed on either path. The one behavioral difference from
+every other row in this table: a dialog Cancel (Stage 0.5) shows no `TaskDialog` at all (the operator already
+knows they cancelled), where every other `Cancelled` path in this table shows one — see
+`docs/architecture/revit-interactive-dialog.md`'s "Result-code mapping" for the complete outcome table,
+including the in-dialog lookup-failure case that never reaches `Result` at all. **Review finding, major, fixed:**
+a third checked early return — re-validating the dialog-merged `effectiveSettings.Request` immediately after the
+Stage 0.5 merge, before Stage 1 begins (see "Command flow" > "Stage 0.5" above and error catalogue row 5b) —
+falls under this same first row for the identical reason (no `Transaction` constructed yet), and, unlike the
+dialog-Cancel case, does show the ordinary shared `ShowProblemList` dialog, exactly like every other `Cancelled`
+row in this table.
+
 ### Level and ToposolidType selection
 
 `LevelAndTypeResolver` never calls `Level.Create`, never creates or duplicates a `ToposolidType`. It projects
 every existing `Level`/`ToposolidType` (via `FilteredElementCollector(document).OfClass(typeof(Level))`/
-`.OfClass(typeof(ToposolidType))`) into a Revit-free `NamedElevationCandidate`/`NamedCandidate`, hands the list
-to `NamedElevationSelector.SelectLowestElevation`/`NamedSelector.SelectFirstByOrdinalName`, and maps the
-winning candidate's `long` id back to the real element through a dictionary keyed by `ElementId.Value`.
-Selection: a configured name (`level.name`/`toposolidType.name` in settings.json) wins on an exact ordinal
-match; otherwise the Level with the lowest `Elevation` wins (ties broken by ordinal `Name`), and the first
-ToposolidType by ordinal `Name` wins. No candidate of the requested kind anywhere in the document is a
-Preflight rejection, not a creation. Because boundary geometry no longer reads `Level.Elevation` at all (see
-"The boundary-Z decision" above), this rule's bias toward the lowest-elevation Level has no geometric
-consequence — it only affects which Level the created element is organizationally associated with.
+`.OfClass(typeof(ToposolidType))`) into a Revit-free `NamedElevationCandidate`/`NamedCandidate`.
+
+**Update, SolidGround Issue #31 (PH3-4), Stage D (2026-09-27).** The "configured name wins, else the default
+rule" selection itself moved out of `LevelAndTypeResolver` and into the interactive dialog:
+`LevelAndTypeResolver.ListLevels`/`.ListToposolidTypes` (replacing the former `ResolveLevel`/`ResolveToposolidType`)
+now only build and return the raw candidate list — `SolidGroundDialogHost.ShowModal` calls these once, before
+the dialog opens, to populate its Level/ToposolidType choosers; `SolidGroundDialogViewModel`'s own constructor
+then calls `NamedElevationSelector.SelectLowestElevation`/`NamedSelector.SelectFirstByOrdinalName` directly
+against that list to prefill the operator's default pick, which the operator can still override in the dialog
+before confirming. Selection rule, unchanged: a configured name (`level.name`/`toposolidType.name` in
+settings.json, now read as the dialog's own prefill default rather than Preflight's own binding choice) wins on
+an exact ordinal match; otherwise the Level with the lowest `Elevation` wins (ties broken by ordinal `Name`),
+and the first ToposolidType by ordinal `Name` wins. `CreateToposolidCommand.RunDocumentPreflight` then maps the
+dialog's confirmed candidate id back to the real element via the new `LevelAndTypeResolver.FindLevelById`/
+`.FindToposolidTypeById`. "This project has no Level/ToposolidType at all" moved to Stage 0
+(`LoadDocumentAndSettings`), checked before the dialog ever opens (see "Command flow" above) — still a
+Preflight-style rejection, not a creation, just one stage earlier now that the dialog itself has no way to
+report "none exist" on its own. The former "configured name did not match any existing candidate" mismatch
+check is gone entirely: the interactive dialog always shows the operator the actual candidate about to be
+used, so a silently-wrong pick is no longer possible the way it was when only a settings-file name selected one
+out of sight. Because boundary geometry no longer reads `Level.Elevation` at all (see "The boundary-Z decision"
+above), the default rule's bias toward the lowest-elevation Level has no geometric consequence — it only
+affects which Level the created element is organizationally associated with by default.
 
 ### Unit conversion
 
@@ -592,30 +621,75 @@ always returns `Result.Cancelled`: every post-`Start()` exception is already han
 `RunTransaction`'s own try/catch (see "Transaction and failure handling" above), so nothing that reaches this
 outer catch can have opened a `Transaction`.
 
+**Update, SolidGround Issue #31 (PH3-4), Stage D (2026-09-27).** `ExecuteCore` gained two new stages ahead of
+Stage 1, and Stage 1 itself slimmed to match — see
+`docs/architecture/revit-interactive-dialog.md`'s "Result-code mapping" for the full design record; this note's
+own Stage 1 description below is updated in place rather than duplicated.
+
+- **Stage 0 (`LoadDocumentAndSettings`).** The document-null/family-document check, settings load
+  (`RevitSettingsLocator.Resolve`, `RevitSettingsIo.EnsureTemplateExists`/`TryLoad`), and the geometry-tolerance
+  read (`LogAndReadGeometryTolerances`) — all hoisted out of what used to be a single `RunDocumentPreflight`, so
+  the interactive dialog (Stage 0.5) can use the loaded settings and the read-once
+  `Application.VertexTolerance` before Preflight formally runs. Also guards "this document has at least one
+  Level/ToposolidType" here (`LevelAndTypeResolver.ListLevels`/`.ListToposolidTypes`, both new — see "Level and
+  ToposolidType selection" below), before the dialog ever opens: the dialog itself always resolves one specific
+  Level/ToposolidType from whatever candidates exist and has no way to report "this project has none at all" on
+  its own. A problem here (including either "no Level"/"no ToposolidType" case) shows the same capped
+  `ShowProblemList` dialog Stage 1 always did and returns `Result.Cancelled`; the dialog never opens.
+- **Stage 0.5 (`SolidGroundDialogHost.ShowModal`).** Builds `SolidGroundDialogInputs` from the Stage 0 document
+  and settings (see `docs/architecture/revit-interactive-dialog.md`'s "Settings interaction" for the full
+  construction), shows `SolidGroundDialog` modally — owned via `WindowInteropHelper` against
+  `UIApplication.MainWindowHandle` (confirmed present in the installed Revit 2027 `RevitAPIUI.dll`:
+  `docs/architecture/phase-3-interactive-add-in-research.md`) — and returns the confirmed
+  `SolidGroundDialogResult`, or `null` on Cancel. `null` maps to `Result.Cancelled` with no `TaskDialog` (the
+  operator already knows); otherwise the operator's dialog choices (`OutputUnit`, `PointBudget`,
+  `WriteSharedCoordinatesIfAbsent`) override the loaded settings for this run only, via ordinary `with`
+  expressions (`RevitSettings`/`TerrainRequestSettings`/`SimplificationSettings`/`RevitSharedCoordinatesSettings`
+  are all already `sealed record`s) — never written back to `settings.json`. **Review finding, major, fixed:**
+  the merged `effectiveSettings.Request` is then re-validated (`.Validate()`, the same call
+  `RevitSettingsIo.TryLoad` already ran on the settings-file value at Stage 0) before Stage 1 begins, mapping
+  any problem to the same capped `ShowProblemList` dialog and `Result.Cancelled`. See error catalogue row 5b.
+  **A later re-check finding closed the gap this fix was defending against at its own source instead:** at the
+  time the review fix above landed, the dialog's own Point Budget step enforced only `PointBudget > 0`, not the
+  `SimplificationSettings.MinPointBudget`/`.MaxPointBudget` bound `Validate()` enforces, so an out-of-range
+  value was caught only here, after the whole wizard completed and the operator pressed Create.
+  `SolidGroundDialogViewModel.CanGoNext`'s `PointBudget` case now also requires the new
+  `PointBudgetRangeErrorText` property to be `null` (reusing those same two constants, never a duplicated
+  literal — see `docs/architecture/revit-interactive-dialog.md`'s "Content model and sections" step 5), so this
+  row is no longer reachable by entering an out-of-range `PointBudget` through the dialog's own normal
+  navigation; the `effectiveSettings.Request.Validate()` call above is kept regardless, as defense-in-depth
+  against any future dialog change or other future caller of `ExecuteCore`.
+
 ### Stage 1 — Document Preflight (read-only, no network, no transaction)
 
-`RunDocumentPreflight` accumulates every problem it finds into one list rather than stopping at the first,
-with three exceptions that return early (a structural problem makes every later check meaningless): no
-usable active document, the settings file having just been written, and a settings write or load failure.
-The no-document return is deferred until after settings load — steps 2 and 3 below still run with no
-document, so a missing document never masks a settings problem — which means steps 4 through 9 below only
-run once step 1 found a usable, non-family document. In order:
+**Update, SolidGround Issue #31 (PH3-4), Stage D.** Steps 1-3 below (document/family check, settings
+create-if-absent, settings load) moved into Stage 0 (`LoadDocumentAndSettings`, described above) so the
+interactive dialog can run between them and the rest of this list; `RunDocumentPreflight` itself now begins
+directly at what was step 4. It still accumulates every problem it finds into one list rather than stopping at
+the first; `settings` here is `ExecuteCore`'s own dialog-merged `effectiveSettings`, passed in under the same
+parameter name `settings` this method already used before this stage (so every reference below reads
+identically to before). In order:
 
-1. Active document present, not a family document.
-2. `RevitSettingsIo.EnsureTemplateExists` — three outcomes: template just written (one problem, "edit and
-   rerun," **early return**), write failed (a distinct settings-lock or write-access problem, **early
-   return**), or the file was already present.
-3. `RevitSettingsIo.TryLoad` — a decode or validation failure folds every problem into the list (**early
-   return**).
-4. `mode == Fetch` → `EnvironmentOpenTopographyApiKeyProvider().GetApiKey()` resolvable.
-5. `AoiSettingsFactory.Build(settings.Request.AreaOfInterest, wgs84Reference, parcelText)` — parcel text is
-   read via `File.ReadAllText` only when `kind == parcel`; a read or construction failure is one more
-   accumulated problem, not a return.
-6. `process` mode only: `process.asc`/`.prj`/`.sourceJson` existence, each checked individually (added in
+1. `mode == Fetch` → `EnvironmentOpenTopographyApiKeyProvider().GetApiKey()` resolvable.
+2. **AOI**, gated by `dialogResult.AoiSource` (owner decision 1's refinement — see
+   `docs/architecture/revit-interactive-dialog.md`'s "AOI and provenance"): `dialogResult.Aoi` directly when
+   `AoiSource == FindParcel` (already resolved, in memory, by the dialog's own `Create` command); otherwise —
+   `AoiSource == UseSettingsFile` — `AoiSettingsFactory.Build(settings.Request.AreaOfInterest, wgs84Reference,
+   parcelText)` exactly as before this issue, with parcel text still read via `File.ReadAllText` only when
+   `kind == parcel`; a read or construction failure is one more accumulated problem, not a return, on that
+   branch only.
+3. `process` mode only: `process.asc`/`.prj`/`.sourceJson` existence, each checked individually (added in
    review beyond the original design record, so a missing process-mode file surfaces here, identically
    worded, instead of later from Stage 2's acquisition-failure path).
-7. `LevelAndTypeResolver.ResolveLevel`/`ResolveToposolidType` against the configured names.
-8. `CheckRevitIniPointThreshold` (added for SolidGround Issue #15's 2026-09-21 threshold evidence, "Step 7"
+4. **Level/ToposolidType**, always dialog-supplied (Stage D): `LevelAndTypeResolver.FindLevelById`/
+   `.FindToposolidTypeById` map `dialogResult.Level.Id`/`.ToposolidType.Id` back to the real element. Neither
+   branch is expected to be reachable in practice (owner decision 4: same `Document`, same synchronous call, no
+   `Transaction` opened on any path that could invalidate an element reference) but each is still a fail-loud
+   Preflight problem, never a crash, if it somehow is. The former "configured name did not match anything"
+   mismatch check is gone: the interactive dialog always shows the operator the actual candidate about to be
+   used, so a silently-wrong pick is no longer possible the way it was when only a settings-file name selected
+   one out of sight.
+5. `CheckRevitIniPointThreshold` (added for SolidGround Issue #15's 2026-09-21 threshold evidence, "Step 7"
    below): reads `commandData.Application.Application.CurrentUsersDataFolderPath`, combines it with
    `"Revit.ini"`, and reads that file — a missing file, an inaccessible data folder, or any other read error
    just logs a warning and returns (no problem added; the rest of Preflight still runs). Otherwise parses it
@@ -632,36 +706,36 @@ run once step 1 found a usable, non-family document. In order:
    `DocumentContext.NativeToposolidMaxPointThreshold` for Stage 5's `PostCreationVerification.Verify` call
    below, whether or not this step itself added a problem.
 
-   **Update, SolidGround Issue #31 (PH3-4), Stage A (2026-09-27):** `SolidGround.Core.Hosting
-   .RevitIniToposolidThresholds` gained two `public static` methods beside `Parse` --
+   **Update, SolidGround Issue #31 (PH3-4).** Stage A (2026-09-27) added `SolidGround.Core.Hosting
+   .RevitIniToposolidThresholds`'s two `public static` methods beside `Parse` --
    `ExceedsNativeThreshold(pointBudget, thresholds)` (the same `NativeToposolidMaxPointThreshold is {} native
-   && pointBudget > native` comparison this step performs inline above) and `DescribeExceedance(pointBudget,
+   && pointBudget > native` comparison this step used to perform inline) and `DescribeExceedance(pointBudget,
    nativeThreshold, revitIniPath)` (a pure extraction of the exact problem-line text this step adds to error
-   catalogue row 9a, byte-identical to today's inline text) -- so the interactive dialog's own inline
-   point-budget warning (Issue #31's remaining stages) can share this exact rule and wording with
-   `CheckRevitIniPointThreshold` and never drift apart from it. This Stage A addition is Core-only:
-   `CheckRevitIniPointThreshold` itself still performs this comparison and builds this text inline exactly as
-   shown above; a later Issue #31 stage switches it to call these two Core methods instead, with no behavior
-   change, alongside the paired `RevitHostFilesTests` update that migration needs.
-9. **(SolidGround Issue #30, PH3-3.)** Reads and logs `commandData.Application.Application
-   .ShortCurveTolerance`/`.VertexTolerance` once (Revit-internal decimal feet), carried forward on
-   `DocumentContext` as `ShortCurveToleranceInternal`/`VertexToleranceInternal` for Stage 3's geometry cleanup.
-   Then, only when `sharedCoordinates.writeIfAbsent` is `true`: `SharedCoordinatesDetector
-   .LooksAlreadyCoordinated(document, vertexToleranceInternal)` — error catalogue row 9b's refusal when the
-   document already appears to have shared coordinates set. The decision itself is delegated to the Revit-free
+   catalogue row 9a, byte-identical to the old inline text) -- so the interactive dialog's own inline
+   point-budget warning can share this exact rule and wording with `CheckRevitIniPointThreshold` and never
+   drift apart from it. **Landed, Stage D:** `CheckRevitIniPointThreshold` itself is now a two-line call into
+   these two Core methods -- the problem-line prose no longer appears inline in `CreateToposolidCommand.cs` at
+   all -- with no behavior change, alongside the paired `RevitHostFilesTests` update that migration needed.
+6. **(SolidGround Issue #30, PH3-3; `vertexToleranceInternal` now a parameter, read once at Stage 0, per
+   SolidGround Issue #31, PH3-4, Stage D -- not a local variable read here.)** Only when
+   `sharedCoordinates.writeIfAbsent` is `true`: `SharedCoordinatesDetector.LooksAlreadyCoordinated(document,
+   vertexToleranceInternal)` — error catalogue row 9b's refusal when the document already appears to have
+   shared coordinates set. The decision itself is delegated to the Revit-free
    `SolidGround.Core.Transformations.SharedCoordinateDetection.LooksAlreadyCoordinated` (2026-09-27
    live-evidence fix: a live Revit 2027 session found the original proxy's own reliance on the survey point's
    "clipped" state misread Revit's own default template as already coordinated, since that template ships the
    survey point clipped; the corrected proxy never reads that state). See
    `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Preflight refusal" and
    "Shared-coordinates detection" sections.
-10. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
-    baseline.
+7. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
+   baseline.
 
-Steps 4 through 9 can all contribute problems to one combined dialog; only steps 2 and 3 short-circuit with a
-single-cause dialog, since nothing past a settings failure can be meaningfully checked. Any problem →
-`ShowProblemList("SolidGround Preflight found a problem.", ...)` (the existing `ProblemReportDialog.BuildRejectionBody`,
-capped at 8 inline lines, full list to the log folder) → `Result.Cancelled`. Nothing past this stage runs.
+All seven steps above can contribute problems to one combined dialog (Stage 0's own two settings-related
+early-return cases — the template having just been written, or a load failure — are the only remaining
+single-cause short-circuits, and those now happen a stage earlier, before this method is ever reached). Any
+problem → `ShowProblemList("SolidGround Preflight found a problem.", ...)` (the existing
+`ProblemReportDialog.BuildRejectionBody`, capped at 8 inline lines, full list to the log folder) →
+`Result.Cancelled`. Nothing past this stage runs.
 
 ### Stage 2 — Acquisition (network/file I/O; the only stage using the synchronous bridge)
 
@@ -744,9 +818,12 @@ acquisition = Task.Run(() => RunPipelineAsync(request, wgs84Reference, aoi, cts.
 5. `PostCreationVerification.AllProfilesArePlanar(profiles, out problem)` — a coding-error guard, not a
    data-driven one (see "The boundary-Z decision"); a failure here shows the same "could not build a valid
    boundary" headline as Stage 3's own boundary-validation dialog, `Result.Cancelled`. **Stop.**
-6. **(SolidGround Issue #30, PH3-3, parcel areas of interest only.)** `bool isParcelAoi =
-   context.Settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel`; only when `true`, a second,
-   independently-built `IList<CurveLoop> propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(boundary,
+6. **(SolidGround Issue #30, PH3-3, parcel areas of interest only.)** `bool isParcelAoi = context.Aoi is
+   ParcelGeometryAoi` (SolidGround Issue #31, PH3-4, Stage D: recomputed against `context.Aoi`'s own resolved
+   type, not `context.Settings.Request.AreaOfInterest.Kind` — once the interactive dialog can supply an AOI
+   directly, that settings-derived kind no longer names every reachable run's real AOI type, but `context.Aoi`
+   always does, on both dialog paths); only when `true`, a second, independently-built
+   `IList<CurveLoop> propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(boundary,
    constantZInternal, revitUnit)`, then `PostCreationVerification.BoundaryIsValidPropertyLine(propertyLineProfiles,
    out problem)` — a failure here shows the same "could not build a valid boundary" headline, `Result.Cancelled`.
    **Stop.** A non-parcel run never reaches this step at all. See
@@ -938,6 +1015,7 @@ shows its own distinct headline.
 | 3 | Settings lock could not be acquired within 5 seconds | Doc Preflight | Cancelled | shared dialog (shown alone: early return); names the `Global\` mutex, asks to retry |
 | 4 | Settings directory not writable (`UnauthorizedAccessException`) | Doc Preflight | Cancelled | shared dialog (shown alone: early return); names this file by path as the manual-template fallback |
 | 5 | Settings JSON fails strict decode / semantic validation | Doc Preflight | Cancelled | shared dialog (shown alone: early return); every `Validate()` problem, one per line |
+| 5b | Dialog-merged `effectiveSettings.Request` fails the identical `Validate()` check (SolidGround Issue #31, PH3-4, Stage D review fix: guards a dialog-supplied `pointBudget`/`outputUnit` override the same way row 5 already guards the settings-file value; kept as defense-in-depth after a later re-check fix closed the one gap this originally covered — the dialog's own Point Budget step now also enforces the identical `pointBudget` bound directly, so `Next` blocks an out-of-range entry before this row is ever reached in practice) | Doc Preflight | Cancelled | shared dialog; every `Validate()` problem, one per line, identical wording to row 5 |
 | 6 | `OPENTOPOGRAPHY_API_KEY` missing (fetch mode) | Doc Preflight | Cancelled | shared dialog; problem line |
 | 7 | AOI construction fails (bad bbox/radius/parcel geometry, or an unreadable parcel file) | Doc Preflight | Cancelled | shared dialog; problem line names the constructor's own message |
 | 8 | `process.asc`/`.prj`/`.sourceJson` missing | Doc Preflight | Cancelled | shared dialog; one problem line per missing file |

@@ -14,12 +14,14 @@ namespace SolidGround.Tests;
 public sealed class TerrainRequestSettingsTests
 {
     // The exact §4.3 shipped template, byte-for-byte, including its Revit-only `level`/`toposolidType` name
-    // overrides (RevitTargetSettings' own fields) and `sharedCoordinates` opt-in (RevitSharedCoordinatesSettings'
-    // own field, SolidGround Issue #30, PH3-3) -- none part of TerrainRequestSettings at all. This Core-only
-    // test never references RevitSettings/RevitTargetSettings/RevitSharedCoordinatesSettings;
-    // JsonOptionsDecodesTheShippedTemplateTextVerbatim strips those three keys before decoding, simulating the
+    // overrides (RevitTargetSettings' own fields), `sharedCoordinates` opt-in (RevitSharedCoordinatesSettings'
+    // own field, SolidGround Issue #30, PH3-3), and `addressAndParcel` dialog configuration
+    // (RevitAddressAndParcelSettings' own fields, SolidGround Issue #31, PH3-4) -- none part of
+    // TerrainRequestSettings at all. This Core-only test never references
+    // RevitSettings/RevitTargetSettings/RevitSharedCoordinatesSettings/RevitAddressAndParcelSettings;
+    // JsonOptionsDecodesTheShippedTemplateTextVerbatim strips those four keys before decoding, simulating the
     // split SolidGround.Revit's own settings I/O performs between the Request-shaped and Target-shaped/
-    // SharedCoordinates-shaped portions of the one flat document.
+    // SharedCoordinates-shaped/AddressAndParcel-shaped portions of the one flat document.
     private const string ShippedTemplateText = """
         // %ProgramData%\SolidGround\Revit\settings.json
         // SolidGround edits this file only to create it; it never rewrites an existing one.
@@ -29,6 +31,9 @@ public sealed class TerrainRequestSettingsTests
           // "process": read a local AAIGrid .asc/.prj pair (and optional .source.json sidecar) from disk, no network.
           "mode": "process",
 
+          // Read only when the interactive dialog's operator chooses "Use the area in the settings file"
+          // (SolidGround Issue #31, PH3-4); choosing "Find a parcel" instead resolves an address/point and
+          // parcel boundary interactively and ignores this section entirely for that run.
           "areaOfInterest": {
             // "boundingBox" | "radius" | "parcel" -- give exactly the matching object below.
             "kind": "parcel",
@@ -63,7 +68,24 @@ public sealed class TerrainRequestSettingsTests
           // "writeIfAbsent": true lets SolidGround write this run's terrain origin as this model's shared
           // coordinates (ActiveProjectLocation), but ONLY when the model has none yet -- Preflight refuses when it
           // looks like the model already has shared coordinates set. Default false: unchanged from Issue #15.
+          // The interactive dialog's checkbox (SolidGround Issue #31, PH3-4) prefills from this value but always
+          // overrides it for the run about to happen; nothing is ever written back here.
           "sharedCoordinates": { "writeIfAbsent": false },
+
+          // Configures the interactive dialog's own address/parcel lookup (SolidGround Issue #31, PH3-4); unused
+          // when the operator chooses "Use the area in the settings file". "geocoderProvider" is one of
+          // "census" | "geocodio" | "esri". "countyRegistryPath" wins when non-blank; else "localParcelFilePath"
+          // wins when non-blank; else the dialog shows an inline configuration error the first time a parcel
+          // lookup is attempted. A blank "countyGeoidOverride" auto-resolves the county GEOID from the
+          // confirmed geocode candidate's own coordinates.
+          "addressAndParcel": {
+            "geocoderProvider": "census",
+            "countyRegistryPath": null,
+            "countyGeoidOverride": null,
+            "localParcelFilePath": null,
+            "localParcelFileSourceLabel": null,
+            "localParcelFileLicenseDisclaimerText": null
+          },
 
           "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
 
@@ -109,6 +131,25 @@ public sealed class TerrainRequestSettingsTests
         IReadOnlyList<string> problems = settings.Validate();
 
         Assert.Contains(problems, p => p.Contains("pointBudget", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(SimplificationSettings.MinPointBudget)]
+    [InlineData(SimplificationSettings.MaxPointBudget)]
+    public void ValidateAcceptsPointBudgetAtEitherInclusiveBoundaryConstant(int budget)
+    {
+        // SolidGround Issue #31, PH3-4, Stage D, re-check finding: SimplificationSettings.MinPointBudget/
+        // .MaxPointBudget replaced this method's own former 1/50_000 literals, and are reused, unchanged, by
+        // SolidGround.Revit.Dialog.SolidGroundDialogViewModel's inline point-budget range check
+        // (docs/architecture/revit-interactive-dialog.md "Content model and sections" step 5) so the two bounds
+        // can never drift apart. This proves both constants stay genuinely inclusive after that extraction --
+        // ValidateReportsOutOfRangePointBudget above already proves one-past-each-end is still rejected.
+        TerrainRequestSettings settings = MinimalFetch();
+        settings = settings with { Simplification = settings.Simplification with { PointBudget = budget } };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.DoesNotContain(problems, p => p.Contains("pointBudget", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -420,6 +461,7 @@ public sealed class TerrainRequestSettingsTests
         requestShapedPortion.Remove("level");
         requestShapedPortion.Remove("toposolidType");
         requestShapedPortion.Remove("sharedCoordinates");
+        requestShapedPortion.Remove("addressAndParcel");
 
         TerrainRequestSettings? settings = requestShapedPortion.Deserialize<TerrainRequestSettings>(TerrainRequestSettings.JsonOptions);
 

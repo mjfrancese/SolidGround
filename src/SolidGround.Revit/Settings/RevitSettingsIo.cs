@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using SolidGround.Core.Processing;
+using SolidGround.Core.Sources;
 using SolidGround.Revit.Diagnostics;
 
 namespace SolidGround.Revit.Settings;
@@ -40,6 +41,9 @@ internal static class RevitSettingsIo
           // "process": read a local AAIGrid .asc/.prj pair (and optional .source.json sidecar) from disk, no network.
           "mode": "process",
 
+          // Read only when the interactive dialog's operator chooses "Use the area in the settings file"
+          // (SolidGround Issue #31, PH3-4); choosing "Find a parcel" instead resolves an address/point and
+          // parcel boundary interactively and ignores this section entirely for that run.
           "areaOfInterest": {
             // "boundingBox" | "radius" | "parcel" -- give exactly the matching object below.
             "kind": "parcel",
@@ -74,7 +78,24 @@ internal static class RevitSettingsIo
           // "writeIfAbsent": true lets SolidGround write this run's terrain origin as this model's shared
           // coordinates (ActiveProjectLocation), but ONLY when the model has none yet -- Preflight refuses when it
           // looks like the model already has shared coordinates set. Default false: unchanged from Issue #15.
+          // The interactive dialog's checkbox (SolidGround Issue #31, PH3-4) prefills from this value but always
+          // overrides it for the run about to happen; nothing is ever written back here.
           "sharedCoordinates": { "writeIfAbsent": false },
+
+          // Configures the interactive dialog's own address/parcel lookup (SolidGround Issue #31, PH3-4); unused
+          // when the operator chooses "Use the area in the settings file". "geocoderProvider" is one of
+          // "census" | "geocodio" | "esri". "countyRegistryPath" wins when non-blank; else "localParcelFilePath"
+          // wins when non-blank; else the dialog shows an inline configuration error the first time a parcel
+          // lookup is attempted. A blank "countyGeoidOverride" auto-resolves the county GEOID from the
+          // confirmed geocode candidate's own coordinates.
+          "addressAndParcel": {
+            "geocoderProvider": "census",
+            "countyRegistryPath": null,
+            "countyGeoidOverride": null,
+            "localParcelFilePath": null,
+            "localParcelFileSourceLabel": null,
+            "localParcelFileLicenseDisclaimerText": null
+          },
 
           "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
 
@@ -200,6 +221,7 @@ internal static class RevitSettingsIo
         string? levelName;
         string? toposolidTypeName;
         bool sharedCoordinatesWriteIfAbsent;
+        RevitAddressAndParcelSettings addressAndParcel;
         try
         {
             JsonDocumentOptions documentOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
@@ -213,9 +235,11 @@ internal static class RevitSettingsIo
             levelName = (string?)root["level"]?["name"];
             toposolidTypeName = (string?)root["toposolidType"]?["name"];
             sharedCoordinatesWriteIfAbsent = (bool?)root["sharedCoordinates"]?["writeIfAbsent"] ?? false;
+            addressAndParcel = ParseAddressAndParcel(root["addressAndParcel"]);
             root.Remove("level");
             root.Remove("toposolidType");
             root.Remove("sharedCoordinates");
+            root.Remove("addressAndParcel");
             requestShapedPortion = root;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
@@ -223,6 +247,13 @@ internal static class RevitSettingsIo
             // Covers a syntactically malformed document and the "level"/"toposolidType" (or their "name"
             // child) being present but shaped as something other than an object/string -- neither should
             // surface as a raw, undocumented exception (error catalogue row 4).
+            error = $"'{settingsPath}' could not be parsed as SolidGround settings: {ex.Message}";
+            return false;
+        }
+        catch (AddressAndParcelDecodeException ex)
+        {
+            // Its own catch clause (review: distinct from the generic parse-failure branch above), since this
+            // one names the exact bad "geocoderProvider" token rather than a generic parse failure.
             error = $"'{settingsPath}' could not be parsed as SolidGround settings: {ex.Message}";
             return false;
         }
@@ -258,9 +289,49 @@ internal static class RevitSettingsIo
         settings = new RevitSettings(
             request,
             new RevitTargetSettings(levelName, toposolidTypeName),
-            new RevitSharedCoordinatesSettings(sharedCoordinatesWriteIfAbsent));
+            new RevitSharedCoordinatesSettings(sharedCoordinatesWriteIfAbsent),
+            addressAndParcel);
         return true;
     }
+
+    /// <summary>
+    /// Decodes the "addressAndParcel" top-level section (SolidGround Issue #31, PH3-4). An absent section
+    /// decodes to every field at its documented default (<see cref="AddressGeocoderProvider.Census"/>, every
+    /// path/label/disclaimer <see langword="null"/>) rather than being required, so an existing settings file
+    /// written before this section existed still loads unchanged. <c>"census"|"geocodio"|"esri"</c> matches
+    /// <c>SolidGround.Cli.Commands.GeocodeCommand.ParseProvider</c>'s own existing token spelling exactly, but is
+    /// a small, independent switch here, not a shared call -- <c>SolidGround.Revit</c> cannot reference
+    /// <c>SolidGround.Cli</c> (AGENTS.md architecture table).
+    /// </summary>
+    /// <exception cref="AddressAndParcelDecodeException">"geocoderProvider" is present but not one of the three documented tokens.</exception>
+    private static RevitAddressAndParcelSettings ParseAddressAndParcel(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return new RevitAddressAndParcelSettings(AddressGeocoderProvider.Census, null, null, null, null, null);
+        }
+
+        string? providerToken = (string?)node["geocoderProvider"];
+        AddressGeocoderProvider provider = providerToken switch
+        {
+            null or "census" => AddressGeocoderProvider.Census,
+            "geocodio" => AddressGeocoderProvider.Geocodio,
+            "esri" => AddressGeocoderProvider.Esri,
+            _ => throw new AddressAndParcelDecodeException(
+                $"addressAndParcel.geocoderProvider '{providerToken}' is not recognized; it must be one of: census, geocodio, esri."),
+        };
+
+        return new RevitAddressAndParcelSettings(
+            provider,
+            (string?)node["countyRegistryPath"],
+            (string?)node["countyGeoidOverride"],
+            (string?)node["localParcelFilePath"],
+            (string?)node["localParcelFileSourceLabel"],
+            (string?)node["localParcelFileLicenseDisclaimerText"]);
+    }
+
+    /// <summary>Raised only by <see cref="ParseAddressAndParcel"/>, caught by <see cref="TryLoad"/> alone -- never surfaces past this file.</summary>
+    private sealed class AddressAndParcelDecodeException(string message) : Exception(message);
 
     /// <summary>
     /// Derives a stable, valid <c>Global\</c> mutex name from <paramref name="settingsPath"/> (orchestrator

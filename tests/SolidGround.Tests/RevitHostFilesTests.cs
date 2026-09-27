@@ -524,7 +524,12 @@ public sealed class RevitHostFilesTests
         Assert.Contains("CurrentUsersDataFolderPath", content, StringComparison.Ordinal);
         Assert.Contains("RevitIniToposolidThresholds.Parse", content, StringComparison.Ordinal);
         Assert.Contains("NativeToposolidMaxPointThreshold", content, StringComparison.Ordinal);
-        Assert.Contains("exceeds this machine's NativeToposolidMaxPointThreshold", content, StringComparison.Ordinal);
+        // SolidGround Issue #31, PH3-4, Stage D: the problem-line prose itself moved into Core
+        // (RevitIniToposolidThresholds.DescribeExceedance, landed Stage A; its own test asserts the exact text)
+        // so SolidGroundDialog's inline point-budget warning can share it verbatim -- it no longer appears in
+        // this file's own source text at all. These two call sites are what replace it here.
+        Assert.Contains("RevitIniToposolidThresholds.ExceedsNativeThreshold", content, StringComparison.Ordinal);
+        Assert.Contains("RevitIniToposolidThresholds.DescribeExceedance", content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -845,6 +850,164 @@ public sealed class RevitHostFilesTests
         Assert.Contains(
             "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
             source, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // (l) SolidGround Issue #31 (PH3-4), Stage D: wiring the interactive dialog into
+    // CreateToposolidCommand.Execute. Same falsifiable, plain-text regression-backstop discipline as every
+    // check above: this file never references SolidGround.Revit or loads its assembly.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void CreateToposolidCommandShowsTheInteractiveDialogBeforePreflightAndBeforeAnyTransaction()
+    {
+        // AC3/docs/architecture/revit-interactive-dialog.md's "Result-code mapping": Stage 0.5's ShowModal call
+        // site must run before Stage 1's RunDocumentPreflight call site, which must in turn run before Stage
+        // 5's Transaction.Start(). RequireIndex finds the first occurrence of each literal; ShowModal( and
+        // RunDocumentPreflight( each have exactly one real call site in this file (their own declarations sit
+        // later in the file, so the call sites are what RequireIndex finds first).
+        string source = ReadCreateToposolidCommandSource();
+
+        int showModalIndex = RequireIndex(source, "SolidGroundDialogHost.ShowModal(");
+        int preflightCallIndex = RequireIndex(source, "RunDocumentPreflight(");
+        int transactionStartIndex = RequireIndex(source, "transaction.Start()");
+
+        Assert.True(showModalIndex < preflightCallIndex, "Expected SolidGroundDialogHost.ShowModal( to appear before RunDocumentPreflight(.");
+        Assert.True(preflightCallIndex < transactionStartIndex, "Expected RunDocumentPreflight( to appear before transaction.Start().");
+    }
+
+    [Fact]
+    public void CreateToposolidCommandReturnsCancelledWithNoTaskDialogWhenTheDialogIsCancelled()
+    {
+        string source = ReadCreateToposolidCommandSource();
+
+        int dialogNullCheckIndex = RequireIndex(source, "if (dialogResult is null)");
+        const int MaxFollowingDistance = 220; // tight window: only this if block's own body (comment + return).
+        string window = source[dialogNullCheckIndex..Math.Min(source.Length, dialogNullCheckIndex + MaxFollowingDistance)];
+
+        Assert.Contains("return Result.Cancelled;", window, StringComparison.Ordinal);
+        Assert.DoesNotContain("TaskDialog.Show(", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandDerivesTheAoiFromSettingsOnlyWhenTheDialogChoseTheSettingsFile()
+    {
+        // Owner decision 1's refinement (docs/architecture/revit-interactive-dialog.md's "AOI and provenance"):
+        // both AOI paths remain available. The FindParcel branch must use dialogResult.Aoi directly; the
+        // settings-derived path (AoiSettingsFactory.Build, unchanged from before this issue) must still exist,
+        // gated behind the opposite branch of the identical DialogAoiSource.FindParcel check.
+        string source = ReadCreateToposolidCommandSource();
+
+        int gateIndex = RequireIndex(source, "if (dialogResult.AoiSource == DialogAoiSource.FindParcel)");
+        const int MaxFollowingDistance = 200;
+        string findParcelBranch = source[gateIndex..Math.Min(source.Length, gateIndex + MaxFollowingDistance)];
+        Assert.Contains("aoi = dialogResult.Aoi;", findParcelBranch, StringComparison.Ordinal);
+
+        Assert.Contains("AoiSettingsFactory.Build(", source, StringComparison.Ordinal);
+        Assert.Contains("File.ReadAllText(parcelPath)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandThreadsTheDialogsAddressParcelProvenanceIntoTheAcquisitionPipeline()
+    {
+        // SolidGround Issue #31, PH3-4: dialogResult.AddressParcel (null on the UseSettingsFile path, by
+        // SolidGroundDialogResult's own contract; populated on the FindParcel path) reaches
+        // TerrainProcessingPipeline.RunAsync's own new optional trailing parameter (Stage A) through
+        // RunPipelineAsync/RunFetchPipelineAsync/RunProcessPipelineAsync, threaded as an ordinary parameter
+        // the whole way -- never re-derived at either of the two TerrainProcessingPipeline.RunAsync call sites.
+        string source = ReadCreateToposolidCommandSource();
+
+        int pipelineCallIndex = RequireIndex(source, "RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi,");
+        const int MaxFollowingDistance = 150; // needle itself is ~79 characters; leaves a real margin after it.
+        string window = source[pipelineCallIndex..Math.Min(source.Length, pipelineCallIndex + MaxFollowingDistance)];
+        Assert.Contains("dialogResult.AddressParcel,", window, StringComparison.Ordinal);
+
+        int addressParcelParameterCount = Regex.Count(source, Regex.Escape("AddressParcelProvenance? addressParcel"));
+        Assert.Equal(3, addressParcelParameterCount); // RunPipelineAsync, RunFetchPipelineAsync, RunProcessPipelineAsync.
+
+        int runAsyncAddressParcelArgumentCount = Regex.Count(source, Regex.Escape("cancellationToken, addressParcel)"));
+        Assert.Equal(2, runAsyncAddressParcelArgumentCount); // TerrainProcessingPipeline.RunAsync's two call sites.
+    }
+
+    [Fact]
+    public void CreateToposolidCommandBuildsEffectiveSettingsFromTheDialogsOutputUnitPointBudgetAndSharedCoordinatesChoice()
+    {
+        // Review finding (coverage gap), major, fixed: docs/architecture/revit-interactive-dialog.md's
+        // "Settings interaction: prefill, not override" -- the operator's in-dialog OutputUnit/PointBudget/
+        // WriteSharedCoordinatesIfAbsent choices, not the raw settings-file values, are what the rest of the
+        // run (effectiveSettings) actually uses. This is the one place those choices take effect; unlike every
+        // other Stage D wiring fact in this region, it previously had no dedicated test.
+        string source = ReadCreateToposolidCommandSource();
+
+        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = loaded.Settings with");
+        const int MaxFollowingDistance = 460; // covers the full `with` expression through its closing `};` (measured: 439 chars).
+        string window = source[mergeIndex..Math.Min(source.Length, mergeIndex + MaxFollowingDistance)];
+
+        Assert.Contains("OutputUnit = dialogResult.OutputUnit,", window, StringComparison.Ordinal);
+        Assert.Contains("PointBudget = dialogResult.PointBudget", window, StringComparison.Ordinal);
+        Assert.Contains(
+            "SharedCoordinates = new RevitSharedCoordinatesSettings(dialogResult.WriteSharedCoordinatesIfAbsent)",
+            window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandRevalidatesTheEffectiveSettingsAfterTheDialogMergeAndBeforePreflight()
+    {
+        // Review finding, major, fixed: at the time this test was written, the dialog's own Point Budget step
+        // enforced only `PointBudget > 0` (SolidGroundDialogViewModel.CanGoNext), so a dialog-supplied override
+        // could otherwise bypass the 1-50000 bound TerrainRequestSettings.Validate() already enforces for every
+        // settings-file-sourced value. A later re-check finding closed that gap at its source
+        // (CanGoNext's PointBudget case now also requires SolidGroundDialogViewModel.PointBudgetRangeErrorText
+        // to be null, the identical bound), but this command-layer re-validation call is kept as-is,
+        // deliberately: it is defense-in-depth against any future dialog change (or any other future caller of
+        // ExecuteCore) that supplies an effectiveSettings value the dialog itself never validated. This asserts
+        // the re-validation call exists, runs after the merge (so it sees the dialog's own PointBudget/OutputUnit)
+        // but before Stage 1 Preflight begins, and maps any problem to the same shared ShowProblemList/Cancelled
+        // path every other Preflight-shaped rejection already uses.
+        string source = ReadCreateToposolidCommandSource();
+
+        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = loaded.Settings with");
+        int validateIndex = RequireIndex(source, "effectiveSettings.Request.Validate()");
+        int preflightCallIndex = RequireIndex(source, "RunDocumentPreflight(");
+
+        Assert.True(mergeIndex < validateIndex, "Expected the effectiveSettings merge to appear before its own re-validation.");
+        Assert.True(validateIndex < preflightCallIndex, "Expected effectiveSettings.Request.Validate() to run before RunDocumentPreflight(.");
+
+        const int MaxFollowingDistance = 340; // covers the guard's own Count check, ShowProblemList call, and return (measured: 311 chars).
+        string window = source[validateIndex..Math.Min(source.Length, validateIndex + MaxFollowingDistance)];
+        Assert.Contains("if (effectiveSettingsProblems.Count > 0)", window, StringComparison.Ordinal);
+        Assert.Contains("ShowProblemList(", window, StringComparison.Ordinal);
+        Assert.Contains("return Result.Cancelled;", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandNeverWritesBackToTheSettingsFile()
+    {
+        // docs/architecture/revit-interactive-dialog.md's "Settings interaction: prefill, not override": the
+        // operator's dialog choices override the settings file's values for the run about to happen only --
+        // CreateToposolidCommand.cs must never call any RevitSettingsIo member beyond the two it already used
+        // before this issue (EnsureTemplateExists only ever creates an absent file; TryLoad never writes).
+        string source = ReadCreateToposolidCommandSource();
+
+        HashSet<string> calledMembers = [.. Regex.Matches(source, @"RevitSettingsIo\.(\w+)").Select(match => match.Groups[1].Value)];
+        Assert.Equal(new HashSet<string> { "EnsureTemplateExists", "TryLoad" }, calledMembers);
+    }
+
+    [Fact]
+    public void RevitSettingsIoDeclaresExactlyOneFileWriteCallSiteTheTemplateCreationItself()
+    {
+        // Companion guard, at the settings-I/O file itself rather than only its one caller above: a genuine
+        // regression that added a second write call (a real "save the dialog's choices back" feature) would
+        // satisfy the check above just as well if the new write went through a differently named method this
+        // file itself defines and calls internally -- this instead counts every real file-write call site in
+        // RevitSettingsIo.cs directly, which must still be exactly the one EnsureTemplateExists already had
+        // before this issue (its own atomic create-only write, guarded by "only when the file is absent").
+        string path = Path.Combine(RevitProjectDirectory, "Settings", "RevitSettingsIo.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        string content = File.ReadAllText(path);
+
+        int writeCallCount = Regex.Count(content, Regex.Escape("File.WriteAllText("));
+        Assert.Equal(1, writeCallCount);
     }
 
     private static string ReadSharedCoordinatesGateSource()

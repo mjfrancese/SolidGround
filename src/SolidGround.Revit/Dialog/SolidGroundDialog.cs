@@ -24,17 +24,29 @@ namespace SolidGround.Revit.Dialog;
 /// entirely in code sidesteps that failure mode outright rather than working around it.
 /// </summary>
 /// <remarks>
-/// This stage (Stage C) builds every one of the ten originally designed sections plus owner decision 1's own
-/// step 0 AOI-source choice, full theming/accessibility, and the synchronous network bridge (see
-/// <see cref="SolidGroundDialogViewModel"/>). It is not wired into <c>CreateToposolidCommand.Execute</c>: this
-/// type is not constructed anywhere in this stage, so it remains unreachable from a running add-in. Wiring
-/// (a <c>SolidGroundDialogHost.ShowModal</c> call site) is a later stage's own scope.
+/// Stage C built every one of the ten originally designed sections plus owner decision 1's own step 0
+/// AOI-source choice, full theming/accessibility, and the synchronous network bridge (see
+/// <see cref="SolidGroundDialogViewModel"/>). Stage D wires this type in (review finding, minor, fixed):
+/// <see cref="SolidGroundDialogHost.ShowModal"/> constructs and shows it modally from
+/// <c>CreateToposolidCommand.ExecuteCore</c>'s Stage 0.5, after Stage 0 (<c>LoadDocumentAndSettings</c>) and
+/// before Stage 1 Preflight -- see docs/architecture/revit-interactive-dialog.md's "Result-code mapping".
 /// </remarks>
 internal sealed class SolidGroundDialog : Window
 {
     private readonly SolidGroundDialogViewModel _viewModel;
     private readonly SolidGroundDialogInputs _inputs;
     private readonly Dictionary<SolidGroundDialogStep, FrameworkElement> _stepPanels;
+
+    // IsDefault/IsCancel wiring (SolidGround Issue #31, PH3-4, Stage D): kept as instance fields, not locals
+    // inside their own panel/navigation-bar builder methods, so UpdateDefaultButton can toggle IsDefault on
+    // whichever one is this step's own real "primary action" -- see that method's own doc comment for why a
+    // fixed, always-true IsDefault on more than one of these four at once would be genuinely ambiguous, not
+    // merely untidy, during the one real overlap window this dialog has (AddressEntry/ParcelCandidates once a
+    // candidate is already confirmed but Next has not yet been pressed).
+    private Button _findButton = null!;
+    private Button _findParcelButton = null!;
+    private Button _nextButton = null!;
+    private Button _createButton = null!;
 
     private static readonly IValueConverter BooleanToVisibility = new BooleanToVisibilityConverter();
     private static readonly IValueConverter TextPresenceToVisibility = new TextPresenceVisibilityConverter();
@@ -107,13 +119,71 @@ internal sealed class SolidGroundDialog : Window
         Content = root;
 
         viewModel.CloseRequested += OnCloseRequested;
-        Closed += (_, _) => viewModel.CloseRequested -= OnCloseRequested;
+        viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        viewModel.NextCommand.CanExecuteChanged += OnNextCommandCanExecuteChanged;
+        Closed += (_, _) =>
+        {
+            viewModel.CloseRequested -= OnCloseRequested;
+            viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            viewModel.NextCommand.CanExecuteChanged -= OnNextCommandCanExecuteChanged;
+        };
+
+        UpdateDefaultButton();
     }
 
     private void OnCloseRequested(object? sender, EventArgs e)
     {
         DialogResult = _viewModel.Result is not null;
         Close();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SolidGroundDialogViewModel.CurrentStep))
+        {
+            UpdateDefaultButton();
+        }
+    }
+
+    private void OnNextCommandCanExecuteChanged(object? sender, EventArgs e) => UpdateDefaultButton();
+
+    /// <summary>
+    /// Sets <see cref="Button.IsDefault"/> on exactly one button -- this step's own real "primary
+    /// action" -- and <see langword="false"/> on the other three, every time <see cref="SolidGroundDialogViewModel.CurrentStep"/>
+    /// or <see cref="SolidGroundDialogViewModel.NextCommand"/>'s <c>CanExecute</c> result might have changed.
+    /// <see cref="SolidGroundDialogStep.AddressEntry"/>/<see cref="SolidGroundDialogStep.ParcelCandidates"/> each
+    /// have two candidate "primary actions" (Find/Find parcel to search, Next to advance once a candidate is
+    /// already confirmed) that are briefly both visible and enabled at once -- after a successful search,
+    /// before the operator presses Next -- so a fixed, always-true <c>IsDefault</c> on both would leave Enter's
+    /// behavior genuinely ambiguous during that window, not merely untidy. Reusing
+    /// <see cref="SolidGroundDialogViewModel.NextCommand"/>'s own <c>CanExecute</c> (rather than re-deriving the
+    /// same condition here) is what keeps this rule and <c>CanGoNext</c>'s own completion rule from ever
+    /// drifting apart on a future step-completion-rule change.
+    /// </summary>
+    private void UpdateDefaultButton()
+    {
+        _findButton.IsDefault = false;
+        _findParcelButton.IsDefault = false;
+        _nextButton.IsDefault = false;
+        _createButton.IsDefault = false;
+
+        bool canAdvance = _viewModel.NextCommand.CanExecute(null);
+        if (_viewModel.CurrentStep == SolidGroundDialogStep.PreflightSummary)
+        {
+            _createButton.IsDefault = true;
+        }
+        else if (_viewModel.CurrentStep == SolidGroundDialogStep.AddressEntry && !canAdvance)
+        {
+            _findButton.IsDefault = true;
+        }
+        else if (_viewModel.CurrentStep == SolidGroundDialogStep.ParcelCandidates && !canAdvance)
+        {
+            _findParcelButton.IsDefault = true;
+        }
+        else
+        {
+            _nextButton.IsDefault = true;
+        }
     }
 
     // ------------------------------------------------------------------------------------------------------
@@ -195,7 +265,7 @@ internal sealed class SolidGroundDialog : Window
 
     // ---- Step 1: address entry ------------------------------------------------------------------------------
 
-    private static StackPanel BuildAddressEntryPanel(DialogPalette palette)
+    private StackPanel BuildAddressEntryPanel(DialogPalette palette)
     {
         TextBox addressTextBox = new()
         {
@@ -220,6 +290,7 @@ internal sealed class SolidGroundDialog : Window
         };
         findButton.SetBinding(Button.CommandProperty, new Binding(nameof(SolidGroundDialogViewModel.GeocodeCommand)));
         AutomationProperties.SetName(findButton, "Find");
+        _findButton = findButton;
 
         StackPanel panel = new();
         panel.Children.Add(BuildHeader("Enter a street address, or a \"latitude, longitude\" pair.", palette));
@@ -269,7 +340,7 @@ internal sealed class SolidGroundDialog : Window
 
     // ---- Step 3: parcel candidates with legal-description preview -------------------------------------------
 
-    private static StackPanel BuildParcelCandidatesPanel(DialogPalette palette)
+    private StackPanel BuildParcelCandidatesPanel(DialogPalette palette)
     {
         Button findParcelButton = new()
         {
@@ -282,6 +353,7 @@ internal sealed class SolidGroundDialog : Window
         };
         findParcelButton.SetBinding(Button.CommandProperty, new Binding(nameof(SolidGroundDialogViewModel.FindParcelCommand)));
         AutomationProperties.SetName(findParcelButton, "Find parcel");
+        _findParcelButton = findParcelButton;
 
         ListBox listBox = new() { Height = 140, Foreground = palette.ControlText, Background = palette.ControlBackground };
         listBox.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.ParcelCandidates)));
@@ -393,6 +465,22 @@ internal sealed class SolidGroundDialog : Window
             "The maximum number of terrain points this toposolid keeps after simplification. A warning " +
             "appears below when this exceeds Revit's own configured limit on this machine.");
 
+        // Re-check finding, minor, fixed (SolidGround Issue #31, PH3-4, Stage D): an always-on range error,
+        // mirroring the buffer panel's own errorText above -- unlike warningText below (this machine's own
+        // Revit.ini-native threshold, tolerant-by-design whenever that file could not be read this session),
+        // this depends on nothing but the entered number, so it can never be silently skipped. Placed above
+        // warningText: an out-of-range entry is a data-integrity problem CanGoNext itself now blocks on
+        // (SolidGroundDialogViewModel.CanGoNext), not merely a machine-specific advisory.
+        TextBlock rangeErrorText = new()
+        {
+            Foreground = palette.Error,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+            MaxWidth = 440,
+        };
+        rangeErrorText.SetBinding(TextBlock.TextProperty, new Binding(nameof(SolidGroundDialogViewModel.PointBudgetRangeErrorText)));
+        rangeErrorText.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.PointBudgetRangeErrorText)) { Converter = TextPresenceToVisibility });
+
         TextBlock warningText = new()
         {
             Foreground = palette.Highlight,
@@ -407,6 +495,7 @@ internal sealed class SolidGroundDialog : Window
         StackPanel panel = new();
         panel.Children.Add(BuildHeader("Point budget", palette));
         panel.Children.Add(pointBudgetTextBox);
+        panel.Children.Add(rangeErrorText);
         panel.Children.Add(warningText);
         return panel;
     }
@@ -693,11 +782,15 @@ internal sealed class SolidGroundDialog : Window
 
     // ---- Persistent navigation bar (every step): Cancel, Back, Next, Create --------------------------------------
 
-    private static DockPanel BuildNavigationBar(DialogPalette palette)
+    private DockPanel BuildNavigationBar(DialogPalette palette)
     {
         Button cancelButton = new() { Content = "Cancel", Padding = new Thickness(16, 4, 16, 4), Foreground = palette.ControlText, Background = palette.ControlBackground };
         cancelButton.SetBinding(Button.CommandProperty, new Binding(nameof(SolidGroundDialogViewModel.CancelCommand)));
         AutomationProperties.SetName(cancelButton, "Cancel");
+        // IsCancel (SolidGround Issue #31, PH3-4, Stage D): Esc invokes this button's own Click, which -- via
+        // ButtonBase's own ICommand-execution handling -- runs the bound CancelCommand exactly as a mouse click
+        // would, from any control in the dialog (not only when this button itself has focus).
+        cancelButton.IsCancel = true;
 
         Button backButton = new() { Content = "Back", Padding = new Thickness(16, 4, 16, 4), Margin = new Thickness(12, 0, 4, 0), Foreground = palette.ControlText, Background = palette.ControlBackground };
         backButton.SetBinding(Button.CommandProperty, new Binding(nameof(SolidGroundDialogViewModel.BackCommand)));
@@ -707,6 +800,7 @@ internal sealed class SolidGroundDialog : Window
         nextButton.SetBinding(Button.CommandProperty, new Binding(nameof(SolidGroundDialogViewModel.NextCommand)));
         nextButton.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.CurrentStep)) { Converter = new EqualsVisibilityConverter(SolidGroundDialogStep.PreflightSummary, invert: true) });
         AutomationProperties.SetName(nextButton, "Next");
+        _nextButton = nextButton;
 
         Button createButton = new()
         {
@@ -720,6 +814,7 @@ internal sealed class SolidGroundDialog : Window
         createButton.SetBinding(Button.CommandProperty, new Binding(nameof(SolidGroundDialogViewModel.CreateCommand)));
         createButton.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.CurrentStep)) { Converter = new EqualsVisibilityConverter(SolidGroundDialogStep.PreflightSummary) });
         AutomationProperties.SetName(createButton, "Create");
+        _createButton = createButton;
 
         DockPanel bar = new() { Margin = new Thickness(12) };
         DockPanel.SetDock(cancelButton, Dock.Left);

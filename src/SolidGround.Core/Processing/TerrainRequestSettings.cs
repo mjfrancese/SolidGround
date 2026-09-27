@@ -89,6 +89,20 @@ public sealed record ProcessInputSettings
 /// <summary><c>simplification</c>: <see cref="Method"/> may not be <see cref="SimplificationMethod.TinError"/> -- not implemented by <c>GridTerrainSimplifier</c>, and deliberately not a documented template choice.</summary>
 public sealed record SimplificationSettings
 {
+    /// <summary>
+    /// <see cref="PointBudget"/>'s inclusive lower bound: enforced by <see cref="TerrainRequestSettings.Validate"/>
+    /// for every settings-file-sourced value, and reused, unchanged, by <c>SolidGround.Revit.Dialog.SolidGroundDialogViewModel</c>'s
+    /// own always-on inline point-budget range check (docs/architecture/revit-interactive-dialog.md "Content
+    /// model and sections" step 5), so the two bounds can never drift apart (SolidGround Issue #31, PH3-4,
+    /// Stage D, re-check finding: the dialog's own Point Budget step previously enforced only
+    /// <c>PointBudget &gt; 0</c>, so an out-of-range value was caught only after the whole wizard completed, by
+    /// <c>CreateToposolidCommand</c>'s post-merge <c>effectiveSettings.Request.Validate()</c> call).
+    /// </summary>
+    public const int MinPointBudget = 1;
+
+    /// <summary><see cref="PointBudget"/>'s inclusive upper bound. See <see cref="MinPointBudget"/>.</summary>
+    public const int MaxPointBudget = 50_000;
+
     public required SimplificationMethod Method { get; init; }
     public required int PointBudget { get; init; }
     public required double CoverageFloorFraction { get; init; }
@@ -409,9 +423,11 @@ public sealed record TerrainRequestSettings
             problems.Add("simplification.method must be 'curvatureAware' or 'uniformSampler'; 'tinError' is not implemented.");
         }
 
-        if (Simplification.PointBudget is < 1 or > 50_000)
+        if (Simplification.PointBudget is < SimplificationSettings.MinPointBudget or > SimplificationSettings.MaxPointBudget)
         {
-            problems.Add("simplification.pointBudget must be between 1 and 50000 inclusive.");
+            problems.Add(
+                $"simplification.pointBudget must be between {SimplificationSettings.MinPointBudget.ToString(CultureInfo.InvariantCulture)} " +
+                $"and {SimplificationSettings.MaxPointBudget.ToString(CultureInfo.InvariantCulture)} inclusive.");
         }
 
         if (!double.IsFinite(Simplification.CoverageFloorFraction) || Simplification.CoverageFloorFraction is < 0d or > 1d)

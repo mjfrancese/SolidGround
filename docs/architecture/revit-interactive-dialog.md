@@ -8,9 +8,9 @@ before today's Preflight/transaction. No new command, ribbon button, or panel (P
 `SolidGround.Core` and `SolidGround.Cli` are otherwise untouched except for the small, Revit-free Core
 additions this note names below.
 
-**Status: Stages A, B, and C landed; the dialog is fully built but still not wired.** This note records the
-whole accepted design so later stages' code comments can cite its section titles verbatim; three of its five
-stages have been implemented so far:
+**Status: Stages A, B, C, and D landed; the dialog is wired into `CreateToposolidCommand.Execute`.** This note
+records the whole accepted design so later stages' code comments can cite its section titles verbatim; four of
+its five stages have been implemented so far:
 
 - **Stage A (Core only):** `RevitIniToposolidThresholds.ExceedsNativeThreshold`/`.DescribeExceedance`
   (`src/SolidGround.Core/Hosting/RevitIniToposolidThresholds.cs`) and `TerrainProcessingPipeline.RunAsync`'s
@@ -28,13 +28,30 @@ stages have been implemented so far:
   are all implemented. Two new Revit-free Core types
   (`SolidGround.Core.Sources.LatitudeLongitudePointParser`, `SolidGround.Core.Provenance.AddressParcelProvenanceFactory`)
   back the address field's "latitude, longitude" acceptance and the dialog's provenance assembly, respectively.
-  **`SolidGroundDialog`/`SolidGroundDialogViewModel` are still never constructed anywhere in the shipped
-  add-in.** Neither is shown from `CreateToposolidCommand`, the ribbon, or any other command, so the whole
-  feature remains unreachable from a running add-in; it was exercised during this stage only via a throwaway,
-  uncommitted local WPF host, never committed to this repository.
-- **Stage D (wiring into `CreateToposolidCommand.Execute`)** and **Stage E (manual evidence + docs update)**
-  have **not** been implemented. Every section below that is not explicitly marked "landed" describes the
-  accepted design for that future work, not code that exists today.
+  Stage C itself left `SolidGroundDialog`/`SolidGroundDialogViewModel` unconstructed anywhere in the shipped
+  add-in; it was exercised during that stage only via a throwaway, uncommitted local WPF host, never
+  committed to this repository.
+- **Stage D (wiring into `CreateToposolidCommand.Execute`, 2026-09-27):** this stage. `CreateToposolidCommand.ExecuteCore`
+  now runs a `LoadDocumentAndSettings` Stage 0 (document/settings load plus the read-once geometry-tolerance
+  read, hoisted out of `RunDocumentPreflight`), a Stage 0.5 `SolidGroundDialogHost.ShowModal` call (owned via
+  `WindowInteropHelper` against `UIApplication.MainWindowHandle`), and a slimmed Stage 1 `RunDocumentPreflight`
+  that takes the dialog's confirmed result. `SolidGroundDialogHost` (new file,
+  `src/SolidGround.Revit/Dialog/SolidGroundDialogHost.cs`) builds `SolidGroundDialogInputs` from the already-open
+  `Document` and already-loaded `RevitSettings`: it lists every real `Level`/`ToposolidType` via
+  `LevelAndTypeResolver.ListLevels`/`.ListToposolidTypes` (new; replaces the former `ResolveLevel`/
+  `ResolveToposolidType`, which applied the "configured name wins, else default" rule itself -- now the dialog's
+  own job, against the raw candidate list), constructs the real `IAddressGeocoder`/`IParcelBoundarySource` from
+  the new `RevitAddressAndParcelSettings` settings section (see "Settings interaction" below), and re-reads
+  `Revit.ini` a second, independent time for its own inline point-budget warning. `SolidGroundDialog.cs` gained
+  `cancelButton.IsCancel = true` (Esc cancels from anywhere in the dialog) and a dynamic `UpdateDefaultButton`
+  that sets `IsDefault` on exactly one of Find/Find parcel/Next/Create at a time -- the step's own real primary
+  action -- recomputed whenever `CurrentStep` or `NextCommand`'s own `CanExecute` result might have changed (a
+  fixed, always-true `IsDefault` on more than one at once would be genuinely ambiguous during the one real
+  overlap window this dialog has: after a successful search, before Next is pressed). See "Result-code mapping",
+  "AOI and provenance", and "Settings interaction" below for the full behavior-changing detail; "Tests" below
+  for what backstops each claim.
+- **Stage E (manual evidence + docs update)** has **not** been implemented. Every section below that is not
+  explicitly marked "landed" describes the accepted design for that future work, not code that exists today.
 
 ## Content model and sections
 
@@ -76,18 +93,28 @@ milestone, not a reduced slice) exactly, unchanged in order or shape.
    `RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, thresholds)` is true, showing
    `RevitIniToposolidThresholds.DescribeExceedance(...)`'s exact text — the same sentence Preflight's own
    rejection uses (see "Result-code mapping" below), so ignoring the warning always leads to the identical
-   predicted Preflight rejection.
+   predicted Preflight rejection. Re-check finding, minor, fixed (Stage D): this step also shows a second,
+   always-on inline error (`PointBudgetRangeErrorText`), visible exactly when `PointBudget` falls outside
+   `SimplificationSettings.MinPointBudget`/`.MaxPointBudget`'s own inclusive bound (the identical bound
+   `TerrainRequestSettings.Validate()` already enforces for every settings-file-sourced value) — unlike the
+   `Revit.ini`-native warning above, this check is never tolerant-skipped (it depends on nothing but the
+   entered number), and `CanGoNext`'s own `PointBudget` case now requires it to be absent before allowing
+   `Next`. Before this fix, `CanGoNext` enforced only `PointBudget > 0`, so an operator who entered a value
+   above 50,000 learned about it only after completing the remaining steps and pressing Create, when
+   `CreateToposolidCommand`'s post-merge `effectiveSettings.Request.Validate()` call (see "Result-code mapping")
+   rejected the whole run with no retained dialog state.
 6. **Unit choice** — `LengthUnit.UsSurveyFoot`/`LengthUnit.InternationalFoot` only (never `LengthUnit.Meter`),
    prefilled from `settings.Request.OutputUnit`, falling back to `UsSurveyFoot` if the settings file had
    `Meter` configured.
 7. **Level/toposolid-type** — two `ComboBox`es bound to `IReadOnlyList<NamedElevationCandidate>`/
-   `IReadOnlyList<NamedCandidate>` (`SolidGround.Core.Processing`), populated by the same
-   `LevelAndTypeResolver` queries `CreateToposolidCommand` already runs, defaulted by the same
+   `IReadOnlyList<NamedCandidate>` (`SolidGround.Core.Processing`), populated by
+   `LevelAndTypeResolver.ListLevels`/`.ListToposolidTypes` (Stage D; replaces the former `ResolveLevel`/
+   `ResolveToposolidType`, which applied the selection rule itself), defaulted by the same
    `NamedElevationSelector`/`NamedSelector` Core selectors applied to `settings.Target.LevelName`/
    `.ToposolidTypeName`. `SolidGroundDialogViewModel` never touches `Document`/`Level`/`ToposolidType` itself:
-   whatever constructs it (a later stage's `SolidGroundDialogHost.ShowModal`, or this stage's own throwaway
-   local host) resolves the two full candidate lists first and passes them in through
-   `SolidGroundDialogInputs`.
+   `SolidGroundDialogHost.ShowModal` (Stage D) resolves the two full candidate lists first and passes them in
+   through `SolidGroundDialogInputs`; `CreateToposolidCommand`'s own Preflight then maps the dialog's confirmed
+   candidate back to the real element by id (`LevelAndTypeResolver.FindLevelById`/`.FindToposolidTypeById`).
 8. **Shared-coordinates opt-in checkbox** (PH3-3), default off — one `CheckBox`
    (`WriteSharedCoordinatesIfAbsent`). Disabled, with inline explanatory text, when
    `SolidGroundDialogInputs.DocumentAlreadyHasSharedCoordinates` is already true (computed once, before the
@@ -157,16 +184,17 @@ side: section 0's "Use the area in the settings file"
 choice means `settings.json`'s `areaOfInterest.boundingBox`/`.radius`/`.parcel` sub-objects are **not** made
 dead code for the Revit host after all. `SolidGroundDialogResult.AoiSource` carries which path the operator
 took; when it is `DialogAoiSource.UseSettingsFile`, `SolidGroundDialogResult.Aoi` and `.AddressParcel` are
-always `null`, and a later stage's caller is expected to fall back to today's existing, unchanged
-`AoiSettingsFactory.Build` path — exactly as it already worked before this issue. `SolidGround.Cli`'s own
-`AoiSelection`/`AoiSettingsFactory` paths are untouched by this issue either way.
+always `null`, and `CreateToposolidCommand.RunDocumentPreflight` (Stage D) falls back to the existing, unchanged
+`AoiSettingsFactory.Build` path in that case — exactly as it already worked before this issue. `SolidGround.Cli`'s
+own `AoiSelection`/`AoiSettingsFactory` paths are untouched by this issue either way.
 
-**Construction, entirely in memory, no new file (landed this stage, in `SolidGroundDialogViewModel.Create`).**
+**Construction, entirely in memory, no new file (landed in `SolidGroundDialogViewModel.Create`, Stage C).**
 Once a parcel candidate is confirmed (end of section 3) and the operator reaches "Create", the view-model
 calls the existing, unchanged `SolidGround.Core.Processing.ParcelBoundaryAoiFactory.FromCandidate(candidate,
-buffer)`. The resulting `ParcelGeometryAoi` becomes `SolidGroundDialogResult.Aoi`; a later stage threads it
-into `TerrainProcessingPipeline.RunAsync`'s existing `AreaOfInterest? aoi` parameter, never writing it to a
-`.wkt`/`.aoi.json` file the way `SolidGround.Cli`'s `ParcelCommand` does.
+buffer)`. The resulting `ParcelGeometryAoi` becomes `SolidGroundDialogResult.Aoi`; **landed, Stage D:**
+`CreateToposolidCommand.RunDocumentPreflight` uses it directly as `context.Aoi` on the `FindParcel` path, which
+then reaches `TerrainProcessingPipeline.RunAsync`'s existing `AreaOfInterest? aoi` parameter exactly as any
+other AOI does — never written to a `.wkt`/`.aoi.json` file the way `SolidGround.Cli`'s `ParcelCommand` does.
 
 **Provenance, also entirely in memory (landed this stage).** On Create, when the AOI source is a parcel
 lookup, the view-model calls the new `AddressParcelProvenanceFactory.Create`
@@ -194,9 +222,12 @@ caller-supplies-the-clock-value contract.
 `TerrainProcessingPipeline.RunAsync` (`src/SolidGround.Core/Processing/TerrainProcessingPipeline.cs`) gained
 one new, optional, trailing parameter, `AddressParcelProvenance? addressParcel = null`, threaded into its
 existing `TerrainExportPayloadAssembler.Assemble(...)` call's own already-existing optional parameter.
-Every existing caller (`process`, `run`, and both of `CreateToposolidCommand`'s own
-`RunFetchPipelineAsync`/`RunProcessPipelineAsync`) keeps compiling unchanged, always passing `null`, until a
-later stage edits those two Revit-side call sites to pass `dialogResult.AddressParcel` through instead.
+`SolidGround.Cli`'s own `process`/`run` callers keep compiling unchanged, always passing `null`. **Landed, Stage
+D:** `CreateToposolidCommand.RunFetchPipelineAsync`/`RunProcessPipelineAsync` (and the `RunPipelineAsync`
+dispatcher between them) each gained a matching `AddressParcelProvenance? addressParcel` parameter, threaded
+straight through to their own `TerrainProcessingPipeline.RunAsync` call site; `ExecuteCore`'s Stage 2 acquisition
+call passes `dialogResult.AddressParcel` (always `null` on the `UseSettingsFile` path, by
+`SolidGroundDialogResult`'s own contract; populated on the `FindParcel` path).
 
 **The other new Core surface, already landed (Stage A):**
 `src/SolidGround.Core/Hosting/RevitIniToposolidThresholds.cs` gained two `public static` methods beside the
@@ -204,33 +235,86 @@ existing `Parse`: `ExceedsNativeThreshold(int pointBudget, Thresholds thresholds
 `DescribeExceedance(int pointBudget, int nativeThreshold, string revitIniPath)`. `DescribeExceedance`'s text is
 byte-identical to `CreateToposolidCommand`'s pre-existing inline `CheckRevitIniPointThreshold` message — a pure
 extract, not a reword — so existing behavior is unchanged; only its location (now Core, shared) changes.
-`CheckRevitIniPointThreshold` becomes a two-line call into these once a later stage lands; this stage's own
-`SolidGroundDialogViewModel.PointBudgetWarningText`/`.ShowPointBudgetWarning` already call the identical pair
-for section 5's inline warning.
+**Landed, Stage D:** `CheckRevitIniPointThreshold` is now a two-line call into these (the literal problem-line
+prose no longer appears in `CreateToposolidCommand.cs` at all); `SolidGroundDialogViewModel.PointBudgetWarningText`/
+`.ShowPointBudgetWarning` (Stage C) already called the identical pair for section 5's inline warning, so the two
+have never drifted apart.
 
 ## Settings interaction: prefill, not override
 
-**Reads only; no write-back in this milestone (owner decision 2).** `SolidGroundDialogViewModel` never reads
+**Reads only; no write-back (owner decision 2).** `SolidGroundDialogViewModel` never reads
 `RevitSettings`/`RevitSettingsIo` directly — it has no dependency on `SolidGround.Revit.Settings` at all.
-Instead, `SolidGroundDialogInputs` carries whatever a later stage's caller already resolved from the
-already-loaded settings: `PrefilledOutputUnit`, `PrefilledPointBudget`, `ConfiguredLevelName`/
+Instead, `SolidGroundDialogInputs` carries whatever `SolidGroundDialogHost.ShowModal` (Stage D) already resolved
+from the already-loaded settings: `PrefilledOutputUnit`, `PrefilledPointBudget`, `ConfiguredLevelName`/
 `ConfiguredToposolidTypeName`, `PrefilledWriteSharedCoordinatesIfAbsent`, `DocumentAlreadyHasSharedCoordinates`,
 and `ConfiguredAreaOfInterest` (today's settings-driven `AoiSettings`, shown in section 0/10's own summary
 text). The operator's in-dialog choice always wins for the run about to happen; nothing is written back to
-`%ProgramData%\SolidGround\Revit\settings.json`. "Last-used value" persistence across sessions is a named,
-explicit non-goal (see "Non-goals" below), not silently dropped.
+`%ProgramData%\SolidGround\Revit\settings.json` —
+`RevitHostFilesTests.CreateToposolidCommandNeverWritesBackToTheSettingsFile`/
+`.RevitSettingsIoDeclaresExactlyOneFileWriteCallSiteTheTemplateCreationItself` guard this structurally. "Last-used
+value" persistence across sessions is a named, explicit non-goal (see "Non-goals" below), not silently dropped.
 
-**A genuinely new settings surface is still required, not yet added.** Today's `RevitSettings`
-(`src/SolidGround.Revit/Settings/RevitSettings.cs`) still has no field for which `IAddressGeocoder` provider or
-`IParcelBoundarySource` to use. Rather than add that settings section in this stage, `SolidGroundDialogInputs`
-instead takes an already-constructed `IAddressGeocoder Geocoder` and `IParcelBoundarySource? ParcelSource`
-(null when not configured — section 3's "Find parcel" then shows a clear inline configuration message the
-first time it is attempted, never at construction time) plus the `AddressGeocoderProvider GeocoderProvider`
-that identifies the first for provenance purposes. This keeps Stage C's whole surface decoupled from the
-settings file's on-disk schema; a later stage still owns adding `RevitAddressAndParcelSettings` and
-constructing the real `IAddressGeocoder`/`IParcelBoundarySource` from it (via the existing, unchanged
-`AddressGeocoderFactory.Create` and a settings-driven choice of `CountyParcelRegistrySource`/
-`LocalParcelFileSource`) before building `SolidGroundDialogInputs` and showing the dialog.
+**The new settings surface, landed Stage D.** `RevitSettings` (`src/SolidGround.Revit/Settings/RevitSettings.cs`)
+gained a fourth constructor parameter, `RevitAddressAndParcelSettings AddressAndParcel` (new file,
+`src/SolidGround.Revit/Settings/RevitAddressAndParcelSettings.cs`): `GeocoderProvider`, `CountyRegistryPath`,
+`CountyGeoidOverride`, `LocalParcelFilePath`, `LocalParcelFileSourceLabel`, `LocalParcelFileLicenseDisclaimerText`.
+`RevitSettingsIo.TemplateJson`/`TryLoad` gained a fifth hand-decoded top-level `"addressAndParcel"` section,
+following the exact existing pattern the `level`/`toposolidType`/`sharedCoordinates` sections already use: read
+via `JsonNode` indexers (an absent section decodes to every field at its documented default -- an existing
+settings file written before this section existed still loads unchanged), then `root.Remove("addressAndParcel")`
+before the rest decodes as `TerrainRequestSettings`. `"census"|"geocodio"|"esri"` matches
+`SolidGround.Cli.Commands.GeocodeCommand.ParseProvider`'s own existing token spelling exactly, as a small,
+independent switch inside `RevitSettingsIo.cs` (`SolidGround.Revit` cannot reference `SolidGround.Cli`).
+`SolidGroundDialogHost.ShowModal` (new file, `src/SolidGround.Revit/Dialog/SolidGroundDialogHost.cs`) constructs
+the real `IAddressGeocoder` via the existing, unchanged `AddressGeocoderFactory.Create`, and the real
+`IParcelBoundarySource?`: `CountyRegistryPath` wins when non-blank (a new Core type,
+`SolidGround.Core.Sources.CountyParcels.AutoGeoidCountyParcelSource`, wraps `CountyParcelRegistrySource` with the
+same auto-GEOID behavior `SolidGround.Cli.Commands.ParcelCommand` already gives the CLI — `CountyGeoidOverride`
+wins when non-blank, else the GEOID is resolved from the confirmed geocode candidate's own coordinates via
+`CensusCountyLookup.FindCountyGeoidAsync`, since — unlike the CLI's own `ParcelCommand` — the Revit host must
+construct one `IParcelBoundarySource` before the first query's own coordinates are known); else
+`LocalParcelFilePath` wins when non-blank (`LocalParcelFileSource`); else `null` (`SolidGroundDialogViewModel.FindParcel`,
+Stage C, already shows a clear inline configuration message the first time a parcel lookup is attempted with no
+source configured). **Review finding, major, fixed:** `BuildParcelSource`'s own `CountyParcelRegistry.Load` call
+is wrapped in a `try`/`catch (CountyParcelRegistryFormatException)` — a missing/unreadable file, invalid JSON, or
+any other documented content problem no longer escapes `ShowModal` uncaught (which would otherwise have blocked
+the *entire* dialog, including the unrelated "Use the area in the settings file" path, and reached only
+`CreateToposolidCommand.Execute`'s generic top-level catch). The caught failure is instead deferred to a small
+`FailedParcelSource` stand-in whose own `FindAsync` raises `AutoGeoidCountyParcelSourceException`, reported
+inline the first time `FindParcel` actually attempts a lookup — exactly the same never-at-construction-time
+contract this method already gave the "neither path configured" case. `ShowModal` also lists every real
+`Level`/`ToposolidType` via the refactored
+`LevelAndTypeResolver.ListLevels`/`.ListToposolidTypes` (replacing the former `ResolveLevel`/`ResolveToposolidType`,
+which applied the "configured name wins, else default" selection itself; the dialog's own view-model constructor
+now calls `NamedElevationSelector`/`NamedSelector` directly against the raw candidate list, exactly as Stage C
+already assumed), and re-reads `Revit.ini` a second, independent time (`ReadRevitIniThresholds`) for its own
+inline point-budget warning — "no shared cache needed, `Revit.ini` is not expected to change mid-session",
+matching this repository's own established convention for this exact file.
+
+**Re-validation, review finding fixed.** At the time this fix landed, the Point Budget step's own `CanGoNext`
+case enforced only `PointBudget > 0` — it had no upper bound, unlike `TerrainRequestSettings.Validate()`'s
+1-50000 rule, which every settings-file-sourced `pointBudget` was already held to before this issue
+(`RevitSettingsIo.TryLoad`'s own call, at Stage 0). Rather than duplicate that bound as a second literal into
+this WPF step, `CreateToposolidCommand.ExecuteCore` calls `effectiveSettings.Request.Validate()` immediately
+after building `effectiveSettings` (still before Stage 1 Preflight begins) and routes any problem through the
+identical `ShowProblemList`/`Result.Cancelled` path Stage 0/Stage 1 already use — restoring, for the
+dialog-overridden path too, the invariant that every `TerrainRequestSettings` reaching Stage 2 satisfies
+`Validate()`. See "Result-code mapping" and "Tests" below.
+
+**Re-check finding, minor, fixed.** The command-layer fix above closed the data-integrity gap but left the
+Point Budget step itself with no matching inline feedback: an operator who entered an out-of-range value still
+had to complete every remaining step — including a live address/parcel network round trip on the `FindParcel`
+path — before Create finally bounced them to `Result.Cancelled`, discarding the whole interactive session with
+no retained state. `SolidGroundDialogViewModel` now exposes `PointBudgetRangeErrorText`, non-null exactly when
+`PointBudget` falls outside `SimplificationSettings.MinPointBudget`/`.MaxPointBudget`'s own inclusive bound —
+the identical constants `TerrainRequestSettings.Validate()` reads, extracted from that method's own former 1/
+50,000 literals specifically so the two could never drift apart. Unlike `PointBudgetWarningText` (the
+`Revit.ini`-native threshold, tolerant-by-design whenever that file could not be read this session),
+`PointBudgetRangeErrorText` is always on: it depends on nothing but the entered number. `CanGoNext`'s
+`PointBudget` case now requires it to be `null` (subsuming the old bare positivity check), and
+`BuildPointBudgetPanel` binds a visible error `TextBlock` to it, mirroring the buffer panel's own
+`BufferErrorText`/`TextPresenceToVisibility` idiom. The command-layer `effectiveSettings.Request.Validate()`
+call is kept regardless, as defense-in-depth. See "Result-code mapping" and "Tests" below.
 
 ## Threading and the network bridge
 
@@ -262,18 +346,24 @@ runs first, synchronously, with no network call, which is what lets the whole di
 
 ## Result-code mapping
 
-`CreateToposolidCommand.ExecuteCore` will gain a new stage sequence: Stage 0 (load settings, open-document
-check, and the geometry-tolerance read, hoisted out of `RunDocumentPreflight` so the dialog can use them
-before Preflight formally runs), Stage 0.5 (`SolidGroundDialogHost.ShowModal`, returning `null` on Cancel), a
-slimmed Stage 1 Preflight (AOI/level/type dialog-supplied when `AoiSource` is `FindParcel`; derived from
-settings exactly as today when it is `UseSettingsFile`), then Stages 2-6 unchanged in shape. Mapping (extends,
-does not replace, today's existing policy):
+**Landed, Stage D.** `CreateToposolidCommand.ExecuteCore` now runs this exact stage sequence: Stage 0
+(`LoadDocumentAndSettings`: load settings, the open-document check, and the geometry-tolerance read, hoisted out
+of `RunDocumentPreflight` so the dialog can use them before Preflight formally runs — also guards "this document
+has at least one Level/ToposolidType" before the dialog ever opens, since the dialog itself always resolves a
+specific one from whatever candidates exist and has no way to report "none at all" on its own), Stage 0.5
+(`SolidGroundDialogHost.ShowModal`, returning `null` on Cancel), a slimmed Stage 1 Preflight
+(`RunDocumentPreflight`: AOI dialog-supplied when `AoiSource` is `FindParcel`, derived from settings exactly as
+before this issue when it is `UseSettingsFile`; Level/ToposolidType always dialog-supplied, mapped back to the
+real element by id, with no defensive re-verification per owner decision 4), then Stages 2-6 unchanged in shape
+except that Stage 2's acquisition threads `dialogResult.AddressParcel` into the pipeline call (see "AOI and
+provenance" above). Mapping (extends, does not replace, the policy already in place before this issue):
 
 | Outcome | `Result` |
 | --- | --- |
 | Settings/document load problem (Stage 0) | `Cancelled` (unchanged shape) |
 | Dialog Cancel / closed without Create (Stage 0.5) | `Cancelled` (new; no `TaskDialog`) |
 | In-dialog geocoder/parcel lookup failure | *(never reaches `Result` at all — caught inline, dialog stays open)* |
+| Dialog-merged `effectiveSettings.Request.Validate()` finds a problem (after Stage 0.5, before Stage 1) | `Cancelled` (new; shared `ShowProblemList` dialog shown — see "Settings interaction" above) |
 | Preflight rejection, including PH3-3's shared-coordinates refusal (Stage 1) | `Cancelled` (unchanged) |
 | Acquisition failure (Stage 2) | `Cancelled` (unchanged) |
 | Geometry Preflight rejection (Stage 3) | `Cancelled` (unchanged) |
@@ -282,12 +372,41 @@ does not replace, today's existing policy):
 | `Execute`'s top-level catch | `Cancelled` (unchanged — no transaction can be open) |
 
 An in-dialog lookup failure never reaching `Execute`'s top-level catch is satisfied by construction and
-already guarded offline this stage: `Geocode`/`FindParcel` catch `AddressGeocoderException`/
-`ParcelBoundarySourceException` **and** `OperationCanceledException` internally and never rethrow (see
-"Threading and the network bridge" above; `SolidGroundDialogNetworkLookupsCatchTimeoutAndNeverRethrowInsideTheirOwnMethodBodies`
-in "Tests" below). The command-side half of this table (the actual `ShowModal` call site and its `Result`
-mapping) is **not implemented yet** (Stage D); `CreateToposolidCommandReturnsCancelledWithNoTaskDialogWhenTheDialogIsCancelled`
-remains planned for that stage.
+guarded offline: `Geocode`/`FindParcel` catch `AddressGeocoderException`/`ParcelBoundarySourceException`
+**and** `OperationCanceledException` internally and never rethrow (see "Threading and the network bridge"
+above; `SolidGroundDialogNetworkLookupsCatchTimeoutAndNeverRethrowInsideTheirOwnMethodBodies` in "Tests" below).
+That construction argument originally covered only `Geocode`/`FindParcel`'s own internal catches — it did not
+account for `BuildParcelSource`'s separate, earlier, construction-time `CountyParcelRegistry.Load` call, whose
+own `CountyParcelRegistryFormatException` used to propagate straight out of `ShowModal` uncaught (review
+finding, major, fixed; see "Settings interaction" above for the `FailedParcelSource` deferral that closes this
+gap). With that fix, every reachable in-dialog/parcel-source-configuration failure is deferred the same way.
+The command-side half of this table — `if (dialogResult is null) { return Result.Cancelled; }`, no `TaskDialog`
+shown — is now landed and guarded by
+`RevitHostFilesTests.CreateToposolidCommandReturnsCancelledWithNoTaskDialogWhenTheDialogIsCancelled`;
+`.CreateToposolidCommandShowsTheInteractiveDialogBeforePreflightAndBeforeAnyTransaction` guards the stage
+ordering itself (`ShowModal(` before `RunDocumentPreflight(` before `transaction.Start()`). The new
+dialog-merged-settings row above (review finding, major, fixed) is guarded by
+`.CreateToposolidCommandBuildsEffectiveSettingsFromTheDialogsOutputUnitPointBudgetAndSharedCoordinatesChoice`
+(the merge itself sources each field from the right `dialogResult` property) and
+`.CreateToposolidCommandRevalidatesTheEffectiveSettingsAfterTheDialogMergeAndBeforePreflight` (the
+re-validation call exists, runs in the right order, and maps a problem to `Cancelled` through the shared dialog).
+
+**Re-check finding, minor, fixed.** At the time the paragraph above was written, `effectiveSettings.Request.Validate()`
+was the *only* place an out-of-range dialog-entered `PointBudget` was ever caught: the dialog's own Point
+Budget step (section 5 above) enforced merely `PointBudget > 0`, so a value above
+`SimplificationSettings.MaxPointBudget` sailed through every remaining step and was rejected only when the
+operator finally pressed Create — discarding the whole interactive session, with no retained state, for a
+mistake the Point Budget step itself could have caught immediately. `SolidGroundDialogViewModel.CanGoNext`'s
+`PointBudget` case now also requires the new `PointBudgetRangeErrorText` property to be `null` (see section 5
+above), reusing `SimplificationSettings.MinPointBudget`/`.MaxPointBudget` rather than a second, dialog-local
+literal, so the two bounds can never drift apart. This row in the mapping table is therefore no longer
+reachable by entering an out-of-range `PointBudget` through the dialog's own normal navigation; it remains as
+defense-in-depth against any future dialog change (or any other future caller of `ExecuteCore`) that supplies
+an `effectiveSettings` value the dialog itself never validated. Guarded by
+`SolidGroundDialogViewModelCanGoNextEnforcesTheFullInclusivePointBudgetRangeNotJustPositive`,
+`.PointBudgetRangeErrorTextReusesSimplificationSettingsBoundsNotADuplicatedLiteral`, and
+`.SourceBindsAnAlwaysOnPointBudgetRangeErrorAlongsideTheRevitIniWarning` (all `RevitInteractiveDialogTests`,
+see "Tests" below).
 
 ## MVVM shape (and why no messenger)
 
@@ -532,24 +651,146 @@ needed (`RevitProjectContainsNoXamlFiles`, `CsprojPinsCommunityToolkitMvvmToTheA
     exact `Language = System.Windows.Markup.XmlLanguage.GetLanguage(CultureInfo.CurrentCulture.IetfLanguageTag);`
     call site is present.
 
-**Not implemented yet** (Stage D), planned:
-`TerrainRequestSettingsTests.ShippedTemplateText`'s update for the new `"addressAndParcel"` settings section
-(once that section is added); the `CheckRevitIniPointThreshold` call-site migration's paired test update
-(`CreateToposolidCommandReadsRevitIniAndGuardsThePointBudgetAtPreflight`); and
-`CreateToposolidCommandReturnsCancelledWithNoTaskDialogWhenTheDialogIsCancelled`.
+**Landed in Stage D:**
+
+- `TerrainRequestSettingsTests.ShippedTemplateText` gained the matching `"addressAndParcel"` block;
+  `JsonOptionsDecodesTheShippedTemplateTextVerbatim` strips that fourth key alongside the existing three.
+- `RevitHostFilesTests.CreateToposolidCommandReadsRevitIniAndGuardsThePointBudgetAtPreflight`'s prose-content
+  assertion was replaced with `Assert.Contains("RevitIniToposolidThresholds.ExceedsNativeThreshold", ...)` and
+  `.DescribeExceedance` (the two new call sites); the other three assertions are unchanged.
+- `RevitHostFilesTests.CreateToposolidCommandReturnsCancelledWithNoTaskDialogWhenTheDialogIsCancelled` —
+  locates `if (dialogResult is null)`, asserts a short following window contains `return Result.Cancelled;` and
+  not `TaskDialog.Show(`.
+- `RevitHostFilesTests.CreateToposolidCommandShowsTheInteractiveDialogBeforePreflightAndBeforeAnyTransaction` —
+  the stage-ordering guard named above.
+- `RevitHostFilesTests.CreateToposolidCommandDerivesTheAoiFromSettingsOnlyWhenTheDialogChoseTheSettingsFile` —
+  both AOI paths (owner decision 1's refinement) stay real: `dialogResult.Aoi` is used directly on the
+  `FindParcel` branch; `AoiSettingsFactory.Build`/the parcel-file read are still present, gated behind the
+  opposite branch of the identical `DialogAoiSource.FindParcel` check.
+- `RevitHostFilesTests.CreateToposolidCommandThreadsTheDialogsAddressParcelProvenanceIntoTheAcquisitionPipeline` —
+  `dialogResult.AddressParcel` reaches the `RunPipelineAsync` call site, and the new parameter/argument appear
+  at every expected call site (three method signatures, two `TerrainProcessingPipeline.RunAsync` call sites).
+- `RevitHostFilesTests.CreateToposolidCommandNeverWritesBackToTheSettingsFile`/
+  `.RevitSettingsIoDeclaresExactlyOneFileWriteCallSiteTheTemplateCreationItself` — the "prefill, not override"
+  contract, guarded both at `CreateToposolidCommand.cs`'s own one caller and at `RevitSettingsIo.cs` itself.
+- `RevitHostFilesTests.CreateToposolidCommandBuildsEffectiveSettingsFromTheDialogsOutputUnitPointBudgetAndSharedCoordinatesChoice`
+  (review finding, coverage gap, major, fixed) — the `effectiveSettings` `with` expression sources `OutputUnit`/
+  `PointBudget`/`SharedCoordinates` from the right `dialogResult` property; previously the only piece of Stage D
+  wiring with no dedicated test.
+- `RevitHostFilesTests.CreateToposolidCommandRevalidatesTheEffectiveSettingsAfterTheDialogMergeAndBeforePreflight`
+  (review finding, major, fixed) — the new `effectiveSettings.Request.Validate()` call (see "Settings
+  interaction" above) runs after the merge and before `RunDocumentPreflight(`, and a problem maps to
+  `ShowProblemList`/`Result.Cancelled`.
+- `RevitInteractiveDialogTests.SolidGroundDialogSourceSetsIsCancelOnTheCancelButton`/
+  `.UpdateDefaultButtonSetsIsDefaultOnExactlyOnePerStepPrimaryActionAtATime`/
+  `.SolidGroundDialogRecomputesTheDefaultButtonWheneverCurrentStepOrNextCommandCanExecuteChanges` — the
+  Esc/Enter keyboard behaviour (IsCancel/IsDefault; see "Purpose and boundary" above).
+- A new Core test file, `AutoGeoidCountyParcelSourceTests.cs`, covers `AutoGeoidCountyParcelSource`: a
+  configured GEOID override skips the Census lookup entirely; a blank override resolves one from the Census
+  county lookup then queries the registry; an address query with no override throws before any network call;
+  a `CensusCountyLookupException` is wrapped, never rethrown raw; a genuine Census-side network timeout is
+  likewise wrapped (mirroring `CountyParcelRegistrySourceTests`' own "general `OperationCanceledException`
+  branch" pattern, since the caller's own token is never cancelled in this specific test).
+- `RevitInteractiveDialogTests.BuildParcelSourceCatchesARegistryLoadFailureAndNeverLetsItEscapeShowModal`/
+  `.FailedParcelSourceThrowsAutoGeoidCountyParcelSourceExceptionFromFindAsync` (review finding, major, fixed) —
+  locate `BuildParcelSource`'s and `FailedParcelSource`'s own real bodies (balanced-brace extraction, not a
+  fixed-size window) and assert the `CountyParcelRegistry.Load` call site sits inside a
+  `catch (CountyParcelRegistryFormatException ...)`-guarded `try`, and that the stand-in's `FindAsync` raises
+  `AutoGeoidCountyParcelSourceException`.
+- `RevitInteractiveDialogTests.SolidGroundDialogClassRemarksDescribeStageDWiringNotStageCsUnreachableState`
+  (review finding, minor, fixed) — `SolidGroundDialog.cs`'s own class-level doc comment no longer claims the
+  type is unconstructed/unreachable/a later stage's own scope.
+- `RevitInteractiveDialogTests.SolidGroundDialogViewModelCanGoNextEnforcesTheFullInclusivePointBudgetRangeNotJustPositive`/
+  `.SolidGroundDialogViewModelPointBudgetRangeErrorTextReusesSimplificationSettingsBoundsNotADuplicatedLiteral`/
+  `.SolidGroundDialogSourceBindsAnAlwaysOnPointBudgetRangeErrorAlongsideTheRevitIniWarning` (re-check finding,
+  minor, fixed — see "Content model and sections" step 5 and "Result-code mapping" above) — `CanGoNext`'s
+  `PointBudget` case now depends on `PointBudgetRangeErrorText` rather than a bare positivity check;
+  `PointBudgetRangeErrorText` itself reuses `SimplificationSettings.MinPointBudget`/`.MaxPointBudget` rather
+  than a duplicated literal; `BuildPointBudgetPanel` binds a visible `TextBlock` to it, mirroring the buffer
+  panel's own `BufferErrorText`/`TextPresenceToVisibility` idiom.
+- `TerrainRequestSettingsTests.ValidateAcceptsPointBudgetAtEitherInclusiveBoundaryConstant` (Core; additive) —
+  `SimplificationSettings.MinPointBudget`/`.MaxPointBudget` themselves stay genuinely inclusive after this
+  extraction; the pre-existing `ValidateReportsOutOfRangePointBudget` theory already proves one past each end
+  is still rejected.
 
 ## Manual evidence plan
 
-Not started (Stage E). The accepted plan runs against a real Revit 2027 process, following this repository's
-existing numbered-step convention: an end-to-end run through every section confirming the busy indicator's
-visual timing; modal ownership; the shared-coordinates checkbox's no-session-persistence default; the Light,
-Dark, and Windows High Contrast palettes; screen-reader `AutomationProperties.Name` announcements for every
-control; running the command twice in one session with no leaked state; dialog Cancel at several points; an
-in-dialog geocoder failure both by an unmatchable address and by a real network timeout; a point budget above
-the machine's real `NativeToposolidMaxPointThreshold`; the shared-coordinates checkbox's already-coordinated
-disabled state; both AOI-source choices (a parcel lookup, and the settings-file fallback); and one private
-end-to-end run against a real property, recorded here only as having been done (no location, parcel, or other
-identifying detail is ever recorded in this repository).
+**Finalized for AC5 (Stage D); not yet run (Stage E).** Runs against a real Revit 2027 process, following this
+repository's existing numbered-step convention (for example `docs/architecture/revit-toposolid-creation.md`'s
+own "Manual evidence plan"). Every step below needs Stage D's real wiring to be reachable at all; none of them
+can run before this stage lands.
+
+1. Build and deploy `SolidGround.Revit` (`UseWPF=true`, `CommunityToolkit.Mvvm` 8.4.2); launch Revit 2027; run
+   `CreateToposolidCommand` once end-to-end against the public example site via the **`FindParcel`** AOI-source
+   path (address or "latitude, longitude" entry through parcel confirmation), configured against the local
+   parcel file source (`addressAndParcel.localParcelFilePath`, no network dependency for the parcel half) so
+   this step is reproducible offline apart from Revit itself; confirm all eleven content-model sections appear
+   in order and Create produces the same toposolid/`PropertyLine` outcome Issues #15/#30 already verified, with
+   `AddressParcelProvenance` now populated in the exported provenance record. While performing the lookup,
+   confirm the busy indicator (the disabled Find button/banner) actually becomes visible before the UI freezes,
+   not only after it unfreezes.
+2. Confirm modal ownership: while the dialog is open, attempt to click back into Revit's main window; confirm
+   it is blocked/inactive and the dialog stays on top (`WindowInteropHelper.Owner` against
+   `UIApplication.MainWindowHandle`).
+3. **The coordinate-pair input, offline, with the local parcel file source.** Repeat step 1's `FindParcel` path,
+   but type a `"latitude, longitude"` pair into the address field instead of a street address; confirm
+   `LatitudeLongitudePointParser` accepts it with no network call at all (Revit stays responsive through that
+   step), the synthetic geocode candidate and its own attribution text appear correctly, and the provenance
+   preview's direct-point-entry sentence (not the geocoded-address sentence) is shown.
+4. **The settings-file AOI path.** With `settings.json` configured with a `boundingBox`/`radius`/`parcel` area of
+   interest, run the command again and choose "Use the area in the settings file" at step 0; confirm steps 1-4
+   (address through buffer) are skipped entirely, the settings-file AOI summary text is accurate, no
+   address/parcel provenance is attached to the run, and the created toposolid matches what a pre-Issue-#31 run
+   against the identical settings file would have produced.
+5. With Revit set to its Light UI theme (`UIThemeManager.CurrentTheme == Light`), open the dialog; confirm the
+   light palette renders legibly on every control.
+6. Repeat step 5 with Revit's Dark UI theme; confirm the dark palette branch, including both `ComboBox` dropdown
+   popups and every themed `Button`.
+7. Enable Windows High Contrast (for example "High Contrast Black"); reopen Revit/the dialog under that OS
+   setting (`SystemParameters.HighContrast` is read once at construction, so a fresh dialog open is required
+   after toggling it); confirm every control renders from `SystemColors` brushes, legible against the OS
+   palette, and visually distinct from both step 5's and step 6's branches.
+8. With Windows Narrator (or another screen reader) running, tab through every control; confirm each announced
+   name matches its `AutomationProperties.Name` — spot-check the address `TextBox`, both candidate lists, the
+   buffer and point-budget numeric inputs, the unit choice, both dropdowns, the shared-coordinates checkbox,
+   and the Cancel/Back/Next/Create buttons.
+9. **`IsCancel`/`IsDefault`.** Confirm Esc cancels the dialog from any control (no `TaskDialog`, no document
+   change) — the same outcome as clicking Cancel. On the address-entry step, confirm Enter (with focus in the
+   address `TextBox`, before any search) triggers Find; after a successful search, confirm Enter now advances
+   (Next) instead of re-searching. Repeat the same before/after-confirmation check on the parcel-candidates
+   step (Find parcel, then Next). On the final step, confirm Enter triggers Create.
+10. **The shared-coordinates checkbox's default-off state, and two runs in one session.** Confirm the checkbox
+    is unchecked on first open; complete one run with it checked; run `CreateToposolidCommand` a second time in
+    the same Revit session (same process, no restart) immediately afterward; confirm the checkbox is unchecked
+    again (no session persistence, per decision 2) and the dialog opens cleanly with no exception, no
+    leaked/duplicated UI state, and no repeated/duplicate-registration warning in the trace log (the "MVVM shape (and why
+    no messenger)" section's design, confirmed live rather than assumed).
+11. **Cancel at several points.** Exercise dialog Cancel mid-address-entry; after selecting a geocode candidate;
+    after selecting a parcel candidate; and on the final Preflight-summary page; confirm `CreateToposolidCommand`
+    returns with no `TaskDialog` and no document change (`Result.Cancelled`) every time.
+12. **An in-dialog lookup failure**, three ways, each shown inline, never as a `TaskDialog`, never via `Execute`'s
+    top-level catch, with the operator able to correct and retry without closing the dialog: (a) type an address
+    the configured geocoder cannot match; (b) temporarily block network access so a real lookup times out
+    (exercises the `OperationCanceledException` catch, the one path every shipped geocoder/parcel source
+    rethrows raw rather than wrapped); (c) configure `addressAndParcel.countyRegistryPath` to a missing or
+    malformed file, then confirm the dialog still opens normally (including "Use the area in the settings
+    file") and the captured load-failure message appears inline only once "Find parcel" is actually attempted
+    (`FailedParcelSource`, review finding, major, fixed).
+13. **The point-budget warning.** Enter a point budget above the machine's real
+    `NativeToposolidMaxPointThreshold`; confirm the dialog's inline warning appears with the exact
+    `RevitIniToposolidThresholds.DescribeExceedance` wording, and that proceeding anyway still gets the
+    identical wording from Preflight's own rejection afterward (defense-in-depth, unchanged policy). Then enter
+    a point budget above `SimplificationSettings.MaxPointBudget` (50,000) — or at/below zero — and confirm the
+    second, always-on inline error (`PointBudgetRangeErrorText`) appears and `Next` stays disabled until the
+    value is corrected back within range (re-check finding, fixed: this used to be reachable only after
+    completing the whole wizard and pressing Create).
+14. Against a document that already has shared coordinates set, open the dialog and confirm the checkbox is
+    disabled with inline explanatory text rather than only failing at Preflight after the operator finishes the
+    whole wizard.
+15. **Private real-property run**: perform one complete dialog run — address through
+    toposolid/`PropertyLine` creation — against a real, non-synthetic property, confirming the full flow works
+    on real-world data end to end. No address, coordinates, parcel id, or other identifying detail from this run
+    is ever recorded in any repository-facing document; only the fact that this step was performed is recorded.
 
 ## Non-goals
 
@@ -565,8 +806,6 @@ identifying detail is ever recorded in this repository).
 - No `async`/`await`-yielding WPF commands for any network call (deliberately synchronous).
 - No `WeakReferenceMessenger`/`ObservableRecipient` usage anywhere in this feature.
 - No pre-dialog `OPENTOPOGRAPHY_API_KEY` check reordering (stays a Preflight-only concern, unchanged position).
-- No `RevitAddressAndParcelSettings`/settings-file schema addition yet (deferred to Stage D, see "Settings
-  interaction" above); `SolidGroundDialogInputs` takes an already-constructed geocoder/parcel source instead.
-- **This stage specifically:** no wiring into `CreateToposolidCommand.Execute`; `SolidGroundDialog`/
-  `SolidGroundDialogViewModel` are not shown from anywhere and have no effect on any command's runtime
-  behavior.
+- No defensive re-verification that the dialog's chosen Level/ToposolidType still belong to `document` before
+  Preflight uses them (owner decision 4: same open `Document`, same synchronous call, no transaction opened on
+  any path that could invalidate an element reference).
