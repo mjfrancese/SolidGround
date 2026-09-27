@@ -1,35 +1,68 @@
 using System.Globalization;
 using Autodesk.Revit.DB;
+using SolidGround.Core.Transformations;
+using SolidGround.Revit.Diagnostics;
 
 namespace SolidGround.Revit.Transactions;
 
 /// <summary>
 /// Detects whether a document already appears to have shared coordinates set. Preflight-safe: read-only, no
 /// transaction. See docs/architecture/revit-property-line-and-shared-coordinates.md's "Shared-coordinates
-/// detection" section for the full reasoning and the owner-accepted residual risk this proxy carries (owner
-/// decision 1, 2026-09-26). No direct Revit API member answers this question; <see cref="BasePoint.IsShared"/>
-/// is a fixed type discriminant (always <see langword="true"/> for the survey point, always
-/// <see langword="false"/> for the project base point), not a usable runtime flag -- this repository's own
-/// pre-existing <see cref="OrphanCheck"/> already relies on that same distinction.
+/// detection" section for the full reasoning, the corrected proxy, and the 2026-09-27 live-evidence finding
+/// that required this fix (manual evidence Step 14.5): a brand-new document opened from Revit 2027's own
+/// default template (Default_I_ENU.rte) already carries a never-touched, uncoordinated survey point's usual
+/// startup state at the internal origin, so that state is not read here, in any form, by this class or by
+/// <see cref="SharedCoordinateDetection"/>. The actual decision is delegated entirely to that Revit-free,
+/// unit-tested function -- this class only reads the raw Revit values it needs and hands them across.
+/// <see cref="BasePoint.IsShared"/> is a fixed type discriminant (always <see langword="true"/> for the survey
+/// point, always <see langword="false"/> for the project base point), not a usable runtime flag -- this
+/// repository's own pre-existing <see cref="OrphanCheck"/> already relies on that same distinction.
 /// </summary>
 internal static class SharedCoordinatesDetector
 {
     /// <summary>
-    /// Biased toward refusing: a false positive here just refuses a legitimate write; a false negative would
-    /// silently clobber real shared coordinates -- the harm owner decision 1 exists to prevent. Two
-    /// independent signals, OR'd together: the survey point still sits at the internal origin and is
-    /// unclipped (<c>Document.ResetSharedCoordinates()</c>'s own doc comment states this is exactly the
-    /// never-coordinated baseline), or the document already carries more than the one default "Internal"
-    /// <see cref="ProjectLocation"/>.
+    /// A small, fixed angle tolerance (radians). See docs/architecture/revit-property-line-and-shared-coordinates.md's
+    /// "Shared-coordinates detection" section: <see cref="ProjectPosition.Angle"/> is either exactly its
+    /// startup value (0) or a real value a user or a prior SolidGround write actually set, so this does not
+    /// need the same caller-supplied, machine-specific tolerance the length axes use.
     /// </summary>
-    internal static bool LooksAlreadyCoordinated(Document document)
+    private const double AngleToleranceRadians = 1e-9;
+
+    /// <summary>
+    /// Reads <paramref name="document"/>'s own <see cref="ProjectPosition"/>, survey point position, and
+    /// <see cref="Document.ProjectLocations"/> count, then defers the actual decision to
+    /// <see cref="SharedCoordinateDetection.LooksAlreadyCoordinated"/>. Logs every raw value read and the
+    /// final result.
+    /// </summary>
+    /// <param name="document">The document to inspect.</param>
+    /// <param name="lengthToleranceInternal">
+    /// <c>Application.VertexTolerance</c> (Revit-internal decimal feet). The caller already reads this once,
+    /// at Preflight, via <c>commandData.Application.Application.VertexTolerance</c> (see
+    /// <c>LogAndReadGeometryTolerances</c>) -- passed in here rather than read a second time.
+    /// </param>
+    internal static bool LooksAlreadyCoordinated(Document document, double lengthToleranceInternal)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        BasePoint surveyPoint = BasePoint.GetSurveyPoint(document);
-        bool looksNeverCoordinated = surveyPoint.Position.IsAlmostEqualTo(XYZ.Zero) && !surveyPoint.Clipped;
-        bool hasExtraProjectLocations = document.ProjectLocations.Size > 1;
-        return !looksNeverCoordinated || hasExtraProjectLocations;
+        ProjectPosition projectPosition = document.ActiveProjectLocation.GetProjectPosition(XYZ.Zero);
+        XYZ surveyPointPosition = BasePoint.GetSurveyPoint(document).Position;
+        int projectLocationCount = document.ProjectLocations.Size;
+
+        bool result = SharedCoordinateDetection.LooksAlreadyCoordinated(
+            projectPosition.EastWest, projectPosition.NorthSouth, projectPosition.Elevation, projectPosition.Angle,
+            surveyPointPosition.X, surveyPointPosition.Y, surveyPointPosition.Z,
+            projectLocationCount, lengthToleranceInternal, AngleToleranceRadians);
+
+        AddInLog.Info(
+            $"SharedCoordinatesDetector read ProjectPosition(EastWest={projectPosition.EastWest.ToString("R", CultureInfo.InvariantCulture)}, " +
+            $"NorthSouth={projectPosition.NorthSouth.ToString("R", CultureInfo.InvariantCulture)}, " +
+            $"Elevation={projectPosition.Elevation.ToString("R", CultureInfo.InvariantCulture)}, " +
+            $"Angle={projectPosition.Angle.ToString("R", CultureInfo.InvariantCulture)}), survey point Position=" +
+            $"({surveyPointPosition.X.ToString("R", CultureInfo.InvariantCulture)}, {surveyPointPosition.Y.ToString("R", CultureInfo.InvariantCulture)}, " +
+            $"{surveyPointPosition.Z.ToString("R", CultureInfo.InvariantCulture)}), ProjectLocations.Size={projectLocationCount}, " +
+            $"lengthToleranceInternal={lengthToleranceInternal.ToString("R", CultureInfo.InvariantCulture)}. LooksAlreadyCoordinated={result}.");
+
+        return result;
     }
 }
 
@@ -65,21 +98,19 @@ internal static class SharedCoordinatesWriter
 
     /// <summary>
     /// Writes <paramref name="eastWestInternal"/>/<paramref name="northSouthInternal"/>/<paramref name="elevationInternal"/>
-    /// (Revit-internal decimal feet) as this model's shared coordinates, at zero rotation, then explicitly
-    /// clips the survey point rather than relying on an unconfirmed automatic side effect of
-    /// <see cref="ProjectLocation.SetProjectPosition"/> -- see docs/architecture/revit-property-line-and-shared-coordinates.md's
-    /// "Why <c>Write</c> also sets <c>Clipped</c>" section for why an unclipped survey point at the internal
-    /// origin is exactly what <see cref="SharedCoordinatesDetector.LooksAlreadyCoordinated"/> treats as "never
-    /// coordinated," and why that would make a second run against this same document's own prior write
-    /// self-defeating without this line.
+    /// (Revit-internal decimal feet) as this model's shared coordinates, at zero rotation. Leaves the survey
+    /// point's own prior startup state exactly as it was -- a 2026-09-27 live Revit 2027 session (manual
+    /// evidence Step 14.5) found that Revit 2027's own default template already ships a brand-new document
+    /// with that state set, so touching it here could never distinguish "SolidGround just wrote this" from
+    /// "this document was never touched," and would additionally overwrite whatever setting the user's own
+    /// document already had. This run's own write is instead detected afterward purely through the resulting
+    /// non-zero <see cref="ProjectPosition"/> -- see docs/architecture/revit-property-line-and-shared-coordinates.md's
+    /// "Why <c>Write</c> no longer sets <c>Clipped</c>" section.
     /// </summary>
     /// <exception cref="SharedCoordinatesWriteException">
     /// Revit rejected the write. <see cref="ProjectLocation.SetProjectPosition"/> documents
     /// <see cref="Autodesk.Revit.Exceptions.ArgumentNullException"/> and
-    /// <see cref="Autodesk.Revit.Exceptions.InvalidOperationException"/>; <see cref="BasePoint.Clipped"/>'s
-    /// setter documents the same <see cref="Autodesk.Revit.Exceptions.InvalidOperationException"/> for a
-    /// non-shared <see cref="BasePoint"/>, structurally unreachable here since
-    /// <see cref="BasePoint.GetSurveyPoint"/> always returns the shared survey point.
+    /// <see cref="Autodesk.Revit.Exceptions.InvalidOperationException"/>.
     /// </exception>
     internal static ProjectPosition Write(Document document, double eastWestInternal, double northSouthInternal, double elevationInternal)
     {
@@ -89,7 +120,6 @@ internal static class SharedCoordinatesWriter
         try
         {
             document.ActiveProjectLocation.SetProjectPosition(XYZ.Zero, position);
-            BasePoint.GetSurveyPoint(document).Clipped = true;
         }
         catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ArgumentNullException or Autodesk.Revit.Exceptions.InvalidOperationException)
         {

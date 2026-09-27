@@ -651,6 +651,14 @@ public sealed class RevitHostFilesTests
         Assert.True(detectorIndex < runTransactionIndex, "Expected the shared-coordinates detector check to run inside RunDocumentPreflight, before RunTransaction.");
         Assert.True(refusalMessageIndex < runTransactionIndex, "Expected the shared-coordinates refusal message to be added inside RunDocumentPreflight, before RunTransaction.");
 
+        // 2026-09-27 live-evidence fix: a live Revit 2027 session (manual evidence Step 14.5) found Revit's own
+        // default template ships a brand-new document with its survey point already reporting the "clipped"
+        // startup state, so the refusal message must no longer claim that state as evidence of prior
+        // coordination, and must instead name the actual signals the corrected proxy now uses.
+        Assert.DoesNotContain("is clipped", commandContent, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("a non-zero shared project position or angle", commandContent, StringComparison.Ordinal);
+        Assert.Contains("a moved survey point", commandContent, StringComparison.Ordinal);
+
         // Review fix: the two checks above only pin the detector call's *position* relative to RunTransaction,
         // not whether it is actually conditioned on the opt-in setting at all. A guard that always ran the
         // detector (or that inverted/widened WriteIfAbsent so the detector runs regardless of the setting) would
@@ -763,6 +771,50 @@ public sealed class RevitHostFilesTests
         string between = source[resolveIndex..writeIndex];
         Assert.DoesNotContain("context.Settings.Request.OutputUnit", between, StringComparison.Ordinal);
         Assert.DoesNotContain("revitUnit", between, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedCoordinatesDetectorNeverReadsTheSurveyPointsClippedProperty()
+    {
+        // 2026-09-27 live-evidence fix: a live Revit 2027 session (manual evidence Step 14.5) found that a
+        // brand-new document opened from Revit's own default template (Default_I_ENU.rte) reports its survey
+        // point already Clipped == true at the internal origin, so a detector that reads that property at all
+        // -- regardless of how the result is combined with other signals -- can misdetect an uncoordinated
+        // model as already coordinated. This backstops that SharedCoordinatesDetector never reads it again,
+        // from a test assembly that cannot reference the Revit API to check this any other way. Deliberately
+        // scoped to the detector class body only (up to the next type declaration), not the whole file, so this
+        // guard cannot be satisfied by coincidentally removing an unrelated occurrence elsewhere.
+        string source = ReadSharedCoordinatesGateSource();
+
+        int detectorStart = RequireIndex(source, "internal static class SharedCoordinatesDetector");
+        int detectorEnd = RequireIndex(source, "internal sealed class SharedCoordinatesWriteException");
+        Assert.True(detectorEnd > detectorStart, "Expected SharedCoordinatesWriteException to be declared after SharedCoordinatesDetector.");
+
+        string detectorBody = source[detectorStart..detectorEnd];
+        Assert.DoesNotContain(".Clipped", detectorBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedCoordinatesWriterNeverSetsTheSurveyPointsClippedProperty()
+    {
+        // Companion guard to the detector check above (2026-09-27 live-evidence fix): the writer must leave
+        // whatever "clipped" state the user's own document already had exactly as it was --
+        // docs/architecture/revit-property-line-and-shared-coordinates.md's "Why Write no longer sets Clipped"
+        // section -- detecting its own write afterward purely through the resulting non-zero project position
+        // instead. Deliberately scoped to the writer class body (to end of file, its last type), not the whole
+        // file, matching the detector guard's own technique above.
+        string source = ReadSharedCoordinatesGateSource();
+
+        int writerStart = RequireIndex(source, "internal static class SharedCoordinatesWriter");
+        string writerBody = source[writerStart..];
+        Assert.DoesNotContain(".Clipped", writerBody, StringComparison.Ordinal);
+    }
+
+    private static string ReadSharedCoordinatesGateSource()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Transactions", "SharedCoordinatesGate.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        return File.ReadAllText(path);
     }
 
     private static string ReadCreateToposolidCommandSource()

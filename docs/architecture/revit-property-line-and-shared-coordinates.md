@@ -10,14 +10,20 @@ defensive Core-side geometry cleanup (dedupe/collinear-collapse) this issue's sc
 reaches Revit's `CurveLoop` APIs. Cross-references `docs/architecture/revit-toposolid-creation.md` for the
 shared six-stage command flow, transaction/rollback policy, and dialog helpers this note only amends.
 
-Landed in two stages, both now complete. **Stage 1** (commit `c81abb1`) added the Revit-free
-`LocalBoundaryCleaner` and `LocalBoundaryValidator`'s optional `minimumEdgeLength` parameter in
-`SolidGround.Core` — `src/SolidGround.Core/Exports/LocalBoundaryCleaner.cs` (new) and the additive parameter on
+Landed in three stages. **Stage 1** (commit `c81abb1`) added the Revit-free `LocalBoundaryCleaner` and
+`LocalBoundaryValidator`'s optional `minimumEdgeLength` parameter in `SolidGround.Core` —
+`src/SolidGround.Core/Exports/LocalBoundaryCleaner.cs` (new) and the additive parameter on
 `LocalBoundaryValidator.Validate` (`src/SolidGround.Core/Exports/LocalBoundaryValidator.cs`) — plus their
-tests; not yet wired into `SolidGround.Revit`, which was unchanged by that commit. **Stage 2** (this update)
-wires that cleanup into `CreateToposolidCommand`'s Stage 3, adds `PropertyLine` creation gated to parcel areas
-of interest, the shared-coordinates detection/write/verification gate, the Revit-side tolerance read at
-Preflight, and the placement-record schema v3 fields.
+tests; not yet wired into `SolidGround.Revit`, which was unchanged by that commit. **Stage 2** (commit
+`842cadc`) wires that cleanup into `CreateToposolidCommand`'s Stage 3, adds `PropertyLine` creation gated to
+parcel areas of interest, the shared-coordinates detection/write/verification gate, the Revit-side tolerance
+read at Preflight, and the placement-record schema v3 fields. **Stage 3** (this update, 2026-09-27) is a
+live-evidence fix: a live Revit 2027 session (manual evidence Step 14.5) found Stage 2's own shared-coordinates
+detection proxy misread a brand-new document opened from Revit's own default template as already coordinated,
+because that template ships its survey point already clipped. The decision moved into a pure, Revit-free,
+unit-tested Core function that never reads a "clipped" flag of any kind, and the writer no longer sets one
+either — see "Shared-coordinates detection" and "Why `Write` no longer sets `Clipped`" below, and "Known
+limitations" for the full, plain-English record of the live finding.
 
 Every Revit API member below was verified against the installed Revit 2027 `RevitAPI.dll` (FileVersion
 `27.0.10.13`) via `MetadataLoadContext`/`System.Reflection.Metadata` reflection, cross-checked against
@@ -33,7 +39,10 @@ The owner's own instruction on Issue #30: "Regarding #30, go with all recommende
 1. **The shared-coordinates detection proxy** (survey point at the internal origin and unclipped, OR'd with
    `ProjectLocations.Size > 1`) is accepted as designed, on the explicit condition that a live Revit 2027
    confirmation against a real document that already has shared coordinates set still runs before this ships
-   (see "Manual evidence plan" below, Step 14.6).
+   (see "Manual evidence plan" below, Step 14.6). **Corrected 2026-09-27 (live-evidence fix):** that live
+   confirmation found the `unclipped` term misread Revit's own default template as already coordinated; the
+   accepted proxy's formula was replaced and no longer reads the survey point's clipped state in any form — see
+   "Shared-coordinates detection" below.
 2. **The value written, when opted in, is the terrain's own local-frame source origin at zero rotation** — the
    same coordinate already in the placement record's `localOrigin.sourceX`/`sourceY`/`sourceElevation`. Zero
    rotation means SolidGround treats the terrain's projected grid north as Revit's true north: no
@@ -59,7 +68,7 @@ The owner's own instruction on Issue #30: "Regarding #30, go with all recommende
 | `ProjectLocation.SetProjectPosition(XYZ, ProjectPosition): void` (instance, via `document.ActiveProjectLocation`) | installed-SDK; `RevitAPI.xml`: "similar to the Revit command 'Specify Coordinates at Point'" |
 | `ProjectLocation.GetProjectPosition(XYZ): ProjectPosition` | installed-SDK + `RevitAPI.xml` |
 | `ProjectPosition(double ew, double ns, double elevation, double angle)` ctor; `EastWest`/`NorthSouth`/`Elevation`/`Angle` get/set | installed-SDK; `RevitAPI.xml`: all in decimal feet/radians |
-| `BasePoint.GetSurveyPoint(Document)` (static), `.Position` (get-only), `.Clipped` (get/set) | installed-SDK + `RevitAPI.xml` |
+| `BasePoint.GetSurveyPoint(Document)` (static), `.Position` (get-only) | installed-SDK + `RevitAPI.xml` — `.Clipped` (get/set) was used through 2026-09-26; the 2026-09-27 live-evidence fix below removed every read and write of it from this design, so it is no longer part of this note's own API surface |
 | `Document.ProjectLocations { get; }: ProjectLocationSet` (`.Size`, `.IsEmpty`) | installed-SDK + `RevitAPI.xml` |
 | `Autodesk.Revit.ApplicationServices.Application.ShortCurveTolerance { get; }: double` | installed-SDK; `RevitAPI.xml`: "the enforced minimum length for any curve created by Revit," `<since>2014</since>` |
 | `Autodesk.Revit.ApplicationServices.Application.VertexTolerance { get; }: double` | installed-SDK; `RevitAPI.xml`: "two points within this distance are considered coincident... do not use this value to set the distance between two points," `<since>2012</since>` |
@@ -76,15 +85,17 @@ the user toward fixing their input geometry.
 
 `ProjectLocation.SetProjectPosition`'s own `RevitAPI.xml` doc comment documents `ArgumentNullException` and
 `InvalidOperationException` ("Unable to use the project position's transform to calculate the point.").
-`BasePoint.Clipped`'s own doc comment documents that identical `InvalidOperationException` for its setter, but
-only "for a non-shared BasePoint" — structurally unreachable here since `BasePoint.GetSurveyPoint` always
-returns the shared survey point, never the (non-shared) project base point. **Review fix:**
-`SharedCoordinatesWriter.Write` wraps both calls in one `try`/`catch` mirroring
-`PropertyLineCreationService.Create`'s own pattern, translating either into a new
+**Review fix:** `SharedCoordinatesWriter.Write` wraps this call in a `try`/`catch` mirroring
+`PropertyLineCreationService.Create`'s own pattern, translating either exception into a new
 `SharedCoordinatesWriteException` (error catalogue row 20b) instead of letting it
 fall through to the generic Stage-5 catch-all, which would otherwise misattribute the failure to the toposolid
 even though, by that point, the `Toposolid` (and any `PropertyLine`) had already been validly created and only
-the shared-coordinates write itself failed.
+the shared-coordinates write itself failed. **Corrected 2026-09-27 (live-evidence fix):** through 2026-09-26,
+this same `try`/`catch` also wrapped a second call, `BasePoint.Clipped`'s setter — its own doc comment documented
+that identical `InvalidOperationException` for its setter, but only "for a non-shared BasePoint," structurally
+unreachable here since `BasePoint.GetSurveyPoint` always returns the shared survey point, never the (non-shared)
+project base point. `Write` no longer sets `Clipped` at all (see "Why `Write` no longer sets `Clipped`" below),
+so this `try`/`catch` now wraps only the one `SetProjectPosition` call described above.
 
 **Not established by any documentation source; owner-visible risk, accepted (owner decision 1).** No Revit API
 member directly answers "has this document's shared coordinates already been set." `BasePoint.IsShared` is
@@ -325,17 +336,38 @@ whenever `sharedCoordinates.writeIfAbsent` is off (the shipped default).
 
 ## Shared-coordinates detection, write, and verification (Revit)
 
-`src/SolidGround.Revit/Transactions/SharedCoordinatesGate.cs` holds two static classes:
+**Updated 2026-09-27 (live-evidence fix).** The design below through 2026-09-26 read the survey point's own
+"clipped" flag as part of the detection proxy, and the writer set that same flag as its own after-the-fact
+marker. A live Revit 2027 session (manual evidence Step 14.5) found that a brand-new document opened from
+Revit 2027's own default template (`Default_I_ENU.rte`) already reports that flag set at the internal origin,
+so a proxy that read it refused the opt-in write on a genuinely uncoordinated model. See "Shared-coordinates
+detection" and "Why `Write` no longer sets `Clipped`" below for the corrected design, and "Known limitations"
+for the plain-English record of the live finding itself.
+
+`src/SolidGround.Revit/Transactions/SharedCoordinatesGate.cs` holds two static classes. The actual "already
+coordinated" decision lives in the Revit-free, unit-tested `SolidGround.Core.Transformations
+.SharedCoordinateDetection.LooksAlreadyCoordinated` (plain doubles/ints in, `bool` out, no Revit type anywhere
+in its signature); `SharedCoordinatesDetector` only reads the raw Revit values that function needs and hands
+them across, then logs every value read and the result:
 
 ```csharp
 internal static class SharedCoordinatesDetector
 {
-    internal static bool LooksAlreadyCoordinated(Document document)
+    private const double AngleToleranceRadians = 1e-9;
+
+    internal static bool LooksAlreadyCoordinated(Document document, double lengthToleranceInternal)
     {
-        BasePoint surveyPoint = BasePoint.GetSurveyPoint(document);
-        bool looksNeverCoordinated = surveyPoint.Position.IsAlmostEqualTo(XYZ.Zero) && !surveyPoint.Clipped;
-        bool hasExtraProjectLocations = document.ProjectLocations.Size > 1;
-        return !looksNeverCoordinated || hasExtraProjectLocations;
+        ProjectPosition projectPosition = document.ActiveProjectLocation.GetProjectPosition(XYZ.Zero);
+        XYZ surveyPointPosition = BasePoint.GetSurveyPoint(document).Position;
+        int projectLocationCount = document.ProjectLocations.Size;
+
+        bool result = SharedCoordinateDetection.LooksAlreadyCoordinated(
+            projectPosition.EastWest, projectPosition.NorthSouth, projectPosition.Elevation, projectPosition.Angle,
+            surveyPointPosition.X, surveyPointPosition.Y, surveyPointPosition.Z,
+            projectLocationCount, lengthToleranceInternal, AngleToleranceRadians);
+
+        AddInLog.Info(/* every raw value read above, plus result */);
+        return result;
     }
 }
 
@@ -347,7 +379,6 @@ internal static class SharedCoordinatesWriter
         try
         {
             document.ActiveProjectLocation.SetProjectPosition(XYZ.Zero, position);
-            BasePoint.GetSurveyPoint(document).Clipped = true; // see "Why Write also sets Clipped" below.
         }
         catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ArgumentNullException or Autodesk.Revit.Exceptions.InvalidOperationException)
         {
@@ -361,34 +392,79 @@ internal static class SharedCoordinatesWriter
 }
 ```
 
+`lengthToleranceInternal` is `Application.VertexTolerance`, already read once at Preflight by
+`LogAndReadGeometryTolerances` (see "Geometry cleanup contract" > "Tolerance sourcing" above) and passed in here
+rather than read a second time; `AngleToleranceRadians` is a small, fixed constant (`1e-9` radians), the same
+value and rationale `SharedCoordinatesWriter.VerifyWritten`'s own tolerance already uses (see "Verifying and
+recording the zero-rotation value" below) -- `ProjectPosition.Angle` is either exactly its startup value (0) or
+a real value a user or a prior SolidGround write actually set, so it does not need a caller-supplied,
+machine-specific tolerance the way the length axes do.
+
 ### Shared-coordinates detection
 
 No direct Revit API member answers "has this document's shared coordinates already been set" (see the API
-table above). The accepted proxy (owner decision 1): `BasePoint.GetSurveyPoint(document).Position` at the
-internal origin (`XYZ.Zero`) **and** not `.Clipped` is the never-coordinated baseline — directly supported by
-`Document.ResetSharedCoordinates()`'s own doc comment ("survey point will be reset back to startup location,
-where it coincides with the Internal Origin"), combined with `InternalOrigin.Position` always being `(0,0,0)`
-(confirmed for Issue #13). OR'd with `document.ProjectLocations.Size > 1` as a second, coarser, independent
-signal, biased toward refusing rather than under-refusing: a false positive here just refuses a legitimate
-write; a false negative would silently clobber real shared coordinates.
+table above). **Corrected 2026-09-27 (live-evidence fix; supersedes owner decision 1's original proxy):** a
+live Revit 2027 session (manual evidence Step 14.5, Revit 2027 build `27.0.10.13`) opened a brand-new document
+from Revit's own default template (`Default_I_ENU.rte`) and read `ActiveProjectLocation.GetProjectPosition
+(XYZ.Zero)` → `EastWest=0, NorthSouth=0, Elevation=0, Angle=0`, the survey point's own `Position=(0,0,0)`,
+`ProjectLocations.Size=1`, and the survey point's own `Clipped=True`. The original proxy's `!surveyPoint.Clipped`
+term made this brand-new, never-touched document read as "already coordinated" — refusing the opt-in write on
+exactly the uncoordinated case it exists to allow. **The default template ships the survey point clipped, so a
+clipped survey point is not evidence of shared coordinates.**
 
-**Caveats the owner accepted knowingly:** a user can manually clip/unclip the survey point, or manually run
-"Specify Coordinates at Point," without ever acquiring or publishing anything, so `Clipped` and
-position-versus-origin are both heuristics, not a certified "ran Acquire/Publish Coordinates" bit; a document
-could theoretically acquire coordinates that happen to coincide with the internal origin, producing a false
-negative. Step 14.6 of the manual evidence plan below exists to probe this against a real document.
+The corrected proxy drops that term entirely and never reads it again, in any form. The actual decision is a
+pure, Revit-free function, `SolidGround.Core.Transformations.SharedCoordinateDetection.LooksAlreadyCoordinated`
+(plain doubles/ints in, `bool` out — see "Shared-coordinates detection, write, and verification (Revit)" above
+for the exact signature): **already coordinated** (`true`) when any of the following holds, otherwise **never
+coordinated** (`false`):
 
-### Why `Write` also sets `Clipped`
+- `document.ProjectLocations.Size > 1` (unchanged from the original proxy — a second, coarser, independent
+  signal biased toward refusing rather than under-refusing).
+- Any of the active `ProjectPosition`'s `EastWest`/`NorthSouth`/`Elevation` has an absolute value greater than
+  the caller's length tolerance (`Application.VertexTolerance`).
+- The active `ProjectPosition`'s `Angle` has an absolute value greater than a small, fixed angle tolerance
+  (`1e-9` radians).
+- The survey point's own `Position` is farther than the length tolerance from the internal origin `(0,0,0)`
+  (the one signal the original proxy already had, now compared as a true 3D distance rather than combined with
+  `Clipped`) — directly supported by `Document.ResetSharedCoordinates()`'s own doc comment ("survey point will
+  be reset back to startup location, where it coincides with the Internal Origin"), combined with
+  `InternalOrigin.Position` always being `(0,0,0)` (confirmed for Issue #13).
 
-Without this line, the detection proxy could be silently defeated by SolidGround's **own** prior write:
-`SetProjectPosition` changes the `ProjectLocation` transform, not the survey point's own internal-coordinate
-`Position` (confirmed by `BasePoint.SharedPosition`'s own doc comment). So after a `SetProjectPosition`-only
-write, the survey point's `Position` would most likely still read `(0,0,0)`; if `Clipped` also stayed `false`
-(unconfirmed by any documentation source), `LooksAlreadyCoordinated` would keep reporting "never coordinated"
-even on a document SolidGround itself just wrote real shared coordinates to — directly contradicting this
-design's own non-goal that the opt-in never offers to overwrite. Setting `Clipped = true` explicitly, rather
-than trusting an unconfirmed automatic side effect, removes the dependency on that unverified assumption
-entirely.
+Testing the active `ProjectPosition` (not only the survey point) is what makes this proxy strictly stronger
+than the one it replaces, not merely different: a document's shared coordinates can be set (via
+`SetProjectPosition`, "Specify Coordinates at Point," or Acquire Coordinates) without ever moving the survey
+point's own internal-coordinate `Position` away from `(0,0,0)` at all — confirmed by `BasePoint.SharedPosition`'s
+own doc comment, and the exact mechanism "Why `Write` no longer sets `Clipped`" below relies on. A proxy that
+looked at the survey point alone would miss that case entirely; this one does not.
+
+**Caveats the owner accepted knowingly (owner decision 1), reduced but not eliminated by this fix:** a user can
+manually run "Specify Coordinates at Point" (moving the project position, the survey point, or both) without
+ever truly acquiring or publishing coordinates from a real survey, so this remains a heuristic, not a certified
+"ran Acquire/Publish Coordinates" bit. The theoretical case of a document that genuinely acquired coordinates
+which happen to coincide with the internal origin at zero rotation would still produce a false negative — now
+requiring every one of the four signals above to simultaneously read as "uncoordinated," rather than depending
+on one single flag the way the original proxy did. Step 14.6 of the manual evidence plan below exists to probe
+this against a real document.
+
+### Why `Write` no longer sets `Clipped`
+
+**Corrected 2026-09-27 (live-evidence fix).** Through 2026-09-26, `Write` set the survey point's own `Clipped`
+property to `true` immediately after `SetProjectPosition`, reasoning that without it, a second run against
+SolidGround's own prior write would be self-defeating: `SetProjectPosition` changes the `ProjectLocation`
+transform, not the survey point's own internal-coordinate `Position` (confirmed by `BasePoint.SharedPosition`'s
+own doc comment), so the survey point's `Position` would most likely still read `(0,0,0)` afterward, and the
+pre-2026-09-27 proxy depended on `Clipped` alone to notice the change.
+
+The corrected proxy above no longer needs any such marker: `Write`'s own `SetProjectPosition` call leaves a
+genuinely non-zero, real `ProjectPosition` behind — that is the entire point of the write — so a subsequent
+`LooksAlreadyCoordinated` call reads that same non-zero `EastWest`/`NorthSouth`/`Elevation` (or a non-zero
+`Angle`, on some future design that computes one) directly and correctly reports "already coordinated," with no
+dependency on `Clipped` in either direction. `Write` therefore no longer touches `Clipped` at all, leaving
+whatever clipped state the user's own document already had exactly as it was: SolidGround has no legitimate
+reason to change a property it does not itself rely on, and a user may have left the survey point unclipped for
+reasons entirely unrelated to shared coordinates. Manual evidence Step 14.6's second check (running the opt-in
+again against Step 14.5's own document) still applies unchanged: that second run must still refuse, but now
+because of the non-zero project position `Write` left behind, not because of `Clipped`.
 
 ### Settings: the shared-coordinates opt-in
 
@@ -424,15 +500,20 @@ catalogue row 9b, alongside row 9a's own "Preflight-only, pre-transaction, machi
 refusal" precedent) — accumulates into `problems` like every other check in that stage, no early return:
 
 ```csharp
-if (settings.SharedCoordinates.WriteIfAbsent && SharedCoordinatesDetector.LooksAlreadyCoordinated(document))
+if (settings.SharedCoordinates.WriteIfAbsent && SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal))
 {
     problems.Add(
         "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared " +
-        "coordinates set (its survey point is not at the internal origin, is clipped, or the model already " +
-        "has more than one ProjectLocation). SolidGround will not overwrite existing shared coordinates. Set " +
+        "coordinates set (a non-zero shared project position or angle, a moved survey point, or more than " +
+        "one project location). SolidGround will not overwrite existing shared coordinates. Set " +
         "sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates.");
 }
 ```
+
+**2026-09-27 live-evidence fix:** the message no longer says a clipped survey point is evidence of prior
+coordination (the default template ships one clipped) — see "Shared-coordinates detection" above for the live
+finding this corrects. `vertexToleranceInternal` is the same value `LogAndReadGeometryTolerances` already read
+just above this check, reused rather than read a second time.
 
 `RunDocumentPreflight` also reads and logs the two new tolerances here, stored on the widened `DocumentContext`
 record (new fields `ShortCurveToleranceInternal`, `VertexToleranceInternal`, alongside the existing
@@ -700,6 +781,17 @@ zero-length check.
 shipped default (US survey foot) — the specific unit-mixup failure mode "Unit convention for the
 shared-coordinates value" names; `Resolve` throws `ArgumentNullException` for a null frame.
 
+**`tests/SolidGround.Tests/SharedCoordinateDetectionTests.cs`** (new, Core-only, Revit-free, 2026-09-27
+live-evidence fix): pins `SharedCoordinateDetection.LooksAlreadyCoordinated`'s own contract, including the exact
+default-template case the live finding above uncovered (all zero, `projectLocationCount=1`: `false`); each of
+the four signals (`ProjectLocations.Size > 1`, each project-position axis, `Angle`, the survey-point distance)
+returning `true` alone, including a negative-value case proving the comparison uses absolute value; the
+survey-point check's own true-3D-distance behavior (a combined distance exceeding tolerance even though no
+single axis does); just-inside/just-outside tolerance boundary pairs for the length and angle comparisons; a
+written UTM-scale position (matching `SharedCoordinateOriginTests`' own example-site origin) returning `true`;
+and `ArgumentOutOfRangeException` for every non-finite double argument (`NaN`, positive and negative infinity),
+a negative length or angle tolerance, and a `projectLocationCount` below `1`.
+
 **`tests/SolidGround.Tests/TerrainRequestSettingsTests.cs`** (additive): `ShippedTemplateText` gains the
 identical new `sharedCoordinates` block; `JsonOptionsDecodesTheShippedTemplateTextVerbatim` adds
 `requestShapedPortion.Remove("sharedCoordinates")` alongside its existing `level`/`toposolidType` removals.
@@ -711,8 +803,9 @@ JSON `null`) and in the created/attempted state (every field populated, includin
 `angleInternal`).
 
 **`tests/SolidGround.Tests/RevitHostFilesTests.cs`** (additive, plain-text scans of `CreateToposolidCommand.cs`/
-`RevitSettingsIo.cs`, matching the file's established `RevitIni`-guard precedent — the only way to backstop a
-fact only a live Revit process could otherwise exercise, from a test assembly that cannot reference the Revit
+`RevitSettingsIo.cs`/`SharedCoordinatesGate.cs`, matching the file's established `RevitIni`-guard precedent —
+the only way to backstop a fact only a live Revit process could otherwise exercise, from a test assembly that
+cannot reference the Revit
 API at all):
 
 - `CreateToposolidCommandCleansTheBoundaryBeforeValidatingIt` — `LocalBoundaryCleaner.Clean(` appears before
@@ -746,7 +839,9 @@ API at all):
   so the detector ran regardless of the setting) would leave both untouched, while `RunTransaction`'s own write
   gate never re-checks "already coordinated" (only `WriteIfAbsent` again). A further assertion now anchors the
   exact, non-negated `if (settings.SharedCoordinates.WriteIfAbsent)` gate within a small, fixed window
-  immediately preceding the detector call.
+  immediately preceding the detector call. **2026-09-27 live-evidence fix:** two further assertions confirm the
+  refusal message no longer contains "is clipped" (case-insensitive) and does contain the corrected wording's
+  own "a non-zero shared project position or angle" and "a moved survey point" phrases.
 - `CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting` (review fix) — mirrors
   `AssertGatedByIsParcelAoi`'s own technique: asserts `SharedCoordinates.WriteIfAbsent` appears within a small,
   fixed character window immediately preceding the real `SharedCoordinatesWriter.Write(` call site. **Second
@@ -772,15 +867,36 @@ API at all):
   (`TestAssemblyReferencesNeitherTheRevitApiNorTheRevitHostAssembly` forbids a `RevitAPI`/`SolidGround.Revit`
   reference), so only this plain-text scan, not a Core-level unit test, can catch a regression at this exact
   call site.
+- `SharedCoordinatesDetectorNeverReadsTheSurveyPointsClippedProperty` (2026-09-27 live-evidence fix) — reads
+  `SharedCoordinatesGate.cs`, slices out just the `SharedCoordinatesDetector` class body (from its own class
+  declaration up to the next type, `SharedCoordinatesWriteException`), and asserts `.Clipped` does not appear
+  anywhere in that slice — the only way to backstop, from a test assembly that cannot reference the Revit API,
+  that a future edit does not reintroduce the exact defect this fix removes.
+- `SharedCoordinatesWriterNeverSetsTheSurveyPointsClippedProperty` (2026-09-27 live-evidence fix) — the
+  companion guard: slices out the `SharedCoordinatesWriter` class body (from its own class declaration to end of
+  file) and asserts `.Clipped` does not appear anywhere in that slice either.
 
-Each of the last three checks above was verified, by deliberately mutating the shipped implementation and
-re-running the specific test, to actually fail against the broken version and pass again once reverted (not
-merely written to pass against the intended implementation without ever having been red). The two "Second
-review fix" gate-anchor assertions added above (in `SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated`
-and `CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting`) were verified the same way against
+Each of these three checks above (`CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting`,
+`CreateToposolidCommandCatchesSharedCoordinatesWriteExceptionAlongsideItsSiblings`, and
+`SharedCoordinatesWriteUsesTheOriginsOwnNativeUnitNotOutputUnit`) was verified, by deliberately mutating the
+shipped implementation and re-running the specific test, to actually fail against the broken version and pass
+again once reverted (not merely written to pass
+against the intended implementation without ever having been red). The two "Second review fix" gate-anchor
+assertions added above (in `SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated` and
+`CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting`) were verified the same way against
 both an inverted gate and, for the latter, a widened (`&&` to `||`) gate: each mutation was confirmed to fail
 only the new assertion, with the pre-existing assertions in the same test still passing exactly as the review
 finding describes, and reverting was confirmed to restore a fully passing suite.
+
+The two 2026-09-27 `.Clipped`-absence guards above were verified against this repository's own pre-fix commit
+`842cadc` rather than by a working-tree mutate-and-revert cycle: `git show 842cadc:src/SolidGround.Revit/Transactions/SharedCoordinatesGate.cs`
+contains `!surveyPoint.Clipped` inside the pre-fix `SharedCoordinatesDetector` body and `.Clipped = true` inside
+the pre-fix `SharedCoordinatesWriter` body, confirming both guards would have failed against that commit's own
+code and only pass once each class stopped referencing the property. The 2026-09-27 message-wording assertions
+added to `SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated` above were verified live,
+in the ordinary red-then-green sense: added while `CreateToposolidCommand.cs` still carried the pre-fix message,
+confirmed failing (`Assert.DoesNotContain` found `"is clipped"`), then confirmed passing once the message was
+corrected.
 
 ## Manual evidence plan — Step 14 (continues Steps 1-8b, 9-13; settles AC4)
 
@@ -816,22 +932,32 @@ already run once, by hand, through Revit's own "Specify Coordinates at a Point" 
 14.4. **Rejected boundary rolls back both (parcel AOI only).** Force `PropertyLine.IsValidBoundary`/
    `VerifyPropertyLine` to fail (an engineered self-intersecting multi-polygon parcel fixture); confirm neither
    element exists afterward.
-14.5. **Opt-in write against a never-coordinated document.** Confirm `LooksAlreadyCoordinated` logs `false` at
-   Preflight, the run proceeds, and `ActiveProjectLocation.GetProjectPosition(XYZ.Zero)` afterward matches the
-   terrain's own recorded local origin (converted). Also read back and record `ProjectPosition.Angle`: confirm
-   it round-trips as exactly `0`; record it in the placement record's `sharedCoordinatesWrite.angleInternal`
-   field alongside the dialog/log evidence this step already captures. Also log whether
-   `SharedCoordinatesWriter.VerifyWritten`'s read-back matched on the first attempt (i.e., whether the
-   `document.Regenerate()` call between `Write` and `VerifyWritten` was actually load-bearing) — the code no
-   longer depends on this answer either way, but the session should record it.
+14.5. **Opt-in write against a never-coordinated document.** A 2026-09-27 run of this step against a brand-new
+   document opened from Revit 2027's own default template (`Default_I_ENU.rte`, Revit build `27.0.10.13`) found
+   the defect this note's 2026-09-27 live-evidence fix corrects: `ActiveProjectLocation.GetProjectPosition
+   (XYZ.Zero)` read `EastWest=0, NorthSouth=0, Elevation=0, Angle=0`, the survey point's own `Position=(0,0,0)`,
+   `ProjectLocations.Size=1`, and the survey point's own `Clipped=True`. The pre-fix proxy's `!surveyPoint
+   .Clipped` term made `LooksAlreadyCoordinated` return `true` for this brand-new, never-touched document, and
+   Preflight refused the opt-in on exactly the uncoordinated case it exists to allow — the default template
+   ships the survey point clipped, so a clipped survey point is not evidence of shared coordinates. This step
+   must be re-run against the corrected proxy: confirm `LooksAlreadyCoordinated` now logs `false` for this exact
+   document at Preflight, the run proceeds, and `ActiveProjectLocation.GetProjectPosition(XYZ.Zero)` afterward
+   matches the terrain's own recorded local origin (converted). Also read back and record `ProjectPosition
+   .Angle`: confirm it round-trips as exactly `0`; record it in the placement record's
+   `sharedCoordinatesWrite.angleInternal` field alongside the dialog/log evidence this step already captures.
+   Also log whether `SharedCoordinatesWriter.VerifyWritten`'s read-back matched on the first attempt (i.e.,
+   whether the `document.Regenerate()` call between `Write` and `VerifyWritten` was actually load-bearing) — the
+   code no longer depends on this answer either way, but the session should record it.
 14.6. **Opt-in refusal against an already-coordinated document.** After a real, human-performed "Specify
    Coordinates at a Point" (or Acquire Coordinates from a throwaway link) on a scratch document, run with the
-   opt-in on; confirm Preflight refuses (exact dialog text), `Result.Cancelled`, and the document's shared
-   coordinates are provably unchanged afterward — including `ProjectPosition.Angle`. This step empirically
-   confirms or falsifies the detection proxy — record the exact before/after values regardless of outcome. Also
-   run the opt-in a second time against the Step 14.5 document (SolidGround's own prior write, not a manual UI
-   action) to confirm the second run correctly refuses because `SharedCoordinatesWriter.Write`'s `Clipped =
-   true` line took effect.
+   opt-in on; confirm Preflight refuses (exact dialog text — the corrected wording, naming a non-zero shared
+   project position or angle, a moved survey point, or more than one project location, never a clipped survey
+   point), `Result.Cancelled`, and the document's shared coordinates are provably unchanged afterward —
+   including `ProjectPosition.Angle`. This step empirically confirms or falsifies the corrected detection proxy
+   — record the exact before/after values regardless of outcome. Also run the opt-in a second time against the
+   Step 14.5 document (SolidGround's own prior write, not a manual UI action) to confirm the second run
+   correctly refuses because of the non-zero `ProjectPosition` `SharedCoordinatesWriter.Write` left behind, not
+   because of the survey point's own clipped state, which `Write` no longer touches.
 14.7. **Private real-property confirmation.** One full run (opt-in off) against a real property the operator
    has legitimate access to, performed entirely privately; only "testing was done," never a location,
    coordinate, or screenshot, may be recorded in this repository.
@@ -841,11 +967,24 @@ Steps 5/7/8 establish.
 
 ## Known limitations
 
-- **The shared-coordinates detection proxy is a heuristic, not a certified fact** (owner decision 1): a user
-  who manually clips/unclips the survey point, or runs "Specify Coordinates at Point" without ever
-  acquiring/publishing, is indistinguishable from a genuinely never-coordinated document; the theoretical
-  acquire-at-exactly-the-origin case would also produce a false negative. Accepted subject to Step 14.6's live
-  confirmation.
+- **Live finding (2026-09-27, Revit 2027 build `27.0.10.13`, manual evidence Step 14.5): the original detection
+  proxy misread Revit's own default template as already coordinated.** A brand-new document opened from
+  `Default_I_ENU.rte` reported `ActiveProjectLocation.GetProjectPosition(XYZ.Zero)` as `EastWest=0,
+  NorthSouth=0, Elevation=0, Angle=0`, the survey point's own `Position=(0,0,0)`, `ProjectLocations.Size=1`, and
+  the survey point's own `Clipped=True`. The proxy's `!surveyPoint.Clipped` term made `LooksAlreadyCoordinated`
+  return `true` for this genuinely never-touched document, so Preflight refused the opt-in on exactly the case
+  it exists to allow. **The default template ships the survey point clipped, so a clipped survey point is not
+  evidence of shared coordinates.** Fixed the same day: the decision moved into the Revit-free
+  `SolidGround.Core.Transformations.SharedCoordinateDetection.LooksAlreadyCoordinated`, which never takes a
+  "clipped" flag of any kind, and `SharedCoordinatesWriter.Write` no longer sets one either — see
+  "Shared-coordinates detection" and "Why `Write` no longer sets `Clipped`" above for the corrected design.
+- **The shared-coordinates detection proxy remains a heuristic, not a certified fact** (owner decision 1,
+  narrowed by the 2026-09-27 fix above): a user who manually runs "Specify Coordinates at Point" (moving the
+  project position, the survey point, or both) without ever truly acquiring/publishing coordinates from a real
+  survey is indistinguishable from a genuinely coordinated document; the theoretical acquire-at-exactly-the-
+  origin-and-zero-rotation case would still produce a false negative, though it now requires every one of the
+  corrected proxy's four signals to simultaneously read as "uncoordinated," rather than depending on one single
+  flag the way the pre-2026-09-27 proxy did. Accepted subject to Step 14.6's live confirmation.
 - **`ProjectPosition.Angle` is always `0`; grid-convergence correction is not computed.** See "Zero rotation,
   stated plainly" above; a model's true-north rotation carries whatever error the site's distance from its UTM
   zone's central meridian implies.

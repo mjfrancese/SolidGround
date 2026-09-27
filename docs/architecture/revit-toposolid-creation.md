@@ -635,9 +635,14 @@ run once step 1 found a usable, non-family document. In order:
    .ShortCurveTolerance`/`.VertexTolerance` once (Revit-internal decimal feet), carried forward on
    `DocumentContext` as `ShortCurveToleranceInternal`/`VertexToleranceInternal` for Stage 3's geometry cleanup.
    Then, only when `sharedCoordinates.writeIfAbsent` is `true`: `SharedCoordinatesDetector
-   .LooksAlreadyCoordinated(document)` — error catalogue row 9b's refusal when the document already appears to
-   have shared coordinates set. See `docs/architecture/revit-property-line-and-shared-coordinates.md`'s
-   "Preflight refusal" and "Shared-coordinates detection" sections.
+   .LooksAlreadyCoordinated(document, vertexToleranceInternal)` — error catalogue row 9b's refusal when the
+   document already appears to have shared coordinates set. The decision itself is delegated to the Revit-free
+   `SolidGround.Core.Transformations.SharedCoordinateDetection.LooksAlreadyCoordinated` (2026-09-27
+   live-evidence fix: a live Revit 2027 session found the original proxy's own reliance on the survey point's
+   "clipped" state misread Revit's own default template as already coordinated, since that template ships the
+   survey point clipped; the corrected proxy never reads that state). See
+   `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Preflight refusal" and
+   "Shared-coordinates detection" sections.
 10. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
     baseline.
 
@@ -852,10 +857,10 @@ exactly `LocalCoordinateFrame.ToSource`, fed by `UnitUtils.ConvertFromInternalUn
 design's "leave shared coordinates untouched" rule, for every run before SolidGround Issue #30 and for every
 run today with `sharedCoordinates.writeIfAbsent` off — the shipped default; `SiteLocation` is never written by
 any run. **Update, SolidGround Issue #30 (PH3-3):** when that opt-in is on, and Preflight's row-9b proxy found
-the document uncoordinated, `SharedCoordinatesWriter.Write` does write `ActiveProjectLocation` and the survey
-`BasePoint` — see `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "The write itself and
-its source value" section. `sharedCoordinatesStatement` states whichever case actually applied, rather than
-leaving it implicit.
+the document uncoordinated, `SharedCoordinatesWriter.Write` does write `ActiveProjectLocation`; the survey
+`BasePoint` is left exactly as it was — see `docs/architecture/revit-property-line-and-shared-coordinates.md`'s
+"The write itself and its source value" and "Why `Write` no longer sets `Clipped`" sections.
+`sharedCoordinatesStatement` states whichever case actually applied, rather than leaving it implicit.
 
 **Repeated-run alignment.** `localOrigin.kind: "southwest"`/`"centroid"` reproduces the same origin between
 two runs only if the grid's own corner envelope is identical both times — exactly true for `process` mode
@@ -926,7 +931,7 @@ shows its own distinct headline.
 | 8 | `process.asc`/`.prj`/`.sourceJson` missing | Doc Preflight | Cancelled | shared dialog; one problem line per missing file |
 | 9 | Level / ToposolidType unresolved | Doc Preflight | Cancelled | shared dialog; one problem line per unresolved kind |
 | 9a | Configured `pointBudget` exceeds this machine's `Revit.ini` `NativeToposolidMaxPointThreshold` (added for Issue #15's 2026-09-21 threshold evidence; see "Step 7" and "Command flow" > "Stage 1") | Doc Preflight | Cancelled | shared dialog; "pointBudget \<N\> exceeds this machine's NativeToposolidMaxPointThreshold of \<M\> in '\<Revit.ini path\>'; lower pointBudget to at most \<M\> or raise the Revit.ini value within Autodesk's documented 10,000 to 50,000 range and restart Revit." Skipped (no problem line, just a log warning) when `Revit.ini` could not be read this session. |
-| 9b | `sharedCoordinates.writeIfAbsent` is `true` and `SharedCoordinatesDetector.LooksAlreadyCoordinated` is `true` (SolidGround Issue #30, PH3-3; see `docs/architecture/revit-property-line-and-shared-coordinates.md`) | Doc Preflight | Cancelled | shared dialog; "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared coordinates set (its survey point is not at the internal origin, is clipped, or the model already has more than one ProjectLocation). SolidGround will not overwrite existing shared coordinates. Set sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates." |
+| 9b | `sharedCoordinates.writeIfAbsent` is `true` and `SharedCoordinatesDetector.LooksAlreadyCoordinated` is `true` (SolidGround Issue #30, PH3-3; 2026-09-27 live-evidence fix; see `docs/architecture/revit-property-line-and-shared-coordinates.md`) | Doc Preflight | Cancelled | shared dialog; "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared coordinates set (a non-zero shared project position or angle, a moved survey point, or more than one project location). SolidGround will not overwrite existing shared coordinates. Set sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates." |
 | 10 | Network/OpenTopography failure, grid/transform reference mismatch, `GridClipException`, `TerrainProvenanceException`, or a translated vertical-reference `FormatException` | Acquisition | Cancelled | "SolidGround could not acquire terrain data." + `ex.Message` (already the translated sentence for the vertical-reference case) |
 | 11 | Fetch-mode timeout (`OperationCanceledException`) | Acquisition | Cancelled | "The request did not complete within \<N\> seconds." + a suggestion to raise `networkTimeoutSeconds` |
 | 12 | Local file unreadable (content read, not existence — an `IOException`) | Acquisition | Cancelled | "Could not read a configured file." + `ex.Message` |
@@ -1759,7 +1764,7 @@ existence, not compiler-verified independently of the real build (which itself d
 | `ToposolidType.GetContourSetting()`, `.SetContourSettting()` (triple-t, confirmed real spelling) | Verified | [.GetContourSetting](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/916e164a-0d63-6d1d-790b-08303219d9b9.htm), [.SetContourSettting](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/07e0d502-9a75-7a41-468e-a3de3a241259.htm) — the page title itself reads "SetContourSettting Method" |
 | `FilteredElementCollector(Document).OfClass(Type)`, `.ToElements()` (no generic `OfClass<T>()`) | Verified | [.OfClass](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/b0a5f22c-6951-c3af-cd29-1f28f574035d.htm), [.ToElements](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/732b4a0d-62d8-b86d-120b-8ea3d9713b34.htm) — the doc's own worked example uses `typeof(Level)` verbatim |
 | `BasePoint.GetProjectBasePoint(Document)`, `.GetSurveyPoint(Document)` (static), `.Position`, `.SharedPosition` | Verified | [BasePoint Class](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/154074ae-d653-aaff-b84b-6336a1cbafaa.htm) — `SharedPosition` is itself active-`ProjectLocation`-relative, reinforcing why `OrphanCheck` also separately captures `ActiveProjectLocation.Name` |
-| `BasePoint.IsShared`, `.Clipped` (read only; always `false` for the project base point) | Verified | [BasePoint Class](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/154074ae-d653-aaff-b84b-6336a1cbafaa.htm) |
+| `BasePoint.IsShared` (read only; always `false` for the project base point); `.Clipped` (get/set) was used through 2026-09-26 — the 2026-09-27 live-evidence fix removed every read and write of it from this design; see `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Why `Write` no longer sets `Clipped`" section | Verified | [BasePoint Class](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/154074ae-d653-aaff-b84b-6336a1cbafaa.htm) |
 | `ProjectLocation : Instance`; `.GetSiteLocation()`, `.GetProjectPosition(XYZ)` | Verified — `GetTotalTransform`/`GetTransform` confirmed **inherited from `Instance`**, not declared on `ProjectLocation` | [ProjectLocation Class](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/1249d5fa-74f3-cf64-0a63-7ab370b67a5c.htm), [.GetSiteLocation](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/b15628ab-b246-233d-6587-9205d2ad04a3.htm) |
 | `ProjectLocation.Name` (inherited from `Element.Name`, not declared on `ProjectLocation` itself) | Verified only via a targeted re-dump adding `ProjectLocation` to the reflection tool's inherited-member allow-list | [Element.Name Property](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/e372092e-ff47-71c2-1272-50ab08e5a41d.htm) — the page `ProjectLocation`'s own class page links to, annotated "(Inherited from Element)" |
 | `SiteLocation.PlaceName` (used by `OrphanCheck`) | Verified | [SiteLocation.PlaceName Property](https://help.autodesk.com/cloudhelp/2027/ENU/Revit-API-MainReference/files/html/9a34156b-1fee-402a-01d2-8489132245c2.htm) — "The place name of the site." |

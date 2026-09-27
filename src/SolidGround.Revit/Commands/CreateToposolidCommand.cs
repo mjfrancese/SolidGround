@@ -381,16 +381,19 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // Error catalogue row 9b (SolidGround Issue #30, PH3-3): a Preflight-only, pre-transaction,
         // document-state-dependent refusal, alongside row 9a's own identical precedent. See
         // docs/architecture/revit-property-line-and-shared-coordinates.md's "Preflight refusal" section.
+        // 2026-09-27 live-evidence fix: LooksAlreadyCoordinated no longer reads the survey point's clipped
+        // state at all (see that method's own doc comment and "Shared-coordinates detection" in the note
+        // above); it reuses vertexToleranceInternal, already read just above, as its length tolerance instead
+        // of reading Application.VertexTolerance a second time.
         if (settings.SharedCoordinates.WriteIfAbsent)
         {
-            bool looksAlreadyCoordinated = SharedCoordinatesDetector.LooksAlreadyCoordinated(document);
-            AddInLog.Info($"SharedCoordinatesDetector.LooksAlreadyCoordinated={looksAlreadyCoordinated}.");
+            bool looksAlreadyCoordinated = SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal);
             if (looksAlreadyCoordinated)
             {
                 problems.Add(
                     "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared " +
-                    "coordinates set (its survey point is not at the internal origin, is clipped, or the model already " +
-                    "has more than one ProjectLocation). SolidGround will not overwrite existing shared coordinates. Set " +
+                    "coordinates set (a non-zero shared project position or angle, a moved survey point, or more than " +
+                    "one project location). SolidGround will not overwrite existing shared coordinates. Set " +
                     "sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates.");
             }
         }
