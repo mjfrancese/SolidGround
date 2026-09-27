@@ -63,6 +63,12 @@ public static class PlacementRecordRenderer
             writer.WritePropertyName("extensibleStorage");
             WriteExtensibleStorage(writer, record.ExtensibleStorage);
 
+            writer.WritePropertyName("propertyLine");
+            WritePropertyLine(writer, record.PropertyLine);
+
+            writer.WritePropertyName("sharedCoordinatesWrite");
+            WriteSharedCoordinatesWrite(writer, record.SharedCoordinatesWrite);
+
             writer.WriteEndObject();
         }
 
@@ -169,6 +175,44 @@ public static class PlacementRecordRenderer
         writer.WriteStartObject();
         writer.WriteString("schemaGuid", extensibleStorage.SchemaGuid);
         writer.WriteNumber("schemaVersion", extensibleStorage.SchemaVersion);
+        writer.WriteEndObject();
+    }
+
+    /// <summary>
+    /// SolidGround Issue #30 (PH3-3): <c>created</c> is always present, matching
+    /// <see cref="WriteSharedCoordinatesWrite"/>'s own <c>attempted</c>-first idiom exactly, so a reader
+    /// checking "was this created this run" always has one boolean field to check on both nested objects.
+    /// </summary>
+    private static void WritePropertyLine(Utf8JsonWriter writer, PlacementPropertyLineRecord propertyLine)
+    {
+        writer.WriteStartObject();
+        writer.WriteBoolean("created", propertyLine.Created);
+
+        if (propertyLine.ElementId is { } elementId) { writer.WriteNumber("elementId", elementId); } else { writer.WriteNull("elementId"); }
+        if (propertyLine.AreaInternal is { } areaInternal) { writer.WriteNumber("areaInternal", areaInternal); } else { writer.WriteNull("areaInternal"); }
+
+        writer.WriteEndObject();
+    }
+
+    /// <summary>
+    /// SolidGround Issue #30 (PH3-3). <c>eastWest</c>/<c>northSouth</c>/<c>elevation</c> are the terrain's own
+    /// local-frame origin in its own native unit, NOT always meters (see
+    /// <see cref="PlacementSharedCoordinatesWriteRecord"/>'s own doc comment); <c>angleInternal</c> is the one
+    /// exception, Revit-internal radians, never converted.
+    /// </summary>
+    private static void WriteSharedCoordinatesWrite(Utf8JsonWriter writer, PlacementSharedCoordinatesWriteRecord sharedCoordinatesWrite)
+    {
+        writer.WriteStartObject();
+        writer.WriteBoolean("attempted", sharedCoordinatesWrite.Attempted);
+
+        if (sharedCoordinatesWrite.EastWest is { } eastWest) { writer.WriteNumber("eastWest", eastWest); } else { writer.WriteNull("eastWest"); }
+        if (sharedCoordinatesWrite.NorthSouth is { } northSouth) { writer.WriteNumber("northSouth", northSouth); } else { writer.WriteNull("northSouth"); }
+        if (sharedCoordinatesWrite.Elevation is { } elevation) { writer.WriteNumber("elevation", elevation); } else { writer.WriteNull("elevation"); }
+        if (sharedCoordinatesWrite.AngleInternal is { } angleInternal) { writer.WriteNumber("angleInternal", angleInternal); } else { writer.WriteNull("angleInternal"); }
+        if (sharedCoordinatesWrite.HorizontalUnit is { } horizontalUnit) { writer.WriteString("horizontalUnit", horizontalUnit); } else { writer.WriteNull("horizontalUnit"); }
+        if (sharedCoordinatesWrite.VerticalUnit is { } verticalUnit) { writer.WriteString("verticalUnit", verticalUnit); } else { writer.WriteNull("verticalUnit"); }
+        if (sharedCoordinatesWrite.Verified is { } verified) { writer.WriteBoolean("verified", verified); } else { writer.WriteNull("verified"); }
+
         writer.WriteEndObject();
     }
 }

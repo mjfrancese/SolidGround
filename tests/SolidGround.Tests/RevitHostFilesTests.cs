@@ -563,6 +563,223 @@ public sealed class RevitHostFilesTests
     }
 
     // ------------------------------------------------------------------------------------------------
+    // (k) SolidGround Issue #30 (PH3-3)
+    // ------------------------------------------------------------------------------------------------
+    //
+    // The same kind of falsifiable, plain-text regression backstop as (h)/(i)/(j) above, for facts only a
+    // live Revit process could otherwise exercise end-to-end (docs/architecture/revit-property-line-and-shared-coordinates.md's
+    // "Geometry cleanup contract" > "Correction to an earlier prep note").
+
+    [Fact]
+    public void CreateToposolidCommandCleansTheBoundaryBeforeValidatingIt()
+    {
+        string content = ReadCreateToposolidCommandSource();
+
+        // The trailing "(" pins each substring to its one real call site, not a prose mention of the same
+        // method name in a doc comment elsewhere in this file.
+        int cleanIndex = RequireIndex(content, "LocalBoundaryCleaner.Clean(");
+        int validateIndex = RequireIndex(content, "LocalBoundaryValidator.Validate(");
+
+        Assert.True(cleanIndex < validateIndex, "Expected LocalBoundaryCleaner.Clean( to appear before LocalBoundaryValidator.Validate(.");
+    }
+
+    [Fact]
+    public void CreateToposolidCommandCreatesThePropertyLineInsideTheSameTransactionAsTheToposolid()
+    {
+        string content = ReadCreateToposolidCommandSource();
+
+        // "transaction.Start()" has exactly one occurrence in the file, inside RunTransaction (Stage 5) --
+        // review fix: without this lower bound, a regression that hoisted either creation call back into Stage 4
+        // (geometry construction, pre-transaction; textually before RunTransaction in this same file) would
+        // still satisfy the two "< commitIndex" checks below, since the one real transaction.Commit(); always
+        // sits later in the file regardless of where in Stage 4 the call moved to. Both bounds together pin
+        // AC1's "in one transaction" guarantee, not just "somewhere before commit".
+        int startIndex = RequireIndex(content, "transaction.Start()");
+        int toposolidCreateIndex = RequireIndex(content, "ToposolidCreationService.Create(");
+        int propertyLineCreateIndex = RequireIndex(content, "PropertyLineCreationService.Create(");
+        // The trailing ";" excludes this file's own doc comment, which mentions "transaction.Commit()" (no
+        // trailing semicolon there) well before the real call.
+        int commitIndex = RequireIndex(content, "transaction.Commit();");
+
+        Assert.True(toposolidCreateIndex > startIndex, "Expected ToposolidCreationService.Create( to appear after transaction.Start().");
+        Assert.True(propertyLineCreateIndex > startIndex, "Expected PropertyLineCreationService.Create( to appear after transaction.Start().");
+        Assert.True(toposolidCreateIndex < commitIndex, "Expected ToposolidCreationService.Create( to appear before the real transaction.Commit();.");
+        Assert.True(propertyLineCreateIndex < commitIndex, "Expected PropertyLineCreationService.Create( to appear before the real transaction.Commit();.");
+    }
+
+    [Fact]
+    public void CreateToposolidCommandGatesPropertyLineCreationToParcelAreasOfInterest()
+    {
+        // The naive version of this check -- asserting only that the literal AreaOfInterestKind.Parcel appears
+        // somewhere between the Stage 4 and Stage 5 call sites -- is vacuous: that exact substring already
+        // occurs twice in this file, entirely inside RunDocumentPreflight's own pre-existing, unrelated
+        // parcel-geometry-file-reading logic, which sits, as plain text, in that same wide range regardless of
+        // anything this issue adds. This instead asserts the actual gate identifier (isParcelAoi, a name this
+        // issue introduces new -- no pre-existing occurrence exists to confuse the check) appears within a
+        // small, fixed character window immediately preceding each of the two real call sites. A never-wired
+        // implementation (PropertyLine created unconditionally, isParcelAoi never referenced near either call
+        // site) fails this test.
+        string source = ReadCreateToposolidCommandSource();
+
+        AssertGatedByIsParcelAoi(source, "BoundaryIsValidPropertyLine(");
+        AssertGatedByIsParcelAoi(source, "PropertyLineCreationService.Create(");
+    }
+
+    private static void AssertGatedByIsParcelAoi(string source, string callSiteText)
+    {
+        int callIndex = RequireIndex(source, callSiteText);
+
+        const int MaxPrecedingDistance = 300; // a tight window covering only the enclosing if/conditional
+                                               // expression, not the whole file -- unlike the vacuous check above.
+        string window = source[Math.Max(0, callIndex - MaxPrecedingDistance)..callIndex];
+        Assert.Contains("isParcelAoi", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated()
+    {
+        string commandContent = ReadCreateToposolidCommandSource();
+
+        // Strengthened beyond plain substring presence (review fix): also asserts the detector call and its
+        // refusal message sit inside RunDocumentPreflight, before RunTransaction, so a future edit that moved
+        // this identical check (same detector call, same message text) into the transaction stage would fail
+        // this test -- matching AC3's "Preflight refuses ... before any transaction" requirement.
+        int detectorIndex = RequireIndex(commandContent, "SharedCoordinatesDetector.LooksAlreadyCoordinated");
+        int refusalMessageIndex = RequireIndex(commandContent, "SolidGround will not overwrite existing shared coordinates");
+        int runTransactionIndex = RequireIndex(commandContent, "private static Result RunTransaction(");
+
+        Assert.True(detectorIndex < runTransactionIndex, "Expected the shared-coordinates detector check to run inside RunDocumentPreflight, before RunTransaction.");
+        Assert.True(refusalMessageIndex < runTransactionIndex, "Expected the shared-coordinates refusal message to be added inside RunDocumentPreflight, before RunTransaction.");
+
+        // Review fix: the two checks above only pin the detector call's *position* relative to RunTransaction,
+        // not whether it is actually conditioned on the opt-in setting at all. A guard that always ran the
+        // detector (or that inverted/widened WriteIfAbsent so the detector runs regardless of the setting) would
+        // leave the detector call and refusal message exactly where they are today, so both checks above would
+        // still pass -- while RunTransaction's own write gate never re-checks "already coordinated" (it only
+        // re-checks WriteIfAbsent; see CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting),
+        // so an opted-in run against an already-coordinated document would then silently overwrite real
+        // shared coordinates with no refusal anywhere. This anchors the exact, non-negated
+        // "if (settings.SharedCoordinates.WriteIfAbsent)" gate within a small, fixed window immediately
+        // preceding the detector call, so deleting, inverting, or widening that gate now fails this test too.
+        const int MaxPrecedingDistance = 200; // the real gate sits well under 200 characters before this call
+                                               // site; the unrelated Stage-5 occurrence of the same settings
+                                               // property sits tens of thousands of characters away.
+        string detectorWindow = commandContent[Math.Max(0, detectorIndex - MaxPrecedingDistance)..detectorIndex];
+        Assert.Contains("if (settings.SharedCoordinates.WriteIfAbsent)", detectorWindow, StringComparison.Ordinal);
+
+        string settingsIoPath = Path.Combine(RevitProjectDirectory, "Settings", "RevitSettingsIo.cs");
+        Assert.True(File.Exists(settingsIoPath), $"Missing file: {settingsIoPath}");
+        string settingsIoContent = File.ReadAllText(settingsIoPath);
+
+        Assert.Contains(
+            "\"sharedCoordinates\": { \"writeIfAbsent\": false }", settingsIoContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting()
+    {
+        // Mirrors AssertGatedByIsParcelAoi's technique above (review fix): the sibling isParcelAoi/PropertyLine
+        // gate and the unit-conversion call site immediately below both already have this same defense-in-depth
+        // backstop; the WriteIfAbsent gate guarding SharedCoordinatesWriter.Write itself -- the one call that
+        // would perform an unwanted ProjectLocation/BasePoint mutation (AC3) if this guard were ever removed,
+        // inverted, or widened -- did not.
+        string source = ReadCreateToposolidCommandSource();
+
+        int writeIndex = RequireIndex(source, "SharedCoordinatesWriter.Write(");
+        const int MaxPrecedingDistance = 800; // the real gate sits well under 800 characters before this call
+                                               // site; the unrelated Preflight occurrence of the same settings
+                                               // property sits tens of thousands of characters away, well
+                                               // outside this window.
+        string window = source[Math.Max(0, writeIndex - MaxPrecedingDistance)..writeIndex];
+        Assert.Contains("SharedCoordinates.WriteIfAbsent", window, StringComparison.Ordinal);
+
+        // Review fix: a bare property-name substring check above cannot tell a correct, non-negated gate from
+        // one that was inverted (`if (!context.Settings.SharedCoordinates.WriteIfAbsent && ...)`, writing shared
+        // coordinates exactly when the opt-in is OFF -- the literal opposite of AC3) or widened (the `&&`
+        // immediately after WriteIfAbsent loosened to `||`, so the write can fire even when the opt-in is OFF).
+        // Both mutations leave the bare substring above untouched, since neither the "!" nor a changed
+        // connective removes it. This anchors the exact, non-negated "if (...WriteIfAbsent && " prefix as it
+        // reads today: an inversion, a widened connective right after WriteIfAbsent, or outright deletion all
+        // break this literal, while the correct implementation keeps it intact.
+        Assert.Contains(
+            "if (context.Settings.SharedCoordinates.WriteIfAbsent && ", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandCatchesSharedCoordinatesWriteExceptionAlongsideItsSiblings()
+    {
+        // Review fix: without "or SharedCoordinatesWriteException" in this filter, a real SetProjectPosition
+        // rejection falls through to the generic Stage-5 catch-all below and misattributes the failure to "the
+        // toposolid" -- the exact round-1-confirmed bug this branch fixes (see the comment immediately above
+        // this catch clause in CreateToposolidCommand.cs).
+        string source = ReadCreateToposolidCommandSource();
+
+        int filterIndex = RequireIndex(source, "ex is ToposolidCreationException or PropertyLineCreationException");
+        const int MaxFollowingDistance = 120; // tight window: only the rest of this same `when (...)` clause.
+        string window = source[filterIndex..Math.Min(source.Length, filterIndex + MaxFollowingDistance)];
+        Assert.Contains("or SharedCoordinatesWriteException)", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandLogsTheFullExceptionInItsSharedCatchBlock()
+    {
+        // Re-check fix: SharedCoordinatesWriter.Write and .VerifyWritten each throw SharedCoordinatesWriteException
+        // with their own distinct message text ("...write:" vs "...write during verification:"), but the dialog
+        // body this same catch block shows deliberately carries only the inner exception's message (its own next
+        // comment's "non-redundant detail" rationale) -- so without a call that logs ex itself, that distinguishing
+        // wording would reach neither the user nor the trace log, and a log reader could never tell the two Revit
+        // rejections apart. This anchors the AddInLog.Error(..., ex) call added between the catch header and the
+        // ShowTransactionOutcome return so a future edit cannot silently drop it again.
+        string source = ReadCreateToposolidCommandSource();
+
+        int filterIndex = RequireIndex(
+            source, "ex is ToposolidCreationException or PropertyLineCreationException or SharedCoordinatesWriteException");
+        int returnIndex = RequireIndex(source, "return ShowTransactionOutcome(status, headline,");
+        Assert.True(returnIndex > filterIndex, "Expected the ShowTransactionOutcome return after the catch filter.");
+
+        string window = source[filterIndex..returnIndex];
+        Assert.Contains("AddInLog.Error(", window, StringComparison.Ordinal);
+        Assert.Contains(", ex);", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedCoordinatesWriteUsesTheOriginsOwnNativeUnitNotOutputUnit()
+    {
+        // Backstops docs/architecture/revit-property-line-and-shared-coordinates.md's "Unit convention for
+        // the shared-coordinates value" section's own named "single most likely implementer mistake" -- using
+        // context.Settings.Request.OutputUnit/the Stage 4 revitUnit local instead of
+        // SharedCoordinateOrigin.Resolve(...)'s HorizontalUnit/VerticalUnit at the shared-coordinates write's
+        // own call site, silently corrupting the anchor with no exception anywhere. The real conversion runs
+        // through RevitUnitConversion.ToInternal, which lives in SolidGround.Revit and opens with
+        // "using Autodesk.Revit.DB;" -- SolidGround.Tests can never reference it directly
+        // (TestAssemblyReferencesNeitherTheRevitApiNorTheRevitHostAssembly forbids a RevitAPI/SolidGround.Revit
+        // reference), so only this plain-text scan, not a Core-level unit test, can catch a regression here.
+        string source = ReadCreateToposolidCommandSource();
+
+        int resolveIndex = RequireIndex(source, "SharedCoordinateOrigin.Resolve(");
+        int writeIndex = RequireIndex(source, "SharedCoordinatesWriter.Write(");
+        Assert.True(resolveIndex < writeIndex, "Expected SharedCoordinateOrigin.Resolve( to appear before SharedCoordinatesWriter.Write(.");
+
+        string between = source[resolveIndex..writeIndex];
+        Assert.DoesNotContain("context.Settings.Request.OutputUnit", between, StringComparison.Ordinal);
+        Assert.DoesNotContain("revitUnit", between, StringComparison.Ordinal);
+    }
+
+    private static string ReadCreateToposolidCommandSource()
+    {
+        string path = Path.Combine(RevitProjectDirectory, "Commands", "CreateToposolidCommand.cs");
+        Assert.True(File.Exists(path), $"Missing file: {path}");
+        return File.ReadAllText(path);
+    }
+
+    private static int RequireIndex(string source, string needle)
+    {
+        int index = source.IndexOf(needle, StringComparison.Ordinal);
+        Assert.True(index >= 0, $"Expected to find '{needle}'.");
+        return index;
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------------
 

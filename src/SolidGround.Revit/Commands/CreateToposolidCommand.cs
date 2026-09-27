@@ -112,10 +112,38 @@ public sealed class CreateToposolidCommand : IExternalCommand
         }
 
         // ==== Stage 3: Geometry Preflight (Core-only; still no Revit API call) =============================
+        // ForgeTypeId revitUnit moves here, to the top of Stage 3 (SolidGround Issue #30, PH3-3: see
+        // docs/architecture/revit-property-line-and-shared-coordinates.md's "Geometry cleanup contract" >
+        // "Tolerance sourcing"): it depends only on context.Settings.Request.OutputUnit, not on any acquisition
+        // result, and LocalBoundaryCleaner.Clean's own dedupe pass below needs the OutputUnit-converted
+        // tolerances before Stage 4 is ever reached.
+        ForgeTypeId revitUnit = RevitUnitConversion.ToForgeTypeId(context.Settings.Request.OutputUnit);
+        AddInLog.Info(
+            $"Output unit ForgeTypeId '{revitUnit.TypeId}' ({context.Settings.Request.OutputUnit}), " +
+            $"{LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit).ToString("R", CultureInfo.InvariantCulture)} m/unit.");
+
         LocalCoordinateFrame localFrame = acquisition.Outcome.Payload.Provenance.LocalFrame;
-        LocalBoundary boundary = acquisition.Outcome.ClipResult is { } clipResult
+        LocalBoundary rawBoundary = acquisition.Outcome.ClipResult is { } clipResult
             ? LocalBoundaryFactory.FromPolygonalRegion(clipResult.EffectiveRegion, localFrame)
             : LocalBoundaryFactory.FromGridEnvelope(acquisition.Grid, localFrame);
+
+        // Geometry cleanup (SolidGround Issue #30, PH3-3): dedupe/collinear-collapse runs unconditionally, on
+        // every run regardless of AOI kind or the shared-coordinates opt-in, after LocalBoundaryFactory and
+        // before LocalBoundaryValidator.Validate. Both Revit-native tolerances were already read and logged at
+        // Stage 1 Preflight; converting them into the pipeline's own OutputUnit is what this stage's own
+        // revitUnit above exists for. See docs/architecture/revit-property-line-and-shared-coordinates.md's
+        // "Geometry cleanup contract" section for the full contract, including why collinearityTolerance
+        // deliberately reuses vertexTolerance's own value.
+        double vertexTolerance = UnitUtils.ConvertFromInternalUnits(context.VertexToleranceInternal, revitUnit);
+        const double ShortCurveToleranceMargin = 2.0; // conservative multiplier: unit-conversion/local-origin
+                                                       // floating-point noise cannot reintroduce an edge only
+                                                       // technically above Revit's own raw minimum.
+        double minimumEdgeLength = UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, revitUnit) * ShortCurveToleranceMargin;
+        double collinearityTolerance = vertexTolerance;
+        AddInLog.Info(
+            $"Geometry cleanup tolerances ({context.Settings.Request.OutputUnit}): vertexTolerance={vertexTolerance.ToString("R", CultureInfo.InvariantCulture)}, " +
+            $"collinearityTolerance={collinearityTolerance.ToString("R", CultureInfo.InvariantCulture)}, minimumEdgeLength={minimumEdgeLength.ToString("R", CultureInfo.InvariantCulture)}.");
+        LocalBoundary boundary = LocalBoundaryCleaner.Clean(rawBoundary, vertexTolerance, collinearityTolerance, minimumEdgeLength);
 
         // LocalBoundaryValidator.Validate's tolerance is compared directly against boundary/sample
         // coordinates, which are expressed in the pipeline's own OutputUnit (US survey foot by default), not
@@ -124,7 +152,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         double containmentTolerance = LengthConverter.Convert(
             LocalBoundaryValidator.DefaultContainmentToleranceMeters, CoreLengthUnit.Meter, context.Settings.Request.OutputUnit);
         LocalBoundaryValidationResult boundaryValidation = LocalBoundaryValidator.Validate(
-            boundary, acquisition.Outcome.Payload.Samples, context.Settings.Request.Simplification.PointBudget, containmentTolerance);
+            boundary, acquisition.Outcome.Payload.Samples, context.Settings.Request.Simplification.PointBudget, containmentTolerance, minimumEdgeLength);
         if (!boundaryValidation.IsValid)
         {
             ShowProblemList("SolidGround could not build a valid boundary.", "Nothing changed. Correct every problem below and run this command again.", boundaryValidation.Problems);
@@ -158,11 +186,6 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string exportPointsFileName = context.Settings.Request.Output.BaseName + TerrainExportBundleRenderer.PointsFileSuffix;
 
         // ==== Stage 4: Geometry construction (pre-transaction; Document untouched) =========================
-        ForgeTypeId revitUnit = RevitUnitConversion.ToForgeTypeId(context.Settings.Request.OutputUnit);
-        AddInLog.Info(
-            $"Output unit ForgeTypeId '{revitUnit.TypeId}' ({context.Settings.Request.OutputUnit}), " +
-            $"{LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit).ToString("R", CultureInfo.InvariantCulture)} m/unit.");
-
         IList<XYZ> points = BoundaryGeometryBuilder.BuildPoints(acquisition.Outcome.Payload.Samples, revitUnit);
         double constantZInternal = points.Min(point => point.Z);
         IList<CurveLoop> profiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit);
@@ -174,12 +197,30 @@ public sealed class CreateToposolidCommand : IExternalCommand
             return Result.Cancelled;
         }
 
+        // PropertyLine creation is gated to parcel areas of interest only (SolidGround Issue #30 owner decision
+        // 3, 2026-09-26): a bounding-box/radius run never builds propertyLineProfiles at all, so it can never
+        // itself reject that run's otherwise-valid Toposolid boundary. isParcelAoi is evaluated inline here and
+        // again at its Stage 5 call sites (RunTransaction), deliberately not cached as a new DocumentContext
+        // field -- see docs/architecture/revit-property-line-and-shared-coordinates.md's "AOI-kind gate: how the
+        // command knows, and what a non-parcel run does" section.
+        bool isParcelAoi = context.Settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel;
+        IList<CurveLoop>? propertyLineProfiles = null;
+        if (isParcelAoi) // a second, independent CurveLoop list -- never `profiles`, already consumed below.
+        {
+            propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit);
+            if (!PostCreationVerification.BoundaryIsValidPropertyLine(propertyLineProfiles, out string? propertyLineProblem))
+            {
+                ShowSingleCancelledProblem("SolidGround could not build a valid boundary.", propertyLineProblem!);
+                return Result.Cancelled;
+            }
+        }
+
         double toleranceInternal = RevitUnitConversion.ToInternal(LocalBoundaryValidator.DefaultContainmentToleranceMeters, CoreLengthUnit.Meter);
 
         // ==== Stage 5: Transaction (the only stage that mutates Document) ==================================
         return RunTransaction(
             context, acquisition.Outcome, profiles, points, expected, revitUnit, constantZInternal, toleranceInternal,
-            exportDocumentFileName, exportPointsFileName);
+            exportDocumentFileName, exportPointsFileName, propertyLineProfiles);
     }
 
     // -------------------------------------------------------------------------------------------------------
@@ -195,7 +236,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
         Level Level,
         ToposolidType ToposolidType,
         OrphanSnapshot OrphanBefore,
-        int? NativeToposolidMaxPointThreshold);
+        int? NativeToposolidMaxPointThreshold,
+        double ShortCurveToleranceInternal,
+        double VertexToleranceInternal);
 
     /// <summary>
     /// Read-only by construction: reads document state, the settings file, and Core-level defaults only,
@@ -333,13 +376,53 @@ public sealed class CreateToposolidCommand : IExternalCommand
         int? nativeToposolidMaxPointThreshold = CheckRevitIniPointThreshold(
             commandData, settings.Request.Simplification.PointBudget, problems);
 
+        (double shortCurveToleranceInternal, double vertexToleranceInternal) = LogAndReadGeometryTolerances(commandData);
+
+        // Error catalogue row 9b (SolidGround Issue #30, PH3-3): a Preflight-only, pre-transaction,
+        // document-state-dependent refusal, alongside row 9a's own identical precedent. See
+        // docs/architecture/revit-property-line-and-shared-coordinates.md's "Preflight refusal" section.
+        if (settings.SharedCoordinates.WriteIfAbsent)
+        {
+            bool looksAlreadyCoordinated = SharedCoordinatesDetector.LooksAlreadyCoordinated(document);
+            AddInLog.Info($"SharedCoordinatesDetector.LooksAlreadyCoordinated={looksAlreadyCoordinated}.");
+            if (looksAlreadyCoordinated)
+            {
+                problems.Add(
+                    "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared " +
+                    "coordinates set (its survey point is not at the internal origin, is clipped, or the model already " +
+                    "has more than one ProjectLocation). SolidGround will not overwrite existing shared coordinates. Set " +
+                    "sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates.");
+            }
+        }
+
         if (problems.Count > 0 || aoi is null || level is null || toposolidType is null)
         {
             return null;
         }
 
         OrphanSnapshot orphanBefore = OrphanCheck.Capture(document);
-        return new DocumentContext(document, settings, settingsPath, wgs84Reference, aoi, level, toposolidType, orphanBefore, nativeToposolidMaxPointThreshold);
+        return new DocumentContext(
+            document, settings, settingsPath, wgs84Reference, aoi, level, toposolidType, orphanBefore,
+            nativeToposolidMaxPointThreshold, shortCurveToleranceInternal, vertexToleranceInternal);
+    }
+
+    /// <summary>
+    /// Reads and logs <c>Application.ShortCurveTolerance</c>/<c>.VertexTolerance</c> once, at Preflight
+    /// (SolidGround Issue #30, PH3-3): Revit-internal decimal feet, unconverted -- <c>SolidGround.Core</c> never
+    /// references either <see cref="Autodesk.Revit.ApplicationServices.Application"/> member directly. Reached
+    /// from command-time code the same way <c>CheckRevitIniPointThreshold</c> above already reaches
+    /// <c>CurrentUsersDataFolderPath</c>: <c>commandData.Application.Application.&lt;member&gt;</c>. See
+    /// docs/architecture/revit-property-line-and-shared-coordinates.md's "Geometry cleanup contract" section,
+    /// "Tolerance sourcing" subsection.
+    /// </summary>
+    private static (double ShortCurveToleranceInternal, double VertexToleranceInternal) LogAndReadGeometryTolerances(ExternalCommandData commandData)
+    {
+        double shortCurveToleranceInternal = commandData.Application.Application.ShortCurveTolerance;
+        double vertexToleranceInternal = commandData.Application.Application.VertexTolerance;
+        AddInLog.Info(
+            $"Application.ShortCurveTolerance={shortCurveToleranceInternal.ToString("R", CultureInfo.InvariantCulture)}, " +
+            $"Application.VertexTolerance={vertexToleranceInternal.ToString("R", CultureInfo.InvariantCulture)} (Revit-internal decimal feet).");
+        return (shortCurveToleranceInternal, vertexToleranceInternal);
     }
 
     /// <summary>
@@ -616,10 +699,16 @@ public sealed class CreateToposolidCommand : IExternalCommand
         double constantZInternal,
         double toleranceInternal,
         string exportDocumentFileName,
-        string exportPointsFileName)
+        string exportPointsFileName,
+        IList<CurveLoop>? propertyLineProfiles)
     {
         Document document = context.Document;
         ToposolidCreationFailureLog failureLog = new();
+
+        // Re-evaluated from context.Settings (the same expression Stage 4 already used), rather than threaded
+        // as a new parameter -- see docs/architecture/revit-property-line-and-shared-coordinates.md's
+        // "AOI-kind gate: how the command knows, and what a non-parcel run does" section.
+        bool isParcelAoi = context.Settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel;
 
         using Transaction transaction = new(document, "SolidGround: Create Toposolid");
         transaction.SetFailureHandlingOptions(
@@ -646,25 +735,94 @@ public sealed class CreateToposolidCommand : IExternalCommand
             toposolid = ToposolidCreationService.Create(
                 document, profiles, points, context.ToposolidType.Id, context.Level.Id, ToposolidCreationService.DefaultStrategy);
 
+            // PropertyLine creation is gated to parcel areas of interest only (owner decision 3, 2026-09-26):
+            // propertyLineProfiles is non-null here exactly when isParcelAoi (Stage 4 only ever constructs it
+            // under the identical condition) -- a second, independently-built CurveLoop list, never `profiles`
+            // above, which ToposolidCreationService.Create already consumed. A non-parcel run attempts no
+            // Revit API call here at all, so PropertyLineCreationException can structurally never be thrown for
+            // it. See docs/architecture/revit-property-line-and-shared-coordinates.md's "PropertyLine creation
+            // (Revit)" section.
+            PropertyLine? propertyLine = isParcelAoi
+                ? PropertyLineCreationService.Create(document, propertyLineProfiles!)
+                : null;
+
             document.Regenerate();
 
             VerificationResult verification = PostCreationVerification.Verify(
                 toposolid, expected, points, ToposolidCreationService.DefaultStrategy, toleranceInternal,
                 context.NativeToposolidMaxPointThreshold);
 
-            if (!verification.Passed || failureLog.HasBlockingFailure)
+            // Mirrors sharedCoordinatesVerification's own off-path sentinel below -- both are "this optional
+            // element/write was never attempted this run" idioms, not independently invented cases.
+            VerificationResult propertyLineVerification = propertyLine is not null
+                ? PostCreationVerification.VerifyPropertyLine(propertyLine)
+                : new VerificationResult(true, "No property line was created for this bounding-box/radius area of interest.");
+
+            // Shared-coordinates write (SolidGround Issue #30, PH3-3): default off (context.Settings.SharedCoordinates
+            // .WriteIfAbsent); Preflight's row-9b refusal already means reaching this line implies the document
+            // looked uncoordinated at Preflight time. resolvedOrigin.HorizontalUnit/.VerticalUnit -- Origin's
+            // own native unit -- convert this write, NEVER context.Settings.Request.OutputUnit/revitUnit (see
+            // docs/architecture/revit-property-line-and-shared-coordinates.md's "Unit convention for the
+            // shared-coordinates value" section: mixing the two would silently corrupt the anchor by the
+            // US-survey-foot/meter ratio with no exception anywhere).
+            ProjectPosition? sharedCoordinatesWritten = null;
+            VerificationResult sharedCoordinatesVerification = new(true, "Shared coordinates were not written this run.");
+
+            // Also requires the toposolid/property-line verification and failureLog to already be known-good
+            // (review fix): otherwise a SharedCoordinatesWriteException thrown from this block would be caught
+            // by the Stage-5 catch clause below, which picks its headline purely from the exception's runtime
+            // type and never looks at verification/propertyLineVerification -- masking an already-known, higher-
+            // priority failure behind the lower-priority shared-coordinates message, contrary to the fixed
+            // toposolid/property-line/shared-coordinates/blocking-failure order this method's own ordered check
+            // below (and docs/architecture/revit-property-line-and-shared-coordinates.md's "Transaction flow"
+            // section) establishes. Skipping the write here leaves sharedCoordinatesVerification at its passing
+            // sentinel above, so that ordered check still reports the true, first cause. See
+            // docs/architecture/revit-property-line-and-shared-coordinates.md's "The write itself and its
+            // source value" section.
+            if (context.Settings.SharedCoordinates.WriteIfAbsent && verification.Passed && propertyLineVerification.Passed && !failureLog.HasBlockingFailure)
             {
-                // Error catalogue rows 18 and 19: a failed geometry verification and a blocking Revit
-                // failure message get distinct headlines; verification takes priority when both occur.
-                (string headline, string detail) = !verification.Passed
-                    ? ("The created toposolid's geometry did not match the source data; the change was undone.", verification.Detail)
-                    : ("Revit reported a problem while creating the toposolid.", string.Join(" | ", failureLog.Messages));
+                SharedCoordinateOrigin.Resolved resolvedOrigin = SharedCoordinateOrigin.Resolve(outcome.Payload.Provenance.LocalFrame);
+                double eastWestInternal = RevitUnitConversion.ToInternal(resolvedOrigin.Origin.X, resolvedOrigin.HorizontalUnit);
+                double northSouthInternal = RevitUnitConversion.ToInternal(resolvedOrigin.Origin.Y, resolvedOrigin.HorizontalUnit);
+                double elevationInternal = RevitUnitConversion.ToInternal(resolvedOrigin.Origin.Elevation, resolvedOrigin.VerticalUnit);
+
+                ProjectPosition requested = SharedCoordinatesWriter.Write(document, eastWestInternal, northSouthInternal, elevationInternal);
+                sharedCoordinatesWritten = requested;
+
+                // NEW Regenerate() call (distinct from the one above): whether a same-transaction read
+                // immediately reflects SetProjectPosition's own transform update is unconfirmed by any
+                // documentation source, so this call removes the dependency on that assumption rather than
+                // depending on it. See docs/architecture/revit-property-line-and-shared-coordinates.md's "The
+                // write itself and its source value" section's "Why a second document.Regenerate() call is
+                // required before verification." passage.
+                document.Regenerate();
+
+                bool sharedCoordinatesWriteVerified = SharedCoordinatesWriter.VerifyWritten(
+                    document, requested, toleranceInternal, out string? sharedCoordinatesProblem);
+                sharedCoordinatesVerification = new VerificationResult(
+                    sharedCoordinatesWriteVerified, sharedCoordinatesProblem ?? "Shared-coordinates write verified.");
+            }
+
+            if (!verification.Passed || !propertyLineVerification.Passed || !sharedCoordinatesVerification.Passed || failureLog.HasBlockingFailure)
+            {
+                // Widened from the shipped 2-way ternary to an explicit, ordered 4-way choice (SolidGround
+                // Issue #30): toposolid verification, then property-line verification, then shared-coordinates
+                // verification, then the blocking-Revit-failure fallback, in that fixed order. No partial
+                // element either way: the whole transaction (Toposolid + PropertyLine, when attempted, + any
+                // shared-coordinates write) rolls back together. For a non-parcel run, propertyLineVerification
+                // .Passed is always true (the sentinel above), so it can never itself select the second branch.
+                (string headline, string detail) =
+                    !verification.Passed ? ("The created toposolid's geometry did not match the source data; the change was undone.", verification.Detail)
+                    : !propertyLineVerification.Passed ? ("The created property line did not verify; the change was undone.", propertyLineVerification.Detail)
+                    : !sharedCoordinatesVerification.Passed ? ("The shared-coordinates write did not verify; the change was undone.", sharedCoordinatesVerification.Detail)
+                    : ("Revit reported a problem while finishing this run.", string.Join(" | ", failureLog.Messages));
                 TransactionStatus rolledBack = transaction.RollBack();
                 return ShowTransactionOutcome(rolledBack, headline, detail);
             }
 
             draft = BuildPlacementDraft(
-                context, outcome, revitUnit, constantZInternal, toposolid, exportDocumentFileName, exportPointsFileName);
+                context, outcome, revitUnit, constantZInternal, toposolid, propertyLine, sharedCoordinatesWritten,
+                exportDocumentFileName, exportPointsFileName);
 
             ToposolidCreatedHook? postCreationHook = ProvenanceEntityWriter.Attach; // Issue #16.
             postCreationHook?.Invoke(document, toposolid, outcome.Payload, draft);
@@ -680,16 +838,20 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 // after the explicit pre-Commit Regenerate() call. When that has happened, failureLog already
                 // holds the specific, accumulated Revit failure text (SolidGround Issue #15 review fix); show
                 // it alongside the generic headline instead of silently discarding it.
+                //
+                // Headline broadened the same way row 19's was (SolidGround Issue #30, PH3-3, review fix):
+                // by this point a parcel-AOI run's PropertyLine, and an opted-in run's shared-coordinates
+                // write, may also be mid-flight and equally unconfirmed, not only the toposolid.
                 if (failureLog.HasBlockingFailure)
                 {
                     ShowProblemList(
-                        "SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed.",
+                        "SolidGround could not confirm whether this run's changes were created. Check the document and Undo if needed.",
                         "Revit reported the following while finishing the transaction:",
                         failureLog.Messages);
                 }
                 else
                 {
-                    ShowSingleFailed("SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed.");
+                    ShowSingleFailed("SolidGround could not confirm whether this run's changes were created. Check the document and Undo if needed.");
                 }
 
                 return Result.Failed;
@@ -698,18 +860,39 @@ public sealed class CreateToposolidCommand : IExternalCommand
             // Falls through to ReportSuccess below: commitStatus == Committed is the only way this try
             // block completes without an explicit return or a caught exception.
         }
-        catch (ToposolidCreationException ex)
+        catch (Exception ex) when (ex is ToposolidCreationException or PropertyLineCreationException or SharedCoordinatesWriteException)
         {
             TransactionStatus status = transaction.HasEnded() ? transaction.GetStatus() : transaction.RollBack();
+            // SolidGround Issue #30 review fix: log the full exception here, not only the dialog's own
+            // non-redundant detail below. ex.Message is the only place SharedCoordinatesWriter.Write's and
+            // .VerifyWritten's own distinct wording ("...write:" vs "...write during verification:") survives
+            // -- the dialog body intentionally shows just the inner exception's message (see the next comment)
+            // -- so without this line a log reader could never tell which of the two calls actually failed.
+            AddInLog.Error("SolidGround's transaction was rolled back after Revit rejected a creation or write.", ex);
             // ex.Message already restates "Revit rejected..."; the inner exception's own message is the
-            // non-redundant detail for the dialog body.
-            return ShowTransactionOutcome(status, "Revit rejected the generated toposolid boundary or points.", ex.InnerException?.Message ?? ex.Message);
+            // non-redundant detail for the dialog body. Branches on the exception's runtime type: a non-parcel
+            // run never calls PropertyLineCreationService.Create at all, so that branch is exercised only by a
+            // parcel-AOI run (SolidGround Issue #30), and the shared-coordinates branch is exercised only when
+            // sharedCoordinates.writeIfAbsent is enabled (SolidGround Issue #30 review fix: without this branch,
+            // a real SetProjectPosition rejection fell through to the generic Stage-5 catch-all below and
+            // blamed "the toposolid," even though it -- and any PropertyLine -- had already been validly
+            // created and only the shared-coordinates write itself failed; error catalogue row 20b).
+            string headline = ex switch
+            {
+                PropertyLineCreationException => "Revit rejected the generated property line boundary.",
+                SharedCoordinatesWriteException => "Revit rejected the shared-coordinates write.",
+                _ => "Revit rejected the generated toposolid boundary or points.",
+            };
+            return ShowTransactionOutcome(status, headline, ex.InnerException?.Message ?? ex.Message);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             AddInLog.Error("SolidGround hit a problem after the transaction started.", ex);
             TransactionStatus status = transaction.HasEnded() ? transaction.GetStatus() : transaction.RollBack();
-            return ShowTransactionOutcome(status, "SolidGround hit a problem while finishing the toposolid.", ex.Message);
+            // Headline broadened the same way row 19's was (SolidGround Issue #30, PH3-3, review fix): this
+            // catch-all can also be reached from PropertyLine creation, the shared-coordinates write, or the
+            // Issue #16 provenance hook, not only from finishing the toposolid itself.
+            return ShowTransactionOutcome(status, "SolidGround hit a problem while finishing this run.", ex.Message);
         }
 
         // Reached only when commitStatus == Committed. Deliberately outside the try/catch above: a failure
@@ -725,6 +908,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
         ForgeTypeId revitUnit,
         double constantZInternal,
         Toposolid toposolid,
+        PropertyLine? propertyLine,
+        ProjectPosition? sharedCoordinatesWritten,
         string exportDocumentFileName,
         string exportPointsFileName)
     {
@@ -770,6 +955,43 @@ public sealed class CreateToposolidCommand : IExternalCommand
         PlacementExtensibleStorageRecord extensibleStorage = new(
             ExtensibleStorageProvenanceSchema.SchemaGuidText, ExtensibleStorageProvenanceSchema.CurrentVersion);
 
+        // SolidGround Issue #30 (PH3-3). PropertyLine: created is always present; ElementId/AreaInternal are
+        // null exactly when created is false (every non-parcel-AOI run, and structurally the only reachable
+        // state for those AOI kinds).
+        PlacementPropertyLineRecord propertyLineRecord = propertyLine is not null
+            ? new PlacementPropertyLineRecord(true, propertyLine.Id.Value, propertyLine.Area)
+            : new PlacementPropertyLineRecord(false, null, null);
+
+        // sharedCoordinatesWrite.eastWest/northSouth/elevation are recorded in Origin's own native unit -- NOT
+        // always meters (process mode can select a non-metric horizontal/vertical unit; see
+        // docs/architecture/revit-property-line-and-shared-coordinates.md's "Unit convention for the
+        // shared-coordinates value" section) and NOT the raw Revit-internal double actually passed to
+        // ProjectPosition's constructor -- the identical values already recorded above in
+        // localOrigin.sourceX/sourceY/sourceElevation, chosen so a reader can compare the two side by side
+        // without first learning Revit's internal-foot convention; horizontalUnit/verticalUnit name that native
+        // unit explicitly so the value is never ambiguous. angleInternal is the one exception, recorded
+        // Revit-internal (radians): an angle has no length unit to convert into. Verified is always true here: a
+        // false sharedCoordinatesVerification already rolled back the whole transaction before
+        // BuildPlacementDraft was ever called, so no placement record reaches disk for that run.
+        PlacementSharedCoordinatesWriteRecord sharedCoordinatesWriteRecord;
+        if (sharedCoordinatesWritten is { } written)
+        {
+            SharedCoordinateOrigin.Resolved resolvedOrigin = SharedCoordinateOrigin.Resolve(provenance.LocalFrame);
+            sharedCoordinatesWriteRecord = new PlacementSharedCoordinatesWriteRecord(
+                Attempted: true,
+                EastWest: resolvedOrigin.Origin.X,
+                NorthSouth: resolvedOrigin.Origin.Y,
+                Elevation: resolvedOrigin.Origin.Elevation,
+                AngleInternal: written.Angle,
+                HorizontalUnit: LengthUnitTokens.SettingsToken(resolvedOrigin.HorizontalUnit),
+                VerticalUnit: LengthUnitTokens.SettingsToken(resolvedOrigin.VerticalUnit),
+                Verified: true);
+        }
+        else
+        {
+            sharedCoordinatesWriteRecord = new PlacementSharedCoordinatesWriteRecord(false, null, null, null, null, null, null, null);
+        }
+
         return new PlacementRecordDraft(
             exportDocumentFileName,
             exportPointsFileName,
@@ -782,9 +1004,13 @@ public sealed class CreateToposolidCommand : IExternalCommand
             localOrigin,
             boundaryPlaneElevation,
             revitCoordinates,
-            "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
+            sharedCoordinatesWritten is null
+                ? "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run."
+                : "SolidGround wrote this run's terrain origin as this model's shared coordinates (sharedCoordinates.writeIfAbsent); the project base point, survey point, and site location were otherwise left unchanged.",
             pointCounts,
-            extensibleStorage);
+            extensibleStorage,
+            propertyLineRecord,
+            sharedCoordinatesWriteRecord);
     }
 
     private static PlacementPointRecord ToPointRecord(XYZ point) => new(point.X, point.Y, point.Z);
@@ -823,7 +1049,18 @@ public sealed class CreateToposolidCommand : IExternalCommand
         try
         {
             OrphanSnapshot orphanAfter = OrphanCheck.Capture(context.Document);
-            if (OrphanCheck.Unchanged(context.OrphanBefore, orphanAfter, out string? orphanProblem))
+            if (draft.SharedCoordinatesWrite.Attempted)
+            {
+                // Skip Unchanged's comparison, which would otherwise misreport this run's own intended write as
+                // an unexpected change (SolidGround Issue #30, PH3-3); log the new position directly instead.
+                ProjectPosition current = context.Document.ActiveProjectLocation.GetProjectPosition(XYZ.Zero);
+                AddInLog.Info(
+                    "SolidGround wrote shared coordinates this run (sharedCoordinates.writeIfAbsent): " +
+                    $"EastWest={current.EastWest.ToString("R", CultureInfo.InvariantCulture)}, " +
+                    $"NorthSouth={current.NorthSouth.ToString("R", CultureInfo.InvariantCulture)}, " +
+                    $"Elevation={current.Elevation.ToString("R", CultureInfo.InvariantCulture)} (decimal feet).");
+            }
+            else if (OrphanCheck.Unchanged(context.OrphanBefore, orphanAfter, out string? orphanProblem))
             {
                 AddInLog.Info("Orphan check: shared coordinate state unchanged.");
             }
@@ -844,18 +1081,28 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
         try
         {
+            // SolidGround Issue #30 (PH3-3): computed at render time from draft.PropertyLine -- the same
+            // structural field BuildPlacementDraft already threads through and therefore already has in scope
+            // -- rather than a second, persisted free-text copy of the sentence.
+            string propertyLineStatement = draft.PropertyLine.Created
+                ? $"Property line: element id {draft.PropertyLine.ElementId!.Value.ToString(CultureInfo.InvariantCulture)}."
+                : "Property line: not created (this area of interest is not a parcel boundary).";
+
             string body = string.Join(
                 Environment.NewLine,
                 $"Element id: {elementId.ToString(CultureInfo.InvariantCulture)}",
                 $"Level: {context.Level.Name}",
                 $"ToposolidType: {context.ToposolidType.Name}",
                 $"Points retained: {draft.PointCounts.Retained.ToString(CultureInfo.InvariantCulture)} of {draft.PointCounts.Original.ToString(CultureInfo.InvariantCulture)} (budget {draft.PointCounts.Budget.ToString(CultureInfo.InvariantCulture)})",
+                propertyLineStatement,
                 $"Export bundle: {Path.Combine(context.Settings.Request.Output.Directory, draft.ExportDocument)}",
                 placementPath is not null ? $"Placement record: {placementPath}" : "Placement record: could not be written (see log).",
                 $"Log directory: {AddInLog.LogDirectory ?? "(unavailable)"}",
                 string.Empty,
-                "SolidGround is a site-form tool, not a survey instrument. SolidGround made no change to " +
-                "ActiveProjectLocation, the project base point, the survey point, or site location during this run.");
+                // Built from draft.SharedCoordinatesStatement (now two-valued, SolidGround Issue #30) instead of
+                // a second, independent, hardcoded copy of the disclaimer sentence, so the two can never drift
+                // apart again.
+                "SolidGround is a site-form tool, not a survey instrument. " + draft.SharedCoordinatesStatement);
 
             AddInLog.Info("Showing success dialog.");
             TaskDialog dialog = new(DialogTitle)

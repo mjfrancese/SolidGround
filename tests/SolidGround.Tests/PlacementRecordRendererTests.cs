@@ -76,7 +76,7 @@ public sealed class PlacementRecordRendererTests
             [
                 "schema", "schemaVersion", "createdUtc", "exportDocument", "exportPoints", "toposolid", "unitConversion",
                 "localOrigin", "boundaryPlaneElevation", "revitCoordinates", "sharedCoordinatesStatement", "pointCounts",
-                "extensibleStorage",
+                "extensibleStorage", "propertyLine", "sharedCoordinatesWrite",
             ],
             PropertyNames(root));
 
@@ -108,6 +108,14 @@ public sealed class PlacementRecordRendererTests
         Assert.Equal(["original", "retained", "budget"], PropertyNames(root.GetProperty("pointCounts")));
 
         Assert.Equal(["schemaGuid", "schemaVersion"], PropertyNames(root.GetProperty("extensibleStorage")));
+
+        Assert.Equal(["created", "elementId", "areaInternal"], PropertyNames(root.GetProperty("propertyLine")));
+
+        Assert.Equal(
+            [
+                "attempted", "eastWest", "northSouth", "elevation", "angleInternal", "horizontalUnit", "verticalUnit", "verified",
+            ],
+            PropertyNames(root.GetProperty("sharedCoordinatesWrite")));
     }
 
     [Fact]
@@ -131,16 +139,97 @@ public sealed class PlacementRecordRendererTests
     }
 
     [Fact]
-    public void SchemaVersionIsNowTwo()
+    public void SchemaVersionIsNowThree()
     {
-        // SolidGround Issue #16 design record §5: the placement record's own required shape changed with the
-        // addition of PlacementExtensibleStorageRecord, so PlacementRecordDraft.SchemaVersion (and therefore
-        // every rendered record's own "schemaVersion" property) bumps 1 -> 2.
-        Assert.Equal(2, PlacementRecordDraft.SchemaVersion);
+        // SolidGround Issue #30 (PH3-3): the placement record's own required shape changed again with the
+        // addition of PlacementPropertyLineRecord/PlacementSharedCoordinatesWriteRecord, so
+        // PlacementRecordDraft.SchemaVersion (and therefore every rendered record's own "schemaVersion"
+        // property) bumps 2 -> 3.
+        Assert.Equal(3, PlacementRecordDraft.SchemaVersion);
 
         byte[] bytes = PlacementRecordRenderer.Render(CreateRecord());
         using JsonDocument document = JsonDocument.Parse(bytes);
-        Assert.Equal(2, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, document.RootElement.GetProperty("schemaVersion").GetInt32());
+    }
+
+    [Fact]
+    public void PropertyLineIsWrittenAsNotCreatedWithNullDetailFieldsByDefault()
+    {
+        byte[] bytes = PlacementRecordRenderer.Render(CreateRecord());
+
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        JsonElement propertyLine = document.RootElement.GetProperty("propertyLine");
+
+        Assert.False(propertyLine.GetProperty("created").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, propertyLine.GetProperty("elementId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, propertyLine.GetProperty("areaInternal").ValueKind);
+    }
+
+    [Fact]
+    public void PropertyLineIsWrittenWithItsElementIdAndAreaWhenCreated()
+    {
+        PlacementRecord record = CreateRecord(
+            propertyLine: new PlacementPropertyLineRecord(true, ElementId: 123457L, AreaInternal: 1652.34));
+
+        byte[] bytes = PlacementRecordRenderer.Render(record);
+
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        JsonElement propertyLine = document.RootElement.GetProperty("propertyLine");
+
+        Assert.True(propertyLine.GetProperty("created").GetBoolean());
+        Assert.Equal(123457L, propertyLine.GetProperty("elementId").GetInt64());
+        Assert.Equal(1652.34, propertyLine.GetProperty("areaInternal").GetDouble());
+    }
+
+    [Fact]
+    public void SharedCoordinatesWriteIsWrittenAsNotAttemptedWithNullDetailFieldsByDefault()
+    {
+        byte[] bytes = PlacementRecordRenderer.Render(CreateRecord());
+
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        JsonElement sharedCoordinatesWrite = document.RootElement.GetProperty("sharedCoordinatesWrite");
+
+        Assert.False(sharedCoordinatesWrite.GetProperty("attempted").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("eastWest").ValueKind);
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("northSouth").ValueKind);
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("elevation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("angleInternal").ValueKind);
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("horizontalUnit").ValueKind);
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("verticalUnit").ValueKind);
+        Assert.Equal(JsonValueKind.Null, sharedCoordinatesWrite.GetProperty("verified").ValueKind);
+    }
+
+    [Fact]
+    public void SharedCoordinatesWriteIsWrittenWithEveryFieldWhenAttempted()
+    {
+        // The example site's own recorded local origin (matching this note's own placement-record example in
+        // docs/architecture/revit-property-line-and-shared-coordinates.md), at zero rotation (owner decision 2,
+        // 2026-09-26): angleInternal is recorded Revit-internal (radians), never converted, unlike the other
+        // three axes.
+        PlacementRecord record = CreateRecord(
+            sharedCoordinatesWrite: new PlacementSharedCoordinatesWriteRecord(
+                Attempted: true,
+                EastWest: 449674.0,
+                NorthSouth: 4604563.0,
+                Elevation: 183.10,
+                AngleInternal: 0d,
+                HorizontalUnit: "meter",
+                VerticalUnit: "meter",
+                Verified: true));
+
+        byte[] bytes = PlacementRecordRenderer.Render(record);
+
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        JsonElement sharedCoordinatesWrite = document.RootElement.GetProperty("sharedCoordinatesWrite");
+
+        Assert.True(sharedCoordinatesWrite.GetProperty("attempted").GetBoolean());
+        Assert.Equal(449674.0, sharedCoordinatesWrite.GetProperty("eastWest").GetDouble());
+        Assert.Equal(4604563.0, sharedCoordinatesWrite.GetProperty("northSouth").GetDouble());
+        Assert.Equal(183.10, sharedCoordinatesWrite.GetProperty("elevation").GetDouble());
+        Assert.Equal(0d, sharedCoordinatesWrite.GetProperty("angleInternal").GetDouble());
+        Assert.Equal("meter", sharedCoordinatesWrite.GetProperty("horizontalUnit").GetString());
+        Assert.Equal("meter", sharedCoordinatesWrite.GetProperty("verticalUnit").GetString());
+        Assert.True(sharedCoordinatesWrite.GetProperty("verified").GetBoolean());
     }
 
     [Fact]
@@ -184,7 +273,11 @@ public sealed class PlacementRecordRendererTests
     public void RenderRejectsANullRecordWithArgumentNullException() =>
         Assert.Throws<ArgumentNullException>(() => PlacementRecordRenderer.Render(null!));
 
-    private static PlacementRecord CreateRecord(DateTime? createdUtc = null, string? geoidModel = "Geoid12B") => new(
+    private static PlacementRecord CreateRecord(
+        DateTime? createdUtc = null,
+        string? geoidModel = "Geoid12B",
+        PlacementPropertyLineRecord? propertyLine = null,
+        PlacementSharedCoordinatesWriteRecord? sharedCoordinatesWrite = null) => new(
         Schema: PlacementRecordDraft.Schema,
         SchemaVersion: PlacementRecordDraft.SchemaVersion,
         CreatedUtc: createdUtc ?? new DateTime(2026, 9, 21, 12, 0, 0, DateTimeKind.Utc),
@@ -224,7 +317,9 @@ public sealed class PlacementRecordRendererTests
         PointCounts: new PlacementPointCountsRecord(Original: 9, Retained: 5, Budget: 15000),
         ExtensibleStorage: new PlacementExtensibleStorageRecord(
             SchemaGuid: ExtensibleStorageProvenanceSchema.SchemaGuidText,
-            SchemaVersion: ExtensibleStorageProvenanceSchema.CurrentVersion));
+            SchemaVersion: ExtensibleStorageProvenanceSchema.CurrentVersion),
+        PropertyLine: propertyLine ?? new PlacementPropertyLineRecord(false, null, null),
+        SharedCoordinatesWrite: sharedCoordinatesWrite ?? new PlacementSharedCoordinatesWriteRecord(false, null, null, null, null, null, null, null));
 
     private static List<string> PropertyNames(JsonElement obj) => [.. obj.EnumerateObject().Select(property => property.Name)];
 }

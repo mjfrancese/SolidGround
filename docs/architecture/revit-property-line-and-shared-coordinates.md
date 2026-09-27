@@ -2,30 +2,101 @@
 
 ## Purpose and status
 
-Issue #30 (PH3-3) creates a native `PropertyLine` alongside the `Toposolid`, in the same transaction, and adds a
-default-off, Preflight-gated, opt-in write of a run's terrain origin as the model's shared coordinates. **Neither
-of those two things is implemented yet.** This commit lands only Issue #30's first stage: the Revit-free geometry
-cleanup that the later PropertyLine-creation stage depends on. The shared-coordinates write is independent of it:
-it writes this run's own terrain local-frame origin, a value fixed upstream of and unaffected by boundary cleanup,
-and never consumes the cleaned boundary or either of this stage's new tolerance parameters. This stage adds
-`src/SolidGround.Core/Exports/LocalBoundaryCleaner.cs` (new) and an additive `minimumEdgeLength` parameter on
-`LocalBoundaryValidator.Validate` (`src/SolidGround.Core/Exports/LocalBoundaryValidator.cs`) — plus their tests.
-`SolidGround.Revit` does not call `LocalBoundaryCleaner.Clean` yet; `CreateToposolidCommand`,
-`PostCreationVerification`, and every other Revit-side file are unchanged by this commit. The `PropertyLine`
-creation, the shared-coordinates detection/write/verification, and the Revit-side tolerance read that wires this
-stage's cleanup into `CreateToposolidCommand` all land in a later commit against this same issue, which will
-extend this note in place with its own "PropertyLine creation" and "Shared-coordinates write" sections rather
-than replacing what is written here.
+Issue #30 (PH3-3) implements owner decisions 5-6 (`docs/architecture/phase-3-interactive-add-in-research.md`
+lines 147-148): a native `PropertyLine` created alongside the `Toposolid`, in the same transaction, from the
+same underlying boundary geometry; a default-off, Preflight-gated, opt-in write of this run's terrain origin as
+the model's shared coordinates, refused when the model already appears to have shared coordinates set; and the
+defensive Core-side geometry cleanup (dedupe/collinear-collapse) this issue's scope requires before any of this
+reaches Revit's `CurveLoop` APIs. Cross-references `docs/architecture/revit-toposolid-creation.md` for the
+shared six-stage command flow, transaction/rollback policy, and dialog helpers this note only amends.
 
-## Geometry cleanup contract
+Landed in two stages, both now complete. **Stage 1** (commit `c81abb1`) added the Revit-free
+`LocalBoundaryCleaner` and `LocalBoundaryValidator`'s optional `minimumEdgeLength` parameter in
+`SolidGround.Core` — `src/SolidGround.Core/Exports/LocalBoundaryCleaner.cs` (new) and the additive parameter on
+`LocalBoundaryValidator.Validate` (`src/SolidGround.Core/Exports/LocalBoundaryValidator.cs`) — plus their
+tests; not yet wired into `SolidGround.Revit`, which was unchanged by that commit. **Stage 2** (this update)
+wires that cleanup into `CreateToposolidCommand`'s Stage 3, adds `PropertyLine` creation gated to parcel areas
+of interest, the shared-coordinates detection/write/verification gate, the Revit-side tolerance read at
+Preflight, and the placement-record schema v3 fields.
 
-`LocalBoundaryCleaner.Clean` repairs externally sourced `LocalBoundary` geometry — dedupe of exact and
-near-duplicate vertices, drop of edges shorter than a caller-supplied minimum, and collapse of collinear
-mid-edge vertices — entirely in `SolidGround.Core`, before `LocalBoundaryValidator.Validate` ever sees the
-boundary. Both types are Revit-free today and stay that way: neither references any Autodesk or Revit type,
-and neither depends on the other beyond the shared tolerance value described below.
+Every Revit API member below was verified against the installed Revit 2027 `RevitAPI.dll` (FileVersion
+`27.0.10.13`) via `MetadataLoadContext`/`System.Reflection.Metadata` reflection, cross-checked against
+Autodesk's shipped `RevitAPI.xml` doc comments, matching the method `docs/architecture/revit-2027-verification-and-host-design.md`
+established for Issue #13. The local build compiling `SolidGround.Revit` against the installed Revit 2027 SDK
+is itself confirming evidence for every signature this note cites: a member that did not exist, or did not
+match the signature used here, would fail that build.
 
-### Inputs and units
+## Owner decisions (2026-09-26)
+
+The owner's own instruction on Issue #30: "Regarding #30, go with all recommended."
+
+1. **The shared-coordinates detection proxy** (survey point at the internal origin and unclipped, OR'd with
+   `ProjectLocations.Size > 1`) is accepted as designed, on the explicit condition that a live Revit 2027
+   confirmation against a real document that already has shared coordinates set still runs before this ships
+   (see "Manual evidence plan" below, Step 14.6).
+2. **The value written, when opted in, is the terrain's own local-frame source origin at zero rotation** — the
+   same coordinate already in the placement record's `localOrigin.sourceX`/`sourceY`/`sourceElevation`. Zero
+   rotation means SolidGround treats the terrain's projected grid north as Revit's true north: no
+   grid-convergence correction is computed or applied (see "Zero rotation, stated plainly" below).
+3. **`PropertyLine` creation is restricted to parcel areas of interest only, not unconditional.** A
+   bounding-box or radius AOI creates a `Toposolid` and nothing else, with no error and no dialog-headline
+   difference; the success report states plainly that no property line was created for that run. Owner
+   decision 5 (`phase-3-interactive-add-in-research.md` lines 147-148) is read as applying to the Phase 3
+   address-to-parcel workflow, not as separately mandating unconditional `PropertyLine` creation for every AOI
+   kind this issue supports.
+4. **The `PropertyLine`'s element id/area and the shared-coordinates write outcome are recorded in the
+   placement record, schema bump 2 → 3.** These are placement facts, consistent with the owner's separate
+   2026-09-26 Issue #33 decision that the placement record carries geometry/unit/placement fields but not the
+   address/parcel provenance record.
+
+## Revit 2027 API surface used (new members, beyond `revit-toposolid-creation.md`'s existing table)
+
+| Member | Basis |
+| --- | --- |
+| `PropertyLine.Create(Document, IList<CurveLoop>)` | installed-SDK reflection (`<since>2027</since>`) + `RevitAPI.xml` |
+| `PropertyLine.IsValidBoundary(IList<CurveLoop>)` — static, no `Document`/transaction | installed-SDK + `RevitAPI.xml`: "not necessary to close... should not intersect with each other; each loop planar and parallel to the horizontal (XY) plane" |
+| `PropertyLine.IsClosedLoop(): bool`, `PropertyLine.Area { get; }` (`>0` iff closed loop, else `-1`) | installed-SDK + `RevitAPI.xml` |
+| `ProjectLocation.SetProjectPosition(XYZ, ProjectPosition): void` (instance, via `document.ActiveProjectLocation`) | installed-SDK; `RevitAPI.xml`: "similar to the Revit command 'Specify Coordinates at Point'" |
+| `ProjectLocation.GetProjectPosition(XYZ): ProjectPosition` | installed-SDK + `RevitAPI.xml` |
+| `ProjectPosition(double ew, double ns, double elevation, double angle)` ctor; `EastWest`/`NorthSouth`/`Elevation`/`Angle` get/set | installed-SDK; `RevitAPI.xml`: all in decimal feet/radians |
+| `BasePoint.GetSurveyPoint(Document)` (static), `.Position` (get-only), `.Clipped` (get/set) | installed-SDK + `RevitAPI.xml` |
+| `Document.ProjectLocations { get; }: ProjectLocationSet` (`.Size`, `.IsEmpty`) | installed-SDK + `RevitAPI.xml` |
+| `Autodesk.Revit.ApplicationServices.Application.ShortCurveTolerance { get; }: double` | installed-SDK; `RevitAPI.xml`: "the enforced minimum length for any curve created by Revit," `<since>2014</since>` |
+| `Autodesk.Revit.ApplicationServices.Application.VertexTolerance { get; }: double` | installed-SDK; `RevitAPI.xml`: "two points within this distance are considered coincident... do not use this value to set the distance between two points," `<since>2012</since>` |
+
+`PropertyLine.Create`'s own `RevitAPI.xml` doc comment documents `ArgumentException`, `ArgumentNullException`,
+`InvalidOperationException`, `ModificationForbiddenException`, and `ModificationOutsideTransactionException` —
+a strictly broader list than `Toposolid.Create`'s own doc page, which `ToposolidCreationService`'s existing
+two-exception catch filter mirrors. `PropertyLineCreationService.Create`'s own catch filter accordingly widens
+to three exception types (`ArgumentException`, `InvalidOperationException`, `ModificationForbiddenException`),
+deliberately excluding `ModificationOutsideTransactionException`: that one means this service was called with
+no open transaction, a SolidGround programming bug, not a user-addressable condition — the generic Stage-5
+catch-all's own message is the honest one for that case, not a boundary-specific message that would misdirect
+the user toward fixing their input geometry.
+
+`ProjectLocation.SetProjectPosition`'s own `RevitAPI.xml` doc comment documents `ArgumentNullException` and
+`InvalidOperationException` ("Unable to use the project position's transform to calculate the point.").
+`BasePoint.Clipped`'s own doc comment documents that identical `InvalidOperationException` for its setter, but
+only "for a non-shared BasePoint" — structurally unreachable here since `BasePoint.GetSurveyPoint` always
+returns the shared survey point, never the (non-shared) project base point. **Review fix:**
+`SharedCoordinatesWriter.Write` wraps both calls in one `try`/`catch` mirroring
+`PropertyLineCreationService.Create`'s own pattern, translating either into a new
+`SharedCoordinatesWriteException` (error catalogue row 20b) instead of letting it
+fall through to the generic Stage-5 catch-all, which would otherwise misattribute the failure to the toposolid
+even though, by that point, the `Toposolid` (and any `PropertyLine`) had already been validly created and only
+the shared-coordinates write itself failed.
+
+**Not established by any documentation source; owner-visible risk, accepted (owner decision 1).** No Revit API
+member directly answers "has this document's shared coordinates already been set." `BasePoint.IsShared` is
+confirmed, by its own doc comment and by this repository's own pre-existing `OrphanCheck.cs` observation, to be
+a **fixed type discriminant** (always `true` for the survey point, always `false` for the project base point)
+— a trap, not a usable runtime flag. `Document.AcquireCoordinates(ElementId)`/`.PublishCoordinates(LinkElementId)`
+are one-shot mutating actions tied to a linked model, not queries. The recommended proxy below is the
+strongest evidence-backed candidate found, not a certified fact.
+
+## Geometry cleanup contract (Core, Revit-free)
+
+`src/SolidGround.Core/Exports/LocalBoundaryCleaner.cs` (Stage 1):
 
 ```csharp
 public static class LocalBoundaryCleaner
@@ -41,16 +112,74 @@ public static class LocalBoundaryCleaner
 }
 ```
 
-- `boundary` — the boundary to clean. Never mutated; a new `LocalBoundary` is returned. `ArgumentNullException`
-  is the only exception `Clean` ever throws; malformed-but-non-null input (too few vertices, self-intersecting,
-  degenerate) is passed through unrejected — see "Reject versus repair" below.
-- `vertexTolerance`, `collinearityTolerance`, `minimumEdgeLength` — all three are plain numbers in whatever
-  linear unit `boundary`'s own coordinates already use. `Clean` performs no unit conversion of its own.
-- `maxIterations` — defaults to `DefaultMaxIterations` (8): the most dedupe-then-collapse passes attempted per
-  ring before giving up on a slow-converging input.
+Runs in `CreateToposolidCommand.ExecuteCore`'s Stage 3, **after** `LocalBoundaryFactory.FromPolygonalRegion`/
+`FromGridEnvelope` and **before** `LocalBoundaryValidator.Validate` — unconditionally, on every run regardless
+of AOI kind or the shared-coordinates opt-in. Per polygon, per ring (shell, then each hole), independently:
+never merges across rings/polygons, never changes winding, never reclassifies a hole as a shell. A hand-rolled,
+two-pass, per-vertex walk over `LocalCoordinate2D` (dedupe, then collinear-collapse, iterated to a fixed point
+or `maxIterations`), not `DouglasPeuckerSimplifier`: this contract needs two independently-sourced, distinct
+Revit tolerances used for two distinct purposes (a coincidence test vs. a per-vertex collinearity test), and
+needs a hard guarantee that a genuine sharp corner is never touched regardless of the rest of the ring's shape.
+Never touches true topology (self-intersection, a hole outside its shell, etc.) — that stays
+`LocalBoundaryValidator`'s job, run immediately afterward, unchanged.
 
-`LocalBoundaryValidator.Validate` gains one new, trailing, optional parameter, `double? minimumEdgeLength = null`
-(its 5th positional argument), fully source/binary-compatible with every existing call site:
+**Dedupe pass** drops the second of any cyclically-consecutive pair within
+`Math.Max(vertexTolerance, minimumEdgeLength)` of each other — the `Math.Max` closes the gap band between a
+true-coincidence tolerance and the separate, often-larger minimum edge length Revit can actually draw, so
+nothing `LocalBoundaryValidator`'s own equivalent check would reject can survive `Clean` unrepaired.
+**Collinear-collapse pass** drops any vertex whose perpendicular deviation from the line through its two cyclic
+neighbors is at most `collinearityTolerance`. Both passes iterate together (collapsing a collinear vertex can
+expose a newly sub-tolerance edge and vice versa) until a full pass makes no change or `maxIterations` is
+reached; a ring that drops below three vertices stops early without erroring — `LocalBoundaryValidator.Validate`
+rejects that downstream with its existing message, matching `LocalBoundaryFactory`/`LocalBoundaryValidator`'s
+own "never repairs by throwing" discipline. A vertex whose deviation exceeds `collinearityTolerance` is
+preserved exactly, however sharp or spiky its corner.
+
+**Reject versus repair.** The dividing line between `Clean` and `Validate` is simple: `LocalBoundaryCleaner`
+only ever repairs a ring's own vertex list — dedupe and collinear collapse — and never throws for
+messy-but-parseable input; `LocalBoundaryValidator` only ever detects and reports, never repairs.
+
+| Concern | Who handles it | Behavior |
+| --- | --- | --- |
+| Exact/near-duplicate cyclically consecutive vertices, including across the wrap-around edge | `Clean` | Repaired: the second vertex of the pair is dropped. |
+| Edges shorter than the caller's `minimumEdgeLength` | `Clean` (repair, via the dedupe pass's `Math.Max` reconciliation) **and** `Validate` (reject, defense in depth) | `Clean` is expected to remove every such edge in ordinary operation; `Validate`'s own check exists because `Clean` deliberately stops early (without erroring) if a ring would drop below three vertices, and is bounded by `maxIterations` — both deliberate safety valves that mean a pathological or slow-converging input could in principle still reach `Validate` with a too-short edge. |
+| Collinear/near-collinear mid-edge vertices | `Clean` | Repaired: dropped once their perpendicular deviation from their own two neighbors is within `collinearityTolerance`. |
+| A ring with fewer than three distinct vertices, including one `Clean` itself reduced to that state | `Validate` | Rejected, with its existing "fewer than three distinct vertices" message, unchanged by this stage. |
+| Self-intersection, a hole outside its shell, nested holes/shells, non-positive area | `Validate` | Rejected; `Clean` never attempts to repair or even detect any of these — true topology stays validation's job alone. |
+| Cross-polygon (multi-polygon) self-intersection | Neither | Out of scope for both `Clean` and `Validate` — see "Cross-polygon self-intersection" under "PropertyLine creation (Revit)" below for why `PropertyLine.IsValidBoundary` covers this instead. |
+
+**Determinism.** `Clean` is a pure function of its own arguments: it never allocates a `Random`, reads the
+clock, touches the filesystem, or otherwise depends on anything outside `boundary` and its four numeric
+parameters. Vertex order is preserved throughout — no `HashSet`/`Dictionary` iteration order ever decides which
+vertex survives or in what order survivors appear. The dedupe pass always keeps the ring's first vertex as a
+fixed anchor and walks forward from it; the collinear-collapse pass evaluates every vertex against one
+unchanging snapshot of its neighbors before removing any of them, so results never depend on visiting order.
+Calling `Clean` twice with identical arguments always returns vertex-for-vertex identical rings
+(`LocalBoundaryCleanerTests.CleanIsDeterministicAcrossRepeatedRuns`), and the same multi-pass fixed-point loop
+is exercised directly by `CleanConvergesWhenACollinearCollapseExposesANewNearDuplicatePair`.
+
+**Tolerance sourcing (Revit side, `CreateToposolidCommand`).** `commandData.Application.Application
+.ShortCurveTolerance`/`.VertexTolerance` are read once at Stage 1 (Preflight), logged, and stored on
+`DocumentContext` as `ShortCurveToleranceInternal`/`VertexToleranceInternal` (Revit-internal decimal feet,
+unconverted — `SolidGround.Core` never references either `Application` member directly). At Stage 3, both
+convert into the request's own `OutputUnit` via `UnitUtils.ConvertFromInternalUnits` (the same `ForgeTypeId
+revitUnit` Stage 4 used to compute, moved to the top of Stage 3 since it depends only on
+`context.Settings.Request.OutputUnit`, not on any acquisition result):
+
+```csharp
+double vertexTolerance = UnitUtils.ConvertFromInternalUnits(context.VertexToleranceInternal, revitUnit);
+double minimumEdgeLength =
+    UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, revitUnit) * ShortCurveToleranceMargin; // 2.0
+double collinearityTolerance = vertexTolerance; // reuses VertexTolerance's own coincidence-scale distance,
+                                                 // a distinct named constant so it can be tuned independently later.
+LocalBoundary boundary = LocalBoundaryCleaner.Clean(rawBoundary, vertexTolerance, collinearityTolerance, minimumEdgeLength);
+```
+
+`shortCurveToleranceMargin` (2.0) is a conservative multiplier so unit-conversion/local-origin floating-point
+noise cannot reintroduce an edge only technically above Revit's own raw minimum.
+
+**`LocalBoundaryValidator.Validate`** (Stage 1) gained one new, trailing, optional parameter, fully
+source/binary-compatible with every pre-existing call site:
 
 ```csharp
 public static LocalBoundaryValidationResult Validate(
@@ -58,75 +187,682 @@ public static LocalBoundaryValidationResult Validate(
     IReadOnlyList<LocalTerrainSample> retainedSamples,
     int pointBudget,
     double? containmentToleranceMeters = null,
-    double? minimumEdgeLength = null);
+    double? minimumEdgeLength = null);   // null (the default) skips this check.
 ```
 
-`null` (the default) skips the new check entirely — unlike `containmentToleranceMeters`'s own Core-only fallback
-constant, there is no Core-only default for a value that is only meaningful once a specific downstream
-consumer's own drawable minimum is known.
+`ValidateRingShape` gains one more check (only when `minimumEdgeLength is not null`): for every cyclically
+consecutive edge, if its length is `> 0` but `< minimumEdgeLength`, add one aggregated problem line per ring
+(count + shortest length found) — a distinct message from the existing zero-length wording. `CreateToposolidCommand`'s
+Stage 3 call site passes `minimumEdgeLength` as `Validate`'s 5th positional argument. This check still exists
+once `Clean` also uses `minimumEdgeLength` as defense in depth, matching `LocalBoundaryValidator`'s established
+"never repairs, only detects" role: `Clean` is expected to remove every edge this check would otherwise reject
+in ordinary operation, but `Clean` also deliberately stops early without erroring if a ring would drop below 3
+vertices, and is bounded by `maxIterations` — both deliberate safety valves that mean a pathological or
+slow-converging input could in principle still reach `Validate` with a too-short edge. Rather than let that
+reach `BoundaryGeometryBuilder.BuildProfiles`'s `Line.CreateBound` call and throw
+`Autodesk.Revit.Exceptions.ArgumentsInconsistentException` there uncaught — exactly the "Known limitations"
+follow-up `revit-toposolid-creation.md` previously recorded as unfixed — this check still catches it, at
+Stage 3, with a clear, actionable Preflight-style message, before Stage 4 ever builds a `CurveLoop`.
 
-### Tolerance sourcing
+**Correction to an earlier prep note.** A candidate test that would call
+`SolidGround.Revit.Geometry.BoundaryGeometryBuilder.BuildProfiles` from the Core-only test assembly cannot be
+written: `ArchitectureTests.TestAssemblyReferencesNeitherTheRevitApiNorTheRevitHostAssembly` asserts the test
+assembly never references `RevitAPI` or `SolidGround.Revit`. The Core-level tests stop at "the cleaned
+boundary passes `LocalBoundaryValidator.Validate`"; offline, plain-text tests in `RevitHostFilesTests.cs`
+(matching the existing `RevitIni`-guard precedent) instead assert the *source ordering and gating* of the
+Revit-side call sites (see "Tests" below).
 
-Neither `Clean` nor `Validate`'s new check has a Core-side default tolerance; both are supplied entirely by the
-caller. Core itself never reads a Revit API member. Once the later Revit-side stage of Issue #30 wires this in,
-the intended source (not yet implemented) is `CreateToposolidCommand`'s own Stage 1 Preflight reading
-`Autodesk.Revit.ApplicationServices.Application.ShortCurveTolerance` and `.VertexTolerance` once — Revit-internal
-decimal feet, unconverted, logged — then Stage 3 converting both into the request's own `OutputUnit` before
-calling `Clean`: `vertexTolerance` from `VertexTolerance`, `minimumEdgeLength` from `ShortCurveTolerance`
-multiplied by a small, conservative margin (so unit-conversion or local-origin floating-point noise cannot
-reintroduce an edge only technically above Revit's own raw minimum), and `collinearityTolerance` defaulted to
-`vertexTolerance`'s own converted value — a distinct, separately named parameter kept independently tunable,
-not because the two Revit tolerances measure the same concept. Until that stage lands, every test in this
-commit supplies its own literal tolerance values directly, exactly as any other caller must.
+## PropertyLine creation (Revit)
 
-### Order of operations
+### AOI-kind gate: how the command knows, and what a non-parcel run does
 
-`Clean` cleans every polygon of `boundary`, one ring at a time (shell, then each hole), independently of every
-other ring or polygon: it never merges vertices across rings, never changes a ring's winding, and never
-reclassifies a hole as a shell. Per ring, each iteration is cyclic — the wrap-around edge (last vertex back to
-first) is a real edge, since `LocalBoundaryRing.Vertices` never stores a repeated closing vertex:
+`PropertyLine` creation is gated to parcel areas of interest (owner decision 3): a bounding-box or radius AOI
+creates a `Toposolid` and nothing else, exactly as every run did before this issue — no `PropertyLine`, and, just
+as importantly, no error, no Preflight problem, and no dialog-headline difference for that run. This reuses a
+discriminant the codebase already has: `TerrainRequestSettings.AreaOfInterest.Kind` is an `AreaOfInterestKind`
+(`BoundingBox`, `Radius`, `Parcel`), the same discriminant `RunDocumentPreflight` already compares against
+`AreaOfInterestKind.Parcel` at its own parcel-geometry-file-reading step. No new field on `DocumentContext`, no
+new settings key: the gate expression, `bool isParcelAoi = context.Settings.Request.AreaOfInterest.Kind ==
+AreaOfInterestKind.Parcel;`, is evaluated inline at Stage 4 (`ExecuteCore`) and again at Stage 5
+(`RunTransaction`), deliberately not cached as a shared field, mirroring the existing Stage 1 precedent's own
+inline-comparison style.
 
-1. **Dedupe pass.** Walk the ring; whenever two cyclically consecutive vertices are within
-   `Math.Max(vertexTolerance, minimumEdgeLength)` of each other (Euclidean distance), drop the second. Taking
-   the larger of the two tolerances means an edge `Validate`'s own new check would otherwise reject can never
-   survive this pass unrepaired, even one longer than `vertexTolerance` alone but still shorter than
-   `minimumEdgeLength`.
-2. **Collinear-collapse pass.** For each remaining vertex `B`, with cyclic neighbors `A` and `C`, compute the
-   perpendicular distance from `B` to the line through `A` and `C`; if it is at most `collinearityTolerance`,
-   drop `B`.
-3. **Iterate 1 + 2** up to `maxIterations` times, or until one full pass makes no further change — collapsing a
-   collinear vertex can expose a newly sub-tolerance edge, and vice versa, so a single pass is not always
-   enough. A ring that collapses below three vertices stops early, without erroring.
-4. **Never touches true topology.** Self-intersection, a hole falling outside its shell, nested holes/shells,
-   and disconnected interior remain exactly `LocalBoundaryValidator`'s job, run immediately afterward,
-   unchanged.
-5. **Never silently reshapes a genuine sharp corner.** A vertex whose deviation exceeds `collinearityTolerance`
-   is preserved exactly, however visually spiky.
+Three call sites, all conditioned on `isParcelAoi`, all "skip silently" when it is `false`:
 
-### Reject versus repair
+1. **Stage 4 (Geometry construction, pre-transaction).** `PostCreationVerification.BoundaryIsValidPropertyLine`
+   is called only `if (isParcelAoi)`, against `propertyLineProfiles` — a second, independently-built
+   `IList<CurveLoop>`, never the `profiles` list `ToposolidCreationService.Create` already consumes (see "Why
+   PropertyLine creation builds its own independent CurveLoop list" below). For a bounding-box/radius run this
+   block is never reached at all, so `propertyLineProfiles` is never constructed for that run.
+2. **Stage 5 (Transaction), creation.** `PropertyLineCreationService.Create(document, propertyLineProfiles)` is
+   called only `if (isParcelAoi)`; a non-parcel run's `PropertyLine? propertyLine` local is simply `null` — no
+   Revit API call attempted, so `PropertyLineCreationException` can structurally never be thrown for a
+   non-parcel run.
+3. **Stage 5 (Transaction), post-create verification.** `PostCreationVerification.VerifyPropertyLine` is called
+   only when `propertyLine is not null`; for a non-parcel run, `propertyLineVerification` is instead a fixed
+   passing sentinel, `new VerificationResult(true, "No property line was created for this bounding-box/radius
+   area of interest.")` — mirroring the identical off-path idiom used for `sharedCoordinatesVerification` when
+   the opt-in is off.
 
-| Concern | Who handles it | Behavior |
-| --- | --- | --- |
-| Exact/near-duplicate cyclically consecutive vertices, including across the wrap-around edge | `LocalBoundaryCleaner.Clean` | Repaired: the second vertex of the pair is dropped. |
-| Edges shorter than the caller's `minimumEdgeLength` | `Clean` (repair, via the dedupe pass's `Math.Max` reconciliation) **and** `Validate` (reject, defense in depth) | `Clean` is expected to remove every such edge in ordinary operation; `Validate`'s own check exists because `Clean` deliberately stops early (without erroring) if a ring would drop below three vertices, and is bounded by `maxIterations` — both deliberate safety valves that mean a pathological or slow-converging input could in principle still reach `Validate` with a too-short edge. |
-| Collinear/near-collinear mid-edge vertices | `Clean` | Repaired: dropped once their perpendicular deviation from their own two neighbors is within `collinearityTolerance`. |
-| A ring with fewer than three distinct vertices, including one `Clean` itself reduced to that state | `Validate` | Rejected, with its existing "fewer than three distinct vertices" message, unchanged by this stage. |
-| Self-intersection, a hole outside its shell, nested holes/shells, non-positive area | `Validate` | Rejected; `Clean` never attempts to repair or even detect any of these — true topology stays validation's job alone. |
-| Cross-polygon (multi-polygon) self-intersection | Neither, today | Out of scope for both `Clean` and `Validate`; unchanged by this stage. |
+### Why PropertyLine creation builds its own independent CurveLoop list, not `profiles` itself
 
-The dividing line is simple: `LocalBoundaryCleaner` only ever repairs a ring's own vertex list — dedupe and
-collinear collapse — and never throws for messy-but-parseable input. `LocalBoundaryValidator` only ever detects
-and reports, never repairs, and is otherwise completely unchanged by this stage except for the one new,
-opt-in check described above.
+No source this note's own evidence base contains says anything about whether `Toposolid.Create`/`PropertyLine
+.Create` copy their input `CurveLoop` data into an independent representation or instead retain, and
+potentially later invalidate or mutate, the caller's own objects. This is not hypothetical: `CurveLoop` is
+confirmed, by reflection, to implement `IDisposable` — a disposable, kernel-backed geometry handle, not simple
+value data — so aliasing the same instances across two independent element-creation calls is a genuine,
+unverified assumption. Rather than guess, `PropertyLineCreationService.Create` is fed its own,
+separately-constructed `IList<CurveLoop>`, built by a second `BoundaryGeometryBuilder.BuildProfiles` call over
+the identical `boundary`/`constantZInternal`/`revitUnit` inputs — cheap and deterministic (pure in-memory
+geometry construction, no I/O, no Revit API call), and skipped entirely for a non-parcel run.
 
-### Determinism
+`PostCreationVerification.cs` gained two peer static methods, alongside its existing pre-transaction
+`AllProfilesArePlanar` and post-create `Verify`:
 
-`Clean` is a pure function of its own arguments: it never allocates a `Random`, reads the clock, touches the
-filesystem, or otherwise depends on anything outside `boundary` and the four numeric parameters. Vertex order
-is preserved throughout — no `HashSet`/`Dictionary` iteration order ever decides which vertex survives or in
-what order survivors appear. The dedupe pass always keeps the ring's first vertex as a fixed anchor and walks
-forward from it; the collinear-collapse pass evaluates every vertex against one unchanging snapshot of its
-neighbors before removing any of them, so results never depend on visiting order. Calling `Clean` twice with
-identical arguments always returns vertex-for-vertex identical rings
-(`LocalBoundaryCleanerTests.CleanIsDeterministicAcrossRepeatedRuns`), and the same multi-pass fixed-point loop
-is exercised directly by `CleanConvergesWhenACollinearCollapseExposesANewNearDuplicatePair`.
+```csharp
+// Stage 4, pre-transaction -- mirrors AllProfilesArePlanar's placement and Result.Cancelled-on-failure handling.
+internal static bool BoundaryIsValidPropertyLine(IList<CurveLoop> profiles, out string? problem);
+
+// Stage 5, post-create, inside the transaction -- a cheap sanity check using PropertyLine's own
+// IsClosedLoop()/Area instead of a SlabShapeEditor/vertex-count surface, which PropertyLine has none of.
+internal static VerificationResult VerifyPropertyLine(PropertyLine propertyLine);
+```
+
+`BoundaryIsValidPropertyLine` needs no separate cross-loop-planarity check: `BoundaryGeometryBuilder.BuildProfiles`
+already gives every ring of every polygon the identical `constantZInternal` (the boundary-Z decision, the same
+invariant `AllProfilesArePlanar` already relies on for the `Toposolid`), so every loop is already coplanar and
+horizontal by construction. Cross-polygon self-intersection (a `LocalBoundary` with more than one
+`LocalBoundaryPolygon`) is not checked by `LocalBoundaryValidator` today; `PropertyLine.IsValidBoundary`'s own
+doc comment ("should not intersect with each other") is written over the whole `IList<CurveLoop>`, so this
+design relies on Revit's own verified check for that condition rather than teaching `LocalBoundaryValidator` a
+new NTS-based polygon-vs-polygon overlap check. Now that `PropertyLine` creation is parcel-AOI-only, this
+check's only reachable trigger is a multi-polygon parcel; no known practical case in this repository's current
+parcel fixtures triggers this, flagged as a residual limitation, not fixed.
+
+### Transaction flow (`CreateToposolidCommand.RunTransaction`, Stage 5)
+
+```csharp
+toposolid = ToposolidCreationService.Create(document, profiles, points, context.ToposolidType.Id, context.Level.Id, ToposolidCreationService.DefaultStrategy);
+PropertyLine? propertyLine = isParcelAoi
+    ? PropertyLineCreationService.Create(document, propertyLineProfiles!)
+    : null;
+
+document.Regenerate();
+
+VerificationResult verification = PostCreationVerification.Verify(toposolid, expected, points, ToposolidCreationService.DefaultStrategy, toleranceInternal, context.NativeToposolidMaxPointThreshold);
+VerificationResult propertyLineVerification = propertyLine is not null
+    ? PostCreationVerification.VerifyPropertyLine(propertyLine)
+    : new VerificationResult(true, "No property line was created for this bounding-box/radius area of interest.");
+
+// (shared-coordinates write -- see "Shared-coordinates detection, write, and verification" below)
+
+if (!verification.Passed || !propertyLineVerification.Passed || !sharedCoordinatesVerification.Passed || failureLog.HasBlockingFailure)
+{
+    // An explicit, ordered 4-way choice: toposolid verification, then property-line verification, then
+    // shared-coordinates verification, then the blocking-Revit-failure fallback, in that fixed order.
+    (string headline, string detail) =
+        !verification.Passed ? ("The created toposolid's geometry did not match the source data; the change was undone.", verification.Detail)
+        : !propertyLineVerification.Passed ? ("The created property line did not verify; the change was undone.", propertyLineVerification.Detail)
+        : !sharedCoordinatesVerification.Passed ? ("The shared-coordinates write did not verify; the change was undone.", sharedCoordinatesVerification.Detail)
+        : ("Revit reported a problem while finishing this run.", string.Join(" | ", failureLog.Messages));
+    TransactionStatus rolledBack = transaction.RollBack();
+    return ShowTransactionOutcome(rolledBack, headline, detail);
+    // No partial element either way: the whole transaction (Toposolid + PropertyLine, when attempted, + any
+    // shared-coordinates write) rolls back together.
+}
+```
+
+**Review fix:** the blocking-Revit-failure fallback headline above was broadened from the pre-Issue-#30 wording
+("...while creating the toposolid.") since `failureLog` can now also be populated by `PropertyLine` creation or
+the shared-coordinates write's own `document.Regenerate()`, not only the `Toposolid`'s.
+
+The existing `catch (ToposolidCreationException ex)` clause widens to
+`catch (Exception ex) when (ex is ToposolidCreationException or PropertyLineCreationException or
+SharedCoordinatesWriteException)`, branching the dialog headline on the exception's runtime type. For a
+non-parcel run, `PropertyLineCreationService.Create` is never called, so `PropertyLineCreationException` can
+structurally never be thrown on that path; the `SharedCoordinatesWriteException` branch is likewise unreachable
+whenever `sharedCoordinates.writeIfAbsent` is off (the shipped default).
+
+## Shared-coordinates detection, write, and verification (Revit)
+
+`src/SolidGround.Revit/Transactions/SharedCoordinatesGate.cs` holds two static classes:
+
+```csharp
+internal static class SharedCoordinatesDetector
+{
+    internal static bool LooksAlreadyCoordinated(Document document)
+    {
+        BasePoint surveyPoint = BasePoint.GetSurveyPoint(document);
+        bool looksNeverCoordinated = surveyPoint.Position.IsAlmostEqualTo(XYZ.Zero) && !surveyPoint.Clipped;
+        bool hasExtraProjectLocations = document.ProjectLocations.Size > 1;
+        return !looksNeverCoordinated || hasExtraProjectLocations;
+    }
+}
+
+internal static class SharedCoordinatesWriter
+{
+    internal static ProjectPosition Write(Document document, double eastWestInternal, double northSouthInternal, double elevationInternal)
+    {
+        ProjectPosition position = new(eastWestInternal, northSouthInternal, elevationInternal, angle: 0d);
+        try
+        {
+            document.ActiveProjectLocation.SetProjectPosition(XYZ.Zero, position);
+            BasePoint.GetSurveyPoint(document).Clipped = true; // see "Why Write also sets Clipped" below.
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ArgumentNullException or Autodesk.Revit.Exceptions.InvalidOperationException)
+        {
+            throw new SharedCoordinatesWriteException($"Revit rejected the shared-coordinates write: {ex.Message}", ex);
+        }
+
+        return position;
+    }
+
+    internal static bool VerifyWritten(Document document, ProjectPosition requested, double toleranceInternal, out string? problem);
+}
+```
+
+### Shared-coordinates detection
+
+No direct Revit API member answers "has this document's shared coordinates already been set" (see the API
+table above). The accepted proxy (owner decision 1): `BasePoint.GetSurveyPoint(document).Position` at the
+internal origin (`XYZ.Zero`) **and** not `.Clipped` is the never-coordinated baseline — directly supported by
+`Document.ResetSharedCoordinates()`'s own doc comment ("survey point will be reset back to startup location,
+where it coincides with the Internal Origin"), combined with `InternalOrigin.Position` always being `(0,0,0)`
+(confirmed for Issue #13). OR'd with `document.ProjectLocations.Size > 1` as a second, coarser, independent
+signal, biased toward refusing rather than under-refusing: a false positive here just refuses a legitimate
+write; a false negative would silently clobber real shared coordinates.
+
+**Caveats the owner accepted knowingly:** a user can manually clip/unclip the survey point, or manually run
+"Specify Coordinates at Point," without ever acquiring or publishing anything, so `Clipped` and
+position-versus-origin are both heuristics, not a certified "ran Acquire/Publish Coordinates" bit; a document
+could theoretically acquire coordinates that happen to coincide with the internal origin, producing a false
+negative. Step 14.6 of the manual evidence plan below exists to probe this against a real document.
+
+### Why `Write` also sets `Clipped`
+
+Without this line, the detection proxy could be silently defeated by SolidGround's **own** prior write:
+`SetProjectPosition` changes the `ProjectLocation` transform, not the survey point's own internal-coordinate
+`Position` (confirmed by `BasePoint.SharedPosition`'s own doc comment). So after a `SetProjectPosition`-only
+write, the survey point's `Position` would most likely still read `(0,0,0)`; if `Clipped` also stayed `false`
+(unconfirmed by any documentation source), `LooksAlreadyCoordinated` would keep reporting "never coordinated"
+even on a document SolidGround itself just wrote real shared coordinates to — directly contradicting this
+design's own non-goal that the opt-in never offers to overwrite. Setting `Clipped = true` explicitly, rather
+than trusting an unconfirmed automatic side effect, removes the dependency on that unverified assumption
+entirely.
+
+### Settings: the shared-coordinates opt-in
+
+Expressed as a settings flag until Issue #31's dialog hosts a real checkbox, strict-decoded, default `false`,
+following `RevitTargetSettings`'s own existing `level`/`toposolidType` JsonNode-split precedent — as a new
+sibling record, not folded into `RevitTargetSettings` (whose own doc comment scopes it to Level/ToposolidType
+name overrides, a different concern).
+
+`src/SolidGround.Revit/Settings/RevitSharedCoordinatesSettings.cs`:
+
+```csharp
+internal sealed record RevitSharedCoordinatesSettings(bool WriteIfAbsent);
+```
+
+`RevitSettings.cs` gains a third property: `internal sealed record RevitSettings(TerrainRequestSettings
+Request, RevitTargetSettings Target, RevitSharedCoordinatesSettings SharedCoordinates);`. `RevitSettingsIo
+.TryLoad` reads and removes `"sharedCoordinates"` the same way it already reads/removes `"level"`/
+`"toposolidType"`. `RevitSettingsIo.TemplateJson` gains one new commented block, placed after `toposolidType`,
+before `output` — this exact text is kept byte for byte in sync across `RevitSettingsIo.cs`,
+`revit-toposolid-creation.md`'s "Template" section, and `TerrainRequestSettingsTests.cs`'s `ShippedTemplateText`:
+
+```jsonc
+  // "writeIfAbsent": true lets SolidGround write this run's terrain origin as this model's shared
+  // coordinates (ActiveProjectLocation), but ONLY when the model has none yet -- Preflight refuses when it
+  // looks like the model already has shared coordinates set. Default false: unchanged from Issue #15.
+  "sharedCoordinates": { "writeIfAbsent": false },
+```
+
+### Preflight refusal (Stage 1, `RunDocumentPreflight`)
+
+A new step, placed after the Level/ToposolidType/`Revit.ini` checks and before `OrphanCheck.Capture` (error
+catalogue row 9b, alongside row 9a's own "Preflight-only, pre-transaction, machine/document-state-dependent
+refusal" precedent) — accumulates into `problems` like every other check in that stage, no early return:
+
+```csharp
+if (settings.SharedCoordinates.WriteIfAbsent && SharedCoordinatesDetector.LooksAlreadyCoordinated(document))
+{
+    problems.Add(
+        "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared " +
+        "coordinates set (its survey point is not at the internal origin, is clipped, or the model already " +
+        "has more than one ProjectLocation). SolidGround will not overwrite existing shared coordinates. Set " +
+        "sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates.");
+}
+```
+
+`RunDocumentPreflight` also reads and logs the two new tolerances here, stored on the widened `DocumentContext`
+record (new fields `ShortCurveToleranceInternal`, `VertexToleranceInternal`, alongside the existing
+`NativeToposolidMaxPointThreshold`).
+
+### The write itself and its source value
+
+The value written is this run's own terrain local-frame origin (owner decision 2) — the same projected source
+coordinate already in the placement record's `localOrigin.sourceX/sourceY/sourceElevation` — at angle = 0.
+`document.ActiveProjectLocation.SetProjectPosition(XYZ.Zero, position)`: passing `XYZ.Zero` as the point means
+"Revit's internal origin becomes (EW, NS, Elevation) in shared coordinates," exactly SolidGround's own local
+frame's origin convention (`LocalCoordinateFrame.ToLocal`/`ToLocalHorizontal` subtract `Origin`, so local
+`(0,0,0)` already *is* the terrain's source origin).
+
+**Zero rotation, stated plainly.** `angle = 0` means SolidGround computes no grid-convergence correction
+anywhere today, so this design treats the terrain's projected grid north — the source projected CRS's own
+north, e.g. UTM zone 15N grid north for the example site — as Revit's `Angle`-from-True-North reference. Grid
+north and true north coincide only exactly on a projection's own central meridian and diverge (by the real-world
+grid convergence angle) everywhere else; SolidGround neither computes nor corrects for that divergence, so a
+model positioned this way is anchored correctly in horizontal/vertical position but its true-north rotation
+carries whatever small error the site's own distance from the UTM zone's central meridian implies.
+
+**Elevation is written, not left at Revit's default.** `ProjectPosition`'s 4-argument constructor is atomic
+across `EastWest`/`NorthSouth`/`Elevation`/`Angle` — there is no partial-axis overload. AGENTS.md's "Data and
+numeric contracts" already requires SolidGround to carry the original offset, CRS, datum, and unit through
+provenance and to reject any workflow that cannot reconstruct source coordinates from local coordinates plus
+metadata — a rule this design reads as applying to every axis, not only the horizontal two. Leaving `Elevation`
+at an arbitrary default while writing real `EastWest`/`NorthSouth` values would produce a shared-coordinates
+anchor reversible on two axes and silently wrong on the third.
+
+**Review fix: only attempted once the toposolid and property line have already verified, with no blocking
+Revit failure pending.** `RunTransaction` gates this whole block on `verification.Passed &&
+propertyLineVerification.Passed && !failureLog.HasBlockingFailure`, in addition to
+`sharedCoordinates.writeIfAbsent`. Without this guard, a `SharedCoordinatesWriteException` thrown from inside
+this block would be caught by the widened Stage-5 catch clause (see "Transaction flow" above), which selects its
+headline purely from the caught exception's runtime type and never inspects `verification`/
+`propertyLineVerification` — masking an already-known, higher-priority toposolid or property-line verification
+failure behind the lower-priority shared-coordinates message, contrary to this note's own fixed
+toposolid/property-line/shared-coordinates/blocking-failure order. Skipping the write once a higher-priority
+check has already failed leaves `sharedCoordinatesVerification` at its passing sentinel, so the ordered check in
+"Transaction flow" still reports the true, first cause.
+
+**Why a second `document.Regenerate()` call is required before verification.** Whether Revit's internal
+`ProjectLocation` transform recalculation `SetProjectPosition`'s own remarks describe is applied lazily
+(needing `Regenerate()`) or immediately is not stated by any documentation source found. Rather than depend on
+an unconfirmed same-transaction read-after-write assumption, `Write` is followed by `document.Regenerate()`
+before `VerifyWritten` reads it back — mirroring the established Create-then-Regenerate-then-Verify pattern
+already used for the `Toposolid` and `PropertyLine`. Manual evidence Step 14.5 records which explanation (needed
+vs. already-reflected) was actually true, though the code no longer depends on the answer either way.
+
+### Verifying and recording the zero-rotation value
+
+`SharedCoordinatesWriter.VerifyWritten` compares `EastWest`/`NorthSouth`/`Elevation` against `toleranceInternal`
+and `Angle` against a tight, exact-equality-scale tolerance (`1e-9` radians): `requested.Angle` is always
+exactly the `0d` literal `Write` passes, never a computed value, so this catches any unexpected Revit-side
+rotation side effect without being sensitive to the floating-point noise the other three axes already absorb.
+`PlacementSharedCoordinatesWriteRecord` carries `AngleInternal`, recorded Revit-internal (radians) rather than
+converted like its `EastWest`/`NorthSouth`/`Elevation` siblings (which stay in `Origin`'s own native unit,
+named by the paired `HorizontalUnit`/`VerticalUnit` fields, not always meters — see "Unit convention for the
+shared-coordinates value" below) — an angle has no length unit to convert into. Manual evidence Steps 14.5/14.6 explicitly instruct the tester to read back and
+record `ProjectLocation.GetProjectPosition(XYZ.Zero).Angle`, confirming it round-trips as exactly `0`.
+
+### Unit convention for the shared-coordinates value
+
+Three different units are in play for this one write, and conflating any two of them is the exact failure mode
+this section rules out:
+
+1. **`LocalCoordinateFrame.Origin`'s own unit — always the source projected/vertical reference's own native
+   unit, never `OutputUnit`, and NOT always meters.** `Origin` is `LocalCoordinateFrame`'s own constructor
+   argument, stored untouched; only `ToLocal`/`ToLocalHorizontal` apply `OutputUnit`, and neither is ever called
+   on `Origin` itself. For `fetch` mode's `NorthAmericanUtmWellKnownText` UTM zones paired with the NAVD88
+   vertical reference, that native unit is meters for both axes — but `process` mode parses its horizontal
+   reference from a user-supplied `.prj` (which can declare a non-metric projected unit, for example a State
+   Plane zone in US survey feet or international feet — `WellKnownTextReferenceParser`'s own
+   `RecognizesTheUsSurveyFootConversionFactor`/`RecognizesTheInternationalFootConversionFactor` tests) and its
+   vertical unit from `process.verticalUnit`, either of which can be a foot unit. The code below never hardcodes
+   meters — it reads the unit from the reference itself, exactly because this case is real.
+2. **The pipeline's own `OutputUnit` (default `LengthUnit.UsSurveyFoot`) — a completely different value, feeding
+   a completely different conversion.** `OutputUnit` governs only the boundary/point coordinates
+   `BoundaryGeometryBuilder.BuildPoints`/`BuildProfiles` build from `LocalCoordinateFrame.ToLocal`/
+   `ToLocalHorizontal`'s already-shifted results. It has no bearing on `Origin`, and must never be reached for
+   this write.
+3. **`ProjectPosition.EastWest`/`NorthSouth`/`Elevation` — Revit's own internal length representation,
+   documented "measured in decimal feet," never independently assumed to equal a specific real-world foot.**
+   This design never converts a `double` into Revit-internal units by any means other than Revit's own
+   `UnitUtils.ConvertToInternalUnits(value, forgeTypeId)`, always tagging `value` with the `ForgeTypeId`
+   matching *that value's own true unit*.
+
+**The exact conversion.** `origin.X`/`.Y` convert via `RevitUnitConversion.ToInternal(value, horizontalUnit)`;
+`origin.Elevation` converts via `RevitUnitConversion.ToInternal(value, verticalUnit)` — where
+`horizontalUnit`/`verticalUnit` are `Origin`'s own native units, obtained from `SharedCoordinateOrigin.Resolve`,
+**never** `context.Settings.Request.OutputUnit`/the Stage 4 `revitUnit` local — the single most likely
+implementer mistake here, since `revitUnit`/`OutputUnit` are already the unit values sitting in scope for
+everything else `RunTransaction` does. Getting this wrong would silently misinterpret a projected-CRS meters
+value as if it were already in US survey feet (the shipped default `OutputUnit`) before handing it to
+`UnitUtils.ConvertToInternalUnits`, corrupting the shared-coordinates write by a factor of `1200/3937 ≈
+0.3048006` with no exception anywhere.
+
+`src/SolidGround.Core/Transformations/SharedCoordinateOrigin.cs` (new, Revit-free) resolves this once so no
+Revit-side call site has to re-derive it:
+
+```csharp
+public static class SharedCoordinateOrigin
+{
+    public readonly record struct Resolved(Coordinate3D Origin, LengthUnit HorizontalUnit, LengthUnit VerticalUnit);
+
+    public static Resolved Resolve(LocalCoordinateFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        LengthUnit horizontalUnit = frame.ProjectedHorizontalReference.Unit.LinearUnit!.Value;
+        return new Resolved(frame.Origin, horizontalUnit, frame.VerticalReference.Unit);
+    }
+}
+```
+
+The Revit-side call site (`CreateToposolidCommand.RunTransaction`):
+
+```csharp
+SharedCoordinateOrigin.Resolved resolvedOrigin = SharedCoordinateOrigin.Resolve(outcome.Payload.Provenance.LocalFrame);
+double eastWestInternal = RevitUnitConversion.ToInternal(resolvedOrigin.Origin.X, resolvedOrigin.HorizontalUnit);
+double northSouthInternal = RevitUnitConversion.ToInternal(resolvedOrigin.Origin.Y, resolvedOrigin.HorizontalUnit);
+double elevationInternal = RevitUnitConversion.ToInternal(resolvedOrigin.Origin.Elevation, resolvedOrigin.VerticalUnit);
+```
+
+See "Tests" below for `SharedCoordinateOriginTests`, which pins this helper's own contract against exact
+numbers, including the US survey foot case specifically (the shipped default `OutputUnit`, and therefore the
+value most likely to be reached for by mistake).
+
+### Post-commit reporting (`ReportSuccess`, Stage 6)
+
+`ReportSuccess` branches on `draft.SharedCoordinatesWrite.Attempted`: when `false` (the default, common path),
+`OrphanCheck.Unchanged` runs exactly as before Issue #30 — completely unchanged behavior for the off-by-default
+path. When `true`, it skips `Unchanged`'s comparison (which would otherwise misreport the intended write as an
+"unexpected change") and logs the new position directly instead, reading it back fresh via
+`context.Document.ActiveProjectLocation.GetProjectPosition(XYZ.Zero)`. The placement record's
+`sharedCoordinatesStatement` field is likewise two-valued now: the unchanged sentence when the opt-in never
+fires, or a new sentence naming that SolidGround wrote shared coordinates this run, when it does — and the
+success dialog's own body text is now built from that same `draft.SharedCoordinatesStatement` field instead of
+carrying a second, independent, hardcoded copy of the disclaimer sentence, so the two can never drift apart.
+
+The success dialog also states the `PropertyLine` outcome, computed at render time from `draft.PropertyLine`
+(the same structural field `BuildPlacementDraft` already threads through), placed as its own line immediately
+after "Points retained: ..." and before the export-bundle path line:
+
+```csharp
+string propertyLineStatement = draft.PropertyLine.Created
+    ? $"Property line: element id {draft.PropertyLine.ElementId!.Value}."
+    : "Property line: not created (this area of interest is not a parcel boundary).";
+```
+
+Unlike `sharedCoordinatesStatement` (a free-text sentence that is itself part of the persisted schema,
+inherited from Issue #15), the placement record's JSON never stores this sentence — only `propertyLine`'s own
+structural fields (`created`/`elementId`/`areaInternal`) are persisted; a script reading the JSON checks
+`propertyLine.created`, never dialog prose.
+
+## Settings file reference — field table addition
+
+| JSON path | Type | Required | Default | Validation |
+| --- | --- | --- | --- | --- |
+| `sharedCoordinates.writeIfAbsent` | boolean | no | `false` | none beyond JSON boolean decode; Preflight (row 9b) refuses the *run*, not the settings file, when `true` and the document already looks coordinated |
+
+## Error catalogue extension
+
+| # | Scenario | Stage | `Result` | What is shown |
+| --- | --- | --- | --- | --- |
+| 9b | `sharedCoordinates.writeIfAbsent` is `true` and `SharedCoordinatesDetector.LooksAlreadyCoordinated` is `true` | Doc Preflight | Cancelled | shared dialog; the exact message quoted above |
+| 16b | `PropertyLine.IsValidBoundary(propertyLineProfiles)` returns `false` (**parcel AOI only**; structurally unreachable for a bounding-box/radius run) | Geometry construction | Cancelled | same "could not build a valid boundary" headline as row 13/16 |
+| 18b | `PostCreationVerification.VerifyPropertyLine` fails, not closed / non-positive area (**parcel AOI only**, same reason) | Transaction | Cancelled if `RolledBack`, else Failed | "The created property line did not verify; the change was undone." + detail |
+| 18c | `SharedCoordinatesWriter.VerifyWritten` fails | Transaction | Cancelled if `RolledBack`, else Failed | "The shared-coordinates write did not verify; the change was undone." + requested-vs-read-back detail |
+| 20a | `PropertyLine.Create` throws (`PropertyLineCreationException`) (**parcel AOI only**, same reason) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the generated property line boundary." + inner exception message |
+| 20b | `SharedCoordinatesWriter.Write` throws (`SharedCoordinatesWriteException`) (opt-in only; review fix) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the shared-coordinates write." + inner exception message |
+
+No new `Result`-derivation branch: every new row reuses the existing `transaction.HasEnded() ?
+transaction.GetStatus() : transaction.RollBack()` → `Cancelled` if `RolledBack` else `Failed` policy, exactly
+like Issue #16's own rows 21a-21c. Rows 16b, 18b, and 20a apply only to a parcel AOI run: a bounding-box/radius
+run never calls `PostCreationVerification.BoundaryIsValidPropertyLine`, `PropertyLineCreationService.Create`,
+or `PostCreationVerification.VerifyPropertyLine` at all, so none of these three rows can fire for it. Row 20b
+applies only when `sharedCoordinates.writeIfAbsent` is `true`: the opt-in off path never calls
+`SharedCoordinatesWriter.Write` at all, so `SharedCoordinatesWriteException` can structurally never be thrown
+for it. No new row exists for "a bounding-box/radius AOI creates no PropertyLine": that is not an error at all
+(row 26, the success row, covers it).
+
+## Placement record schema
+
+Schema-version bump **2 → 3** (a counter independent of `TerrainProvenance.CurrentSchemaVersion` and of the
+Extensible Storage schema's own version — three separate counters that share a field name). Two new top-level
+objects, appended after `extensibleStorage`:
+
+```jsonc
+"propertyLine": { "created": true, "elementId": 123457, "areaInternal": 1652.34 },
+// non-parcel AOI: "propertyLine": { "created": false, "elementId": null, "areaInternal": null }
+"sharedCoordinatesWrite": {
+  "attempted": false
+  // when true: "eastWest": 449674.0, "northSouth": 4604563.0, "elevation": 183.10, "angleInternal": 0.0,
+  //            "horizontalUnit": "meter", "verticalUnit": "meter", "verified": true
+}
+```
+
+New C# types (`SolidGround.Core.Provenance`, alongside `PlacementRecord.cs`'s existing sibling records):
+
+```csharp
+public sealed record PlacementPropertyLineRecord(bool Created, long? ElementId, double? AreaInternal);
+
+public sealed record PlacementSharedCoordinatesWriteRecord(
+    bool Attempted, double? EastWest, double? NorthSouth, double? Elevation,
+    double? AngleInternal, string? HorizontalUnit, string? VerticalUnit, bool? Verified);
+```
+
+`PlacementRecordDraft`/`PlacementRecord` each gain `PlacementPropertyLineRecord PropertyLine` and
+`PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite` — neither is ever itself null; `Created`/
+`Attempted` each carry their own off/on distinction, matching one identical shape for both fields, and matching
+this repository's own established rendering idiom (a nested object that is always written, with presence/absence
+signaled by a field inside it — never an entire top-level nested object silently omitted).
+`PlacementPropertyLineRecord.AreaInternal` keeps this schema's existing `*Internal` suffix (matching
+`boundaryPlaneElevation.constantZInternal`) because `PropertyLine.Area`'s own doc comment states only its
+closed-loop-detection meaning, not an explicit unit sentence.
+
+`sharedCoordinatesWrite.eastWest`/`northSouth`/`elevation` are recorded in `Origin`'s own native unit — named by
+the paired `horizontalUnit`/`verticalUnit` fields, not always meters (see "Unit convention for the
+shared-coordinates value" above) — not the raw Revit-internal `double` actually passed to `ProjectPosition`'s
+constructor: the identical values already recorded in this same document's `localOrigin.sourceX`/`sourceY`/
+`sourceElevation`, chosen so a human or script reader can compare the two side by side without first learning
+Revit's internal-foot convention. `sharedCoordinatesWrite.angleInternal` is the one exception, recorded
+Revit-internal (radians), never converted.
+`sharedCoordinatesWrite.verified`, whenever `attempted` is `true`, is always `true` (never `false`) in any
+placement record that reaches disk: a `false` `sharedCoordinatesVerification` rolls back the whole transaction,
+so no placement record is ever written for that run at all. Whenever `attempted` is `false` — the shipped
+default — `verified` is `null`, like every other detail field in this object.
+
+## Non-goals
+
+- No WPF dialog or real checkbox UI — that is #31's own scope.
+- No true-north/grid-convergence angle computation — `ProjectPosition.Angle` is always written as `0` (see
+  "Zero rotation, stated plainly" above).
+- No Extensible Storage provenance extension to the `PropertyLine` element — Issue #16's schema stays
+  Toposolid-only; the placement record is the lighter-weight mechanism this issue uses instead.
+- No new Core-side polygon-vs-polygon (cross-loop) intersection check — relies on `PropertyLine
+  .IsValidBoundary`'s own documented, Revit-verified cross-loop check instead of duplicating it in Core.
+- No ability to *move* or *reset* existing shared coordinates — the opt-in only ever writes when Preflight's
+  proxy says none exist yet; it never offers to overwrite.
+- No `PropertyLine` for a bounding-box or radius AOI (owner decision 3): not a deferred feature; the owner
+  considered and rejected labeling an arbitrary bounding-box rectangle or radius-circle approximation a
+  "property line" at all.
+- Does not touch Issue #33's `TerrainProvenance`/`AddressParcelProvenance` work, the Extensible Storage schema,
+  ribbon/icons, or packaging/signing — all unrelated and unchanged.
+
+## Tests
+
+**`tests/SolidGround.Tests/LocalBoundaryCleanerTests.cs`** (Stage 1, Core-only): dedupe of exact/near-duplicate
+cyclically-consecutive vertices including the implicit wrap-around closing edge, collapse of collinear/near-
+collinear mid-edge vertices, a genuine sharp corner/spike preserved, shell-and-hole independence, multipolygon
+independence, multi-pass convergence, the `Math.Max(vertexTolerance, minimumEdgeLength)` gap-band case,
+determinism, integration with the unchanged `LocalBoundaryValidator.Validate` (a degenerate result still
+rejected, a true self-intersection still rejected, a combined messy fixture still passes once cleaned), and
+`ArgumentNullException` for a null boundary. `CoreExposesAPublicLocalBoundaryCleaner` (an architecture-style
+reflection guard, placed in this file rather than `ArchitectureTests.cs` per that file's own additive-only
+scope).
+
+**`tests/SolidGround.Tests/LocalBoundaryValidatorTests.cs`** (Stage 1, additive): `ValidateRejectsAnEdgeShorterThanTheSuppliedMinimumEdgeLength`,
+`ValidateAcceptsWhenMinimumEdgeLengthIsNull`, an aggregated-count case, and a case combined with the existing
+zero-length check.
+
+**`tests/SolidGround.Tests/SharedCoordinateOriginTests.cs`** (new, Core-only, Revit-free): `Resolve` returns
+`Origin` and its own native units unchanged; `Resolve` ignores `OutputUnit` even when `OutputUnit` is the
+shipped default (US survey foot) — the specific unit-mixup failure mode "Unit convention for the
+shared-coordinates value" names; `Resolve` throws `ArgumentNullException` for a null frame.
+
+**`tests/SolidGround.Tests/TerrainRequestSettingsTests.cs`** (additive): `ShippedTemplateText` gains the
+identical new `sharedCoordinates` block; `JsonOptionsDecodesTheShippedTemplateTextVerbatim` adds
+`requestShapedPortion.Remove("sharedCoordinates")` alongside its existing `level`/`toposolidType` removals.
+
+**`tests/SolidGround.Tests/PlacementRecordRendererTests.cs`** (additive): `SchemaVersionIsNowThree` (replacing
+`SchemaVersionIsNowTwo`); the document-property-order test gains `propertyLine`/`sharedCoordinatesWrite`; new
+tests pin both records' rendering in the not-created/not-attempted default state (every detail field explicit
+JSON `null`) and in the created/attempted state (every field populated, including the zero-rotation
+`angleInternal`).
+
+**`tests/SolidGround.Tests/RevitHostFilesTests.cs`** (additive, plain-text scans of `CreateToposolidCommand.cs`/
+`RevitSettingsIo.cs`, matching the file's established `RevitIni`-guard precedent — the only way to backstop a
+fact only a live Revit process could otherwise exercise, from a test assembly that cannot reference the Revit
+API at all):
+
+- `CreateToposolidCommandCleansTheBoundaryBeforeValidatingIt` — `LocalBoundaryCleaner.Clean(` appears before
+  `LocalBoundaryValidator.Validate(` (the trailing `(` pins each to its one real call site, not a prose mention
+  of the same method name in a doc comment elsewhere in the file).
+- `CreateToposolidCommandCreatesThePropertyLineInsideTheSameTransactionAsTheToposolid` — both
+  `ToposolidCreationService.Create(` and `PropertyLineCreationService.Create(` appear before the real
+  `transaction.Commit();` (the trailing `;` excludes this file's own doc comment, which mentions
+  `transaction.Commit()` with no trailing semicolon, well before the real call). **Review fix:** both calls are
+  also asserted to appear *after* the file's one `transaction.Start()` occurrence (inside `RunTransaction`,
+  Stage 5) — not only before `transaction.Commit();` — so a regression that hoisted either creation call back
+  into Stage 4 (geometry construction, pre-transaction) would still satisfy the two "before commit" checks
+  alone, since the real `transaction.Commit();` always sits later in the file regardless of where in Stage 4
+  the call moved to; both bounds together pin AC1's "in one transaction" guarantee, not just "somewhere before
+  commit".
+- `CreateToposolidCommandGatesPropertyLineCreationToParcelAreasOfInterest` — deliberately does **not** merely
+  check that `AreaOfInterestKind.Parcel` appears somewhere between the Stage 4 and Stage 5 call sites: that
+  literal substring already occurs, unrelated to this issue, inside `RunDocumentPreflight`'s own pre-existing
+  parcel-geometry-file-reading logic, which sits in that same wide range regardless of anything this issue
+  adds — a `PropertyLine` created unconditionally would still pass a check written that way. Instead asserts
+  that the actual gate identifier, `isParcelAoi` (a name this issue introduces new, with no pre-existing
+  occurrence to confuse the check), appears within a small, fixed character window immediately preceding each
+  of the two real call sites.
+- `SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated` — the detector call and the
+  refusal message text appear in `CreateToposolidCommand.cs`, both before the real `RunTransaction` method
+  (review fix: not merely present anywhere in the file, so a future edit that relocated this identical check
+  into the transaction stage would fail this test); the shipped template text in `RevitSettingsIo.cs` contains
+  `"sharedCoordinates": { "writeIfAbsent": false }` verbatim. **Second review fix:** the two checks above only
+  pin the detector call's *position* relative to `RunTransaction`, not whether it is actually conditioned on
+  the opt-in setting at all — a regression that always ran the detector (or inverted/widened `WriteIfAbsent`
+  so the detector ran regardless of the setting) would leave both untouched, while `RunTransaction`'s own write
+  gate never re-checks "already coordinated" (only `WriteIfAbsent` again). A further assertion now anchors the
+  exact, non-negated `if (settings.SharedCoordinates.WriteIfAbsent)` gate within a small, fixed window
+  immediately preceding the detector call.
+- `CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting` (review fix) — mirrors
+  `AssertGatedByIsParcelAoi`'s own technique: asserts `SharedCoordinates.WriteIfAbsent` appears within a small,
+  fixed character window immediately preceding the real `SharedCoordinatesWriter.Write(` call site. **Second
+  review fix:** that bare property-name substring cannot by itself tell a correct, non-negated gate from one
+  that was inverted (`if (!context.Settings.SharedCoordinates.WriteIfAbsent && ...)`) or widened (the `&&`
+  immediately after `WriteIfAbsent` loosened to `||`) — neither mutation removes the substring. A further
+  assertion now anchors the exact, non-negated `if (context.Settings.SharedCoordinates.WriteIfAbsent && `
+  prefix, so a future edit that deleted, inverted, or widened that gate (AC3's own "off, no write" guarantee)
+  now fails this test instead of only being caught by the deferred manual Revit evidence session.
+- `CreateToposolidCommandCatchesSharedCoordinatesWriteExceptionAlongsideItsSiblings` (review fix) — asserts
+  `"or SharedCoordinatesWriteException)"` appears within a small, fixed character window (120 characters)
+  immediately after the catch filter's `ex is ToposolidCreationException or PropertyLineCreationException`
+  clause, so a regression that dropped this third exception type back out of the filter — reintroducing the
+  bug where a real `SharedCoordinatesWriter.Write` rejection fell through to the generic Stage-5 catch-all and
+  misattributed the failure to "the toposolid" (error catalogue row 20b) — is caught automatically instead of
+  only by the deferred manual Revit evidence session.
+- `SharedCoordinatesWriteUsesTheOriginsOwnNativeUnitNotOutputUnit` — backstops "Unit convention for the
+  shared-coordinates value"'s own named "single most likely implementer mistake": asserts
+  `SharedCoordinateOrigin.Resolve(` appears before `SharedCoordinatesWriter.Write(`, and that neither
+  `context.Settings.Request.OutputUnit` nor the bare identifier `revitUnit` appears in the source text between
+  them. The real conversion runs through `RevitUnitConversion.ToInternal`, which lives in `SolidGround.Revit`
+  and opens with `using Autodesk.Revit.DB;` — `SolidGround.Tests` can never reference it directly
+  (`TestAssemblyReferencesNeitherTheRevitApiNorTheRevitHostAssembly` forbids a `RevitAPI`/`SolidGround.Revit`
+  reference), so only this plain-text scan, not a Core-level unit test, can catch a regression at this exact
+  call site.
+
+Each of the last three checks above was verified, by deliberately mutating the shipped implementation and
+re-running the specific test, to actually fail against the broken version and pass again once reverted (not
+merely written to pass against the intended implementation without ever having been red). The two "Second
+review fix" gate-anchor assertions added above (in `SharedCoordinatesWriteDefaultsToOffAndPreflightRefusesWhenAlreadyCoordinated`
+and `CreateToposolidCommandGatesTheSharedCoordinatesWriteToTheOptInSetting`) were verified the same way against
+both an inverted gate and, for the latter, a widened (`&&` to `||`) gate: each mutation was confirmed to fail
+only the new assertion, with the pre-existing assertions in the same test still passing exactly as the review
+finding describes, and reverting was confirmed to restore a fully passing suite.
+
+## Manual evidence plan — Step 14 (continues Steps 1-8b, 9-13; settles AC4)
+
+Run first in `process` mode against the committed `example-site-synthetic.*` fixtures (opt-in off), then
+repeated with `sharedCoordinates.writeIfAbsent: true` against (a) a brand-new document and (b) a document
+already run once, by hand, through Revit's own "Specify Coordinates at a Point" or Acquire Coordinates.
+
+14.1. **Baseline creation (opt-in off), both AOI branches.**
+   - **1a — parcel AOI**, against the committed `example-site-synthetic-parcel.geojson`/`.wkt` fixture. Confirm
+     a `Toposolid` AND a `PropertyLine` both exist afterward, and `OrphanCheck`'s post-commit log line still
+     reads "unchanged," exactly as today. Confirm the success dialog's new line reads the element-id form and
+     the placement record's `propertyLine.created` is `true` with a matching `elementId`/`areaInternal`. Also
+     confirm the `PropertyLine`'s own boundary is geometrically congruent with the `Toposolid`'s (matching
+     footprint area/extent, e.g. via `PropertyLine.GetBoundary()`/`.Area` compared against the `Toposolid`'s own
+     boundary) — the first live confirmation that building two independent `IList<CurveLoop>` instances over
+     the identical inputs actually produces two consistent, correctly shaped elements. Also record the two
+     `AddInLog` lines this run now produces for the Revit-native tolerances: Stage 1 (Document Preflight) logs
+     `Application.ShortCurveTolerance`/`Application.VertexTolerance` against the reference Revit 2027
+     installation (raw internal-feet values), and Stage 3 (Geometry Preflight) separately logs the
+     `vertexTolerance`/`collinearityTolerance`/`minimumEdgeLength` this run actually used, converted into
+     `OutputUnit`.
+   - **1b — bounding-box AOI**, against a small `areaOfInterest.boundingBox` built from the example site's own
+     public coordinates (41.591194, -93.603806). Confirm a `Toposolid` is created and **no `PropertyLine`**
+     element exists afterward, that Preflight and the transaction show no problem or error of any kind, that
+     the success dialog's new line reads the "not created" sentence verbatim, and that the placement record's
+     `propertyLine` is `{"created": false}` with no `elementId`/`areaInternal` present. Repeat once more with a
+     `areaOfInterest.radius` AOI built from the same coordinates, confirming the identical "no PropertyLine"
+     outcome.
+14.2. **Save/reopen (1a's document).** Confirm the `PropertyLine` survives, with its boundary
+   (`GetBoundary()`/`Area`) unchanged.
+14.3. **Undo (1a's document).** One Ctrl+Z removes both the `Toposolid` and the `PropertyLine` together as a
+   single Undo entry; Redo brings both back together.
+14.4. **Rejected boundary rolls back both (parcel AOI only).** Force `PropertyLine.IsValidBoundary`/
+   `VerifyPropertyLine` to fail (an engineered self-intersecting multi-polygon parcel fixture); confirm neither
+   element exists afterward.
+14.5. **Opt-in write against a never-coordinated document.** Confirm `LooksAlreadyCoordinated` logs `false` at
+   Preflight, the run proceeds, and `ActiveProjectLocation.GetProjectPosition(XYZ.Zero)` afterward matches the
+   terrain's own recorded local origin (converted). Also read back and record `ProjectPosition.Angle`: confirm
+   it round-trips as exactly `0`; record it in the placement record's `sharedCoordinatesWrite.angleInternal`
+   field alongside the dialog/log evidence this step already captures. Also log whether
+   `SharedCoordinatesWriter.VerifyWritten`'s read-back matched on the first attempt (i.e., whether the
+   `document.Regenerate()` call between `Write` and `VerifyWritten` was actually load-bearing) — the code no
+   longer depends on this answer either way, but the session should record it.
+14.6. **Opt-in refusal against an already-coordinated document.** After a real, human-performed "Specify
+   Coordinates at a Point" (or Acquire Coordinates from a throwaway link) on a scratch document, run with the
+   opt-in on; confirm Preflight refuses (exact dialog text), `Result.Cancelled`, and the document's shared
+   coordinates are provably unchanged afterward — including `ProjectPosition.Angle`. This step empirically
+   confirms or falsifies the detection proxy — record the exact before/after values regardless of outcome. Also
+   run the opt-in a second time against the Step 14.5 document (SolidGround's own prior write, not a manual UI
+   action) to confirm the second run correctly refuses because `SharedCoordinatesWriter.Write`'s `Clipped =
+   true` line took effect.
+14.7. **Private real-property confirmation.** One full run (opt-in off) against a real property the operator
+   has legitimate access to, performed entirely privately; only "testing was done," never a location,
+   coordinate, or screenshot, may be recorded in this repository.
+
+Record every dialog verbatim, matching the dialog-verbatim discipline `revit-toposolid-creation.md`'s own
+Steps 5/7/8 establish.
+
+## Known limitations
+
+- **The shared-coordinates detection proxy is a heuristic, not a certified fact** (owner decision 1): a user
+  who manually clips/unclips the survey point, or runs "Specify Coordinates at Point" without ever
+  acquiring/publishing, is indistinguishable from a genuinely never-coordinated document; the theoretical
+  acquire-at-exactly-the-origin case would also produce a false negative. Accepted subject to Step 14.6's live
+  confirmation.
+- **`ProjectPosition.Angle` is always `0`; grid-convergence correction is not computed.** See "Zero rotation,
+  stated plainly" above; a model's true-north rotation carries whatever error the site's distance from its UTM
+  zone's central meridian implies.
+- **Cross-polygon self-intersection for a multi-polygon parcel** relies entirely on `PropertyLine
+  .IsValidBoundary`'s own documented, Revit-verified check; no known practical case in this repository's
+  current fixtures triggers it, but it is not independently re-verified in Core.
+- **This closes the pre-existing "`Line.CreateBound`'s short-curve tolerance is not independently validated"**
+  follow-up `docs/architecture/revit-toposolid-creation.md`'s "Known limitations" section previously recorded:
+  `LocalBoundaryCleaner.Clean`'s `minimumEdgeLength` reconciliation (`Math.Max(vertexTolerance,
+  minimumEdgeLength)`) now dedupes at least as aggressively as `LocalBoundaryValidator.Validate`'s own
+  equivalent check rejects, so an edge shorter than `Application.ShortCurveTolerance` but not exactly zero is
+  now caught, and repaired when possible, before `BoundaryGeometryBuilder.BuildProfiles` is ever reached.
+
+## What this note does not do
+
+Does not begin PH3-4 (#31, the WPF dialog) or Issue #33 (`TerrainProvenance` schema v3, address/parcel
+provenance) — both stay separate, already-scoped issues. Off (`sharedCoordinates.writeIfAbsent: false`, the
+shipped default), behavior is unchanged from Issue #15/#16/#19/#17 except that `LocalBoundaryCleaner.Clean` now
+runs unconditionally ahead of `LocalBoundaryValidator.Validate` (repairing, never rejecting, messy-but-valid
+input) and a `PropertyLine` now also appears for a parcel AOI.

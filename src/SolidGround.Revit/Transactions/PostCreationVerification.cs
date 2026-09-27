@@ -159,6 +159,58 @@ internal static class PostCreationVerification
             $"({pointCount}); {cause}.";
     }
 
+    /// <summary>
+    /// Stage 4, pre-transaction (SolidGround Issue #30, PH3-3): mirrors <see cref="AllProfilesArePlanar"/>'s own
+    /// placement and <see cref="Result.Cancelled"/>-on-failure handling, called only for a parcel area of
+    /// interest, against a second, independently-built <see cref="CurveLoop"/> list -- never the one
+    /// <see cref="ToposolidCreationService.Create"/> already consumed. <see cref="PropertyLine.IsValidBoundary"/>
+    /// is a pure, static, <see cref="Document"/>-free check (verified in
+    /// docs/architecture/revit-property-line-and-shared-coordinates.md's "Revit 2027 API surface used (new
+    /// members, beyond `revit-toposolid-creation.md`'s existing table)" section): "the curve loops... should not
+    /// intersect with each other; and each loop is planar and lies on a plane parallel to the horizontal(XY) plane."
+    /// </summary>
+    internal static bool BoundaryIsValidPropertyLine(IList<CurveLoop> profiles, out string? problem)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        if (!PropertyLine.IsValidBoundary(profiles))
+        {
+            problem = "The generated property line boundary is not valid: its loops must not intersect one " +
+                "another, and each loop must be planar and parallel to the horizontal (XY) plane.";
+            return false;
+        }
+
+        problem = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Stage 5, post-create, inside the transaction (SolidGround Issue #30, PH3-3): a cheap sanity check
+    /// mirroring the Toposolid's own bounding-box check, using <see cref="PropertyLine.IsClosedLoop"/>/
+    /// <see cref="PropertyLine.Area"/> instead -- <see cref="PropertyLine"/> has no
+    /// <see cref="SlabShapeEditor"/>/vertex-count surface. <c>Area</c> is confirmed (installed-SDK reflection
+    /// plus its own doc comment) to report greater than zero if and only if the boundary is a closed loop, and
+    /// <c>-1</c> otherwise, so checking both together is defensive rather than redundant.
+    /// </summary>
+    internal static VerificationResult VerifyPropertyLine(PropertyLine propertyLine)
+    {
+        ArgumentNullException.ThrowIfNull(propertyLine);
+
+        bool closedLoop = propertyLine.IsClosedLoop();
+        double area = propertyLine.Area;
+        if (!closedLoop || area <= 0d)
+        {
+            return new VerificationResult(
+                false,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"The created property line is not a closed boundary with positive area (IsClosedLoop={closedLoop}, Area={area:R})."));
+        }
+
+        return new VerificationResult(
+            true, string.Create(CultureInfo.InvariantCulture, $"Property line closed with area {area:R} (Revit-internal units)."));
+    }
+
     private static bool Contains(BoundingBoxXYZ actual, BoundingBoxXYZ expected, double tolerance)
     {
         XYZ actualMin = actual.Min;

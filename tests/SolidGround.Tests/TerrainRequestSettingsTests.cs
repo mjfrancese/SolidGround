@@ -14,10 +14,12 @@ namespace SolidGround.Tests;
 public sealed class TerrainRequestSettingsTests
 {
     // The exact §4.3 shipped template, byte-for-byte, including its Revit-only `level`/`toposolidType` name
-    // overrides (RevitTargetSettings' own fields -- not part of TerrainRequestSettings at all). This
-    // Core-only test never references RevitSettings/RevitTargetSettings; JsonOptionsDecodesTheShippedTemplateTextVerbatim
-    // strips those two keys before decoding, simulating the split SolidGround.Revit's own settings I/O
-    // performs between the Request-shaped and Target-shaped portions of the one flat document.
+    // overrides (RevitTargetSettings' own fields) and `sharedCoordinates` opt-in (RevitSharedCoordinatesSettings'
+    // own field, SolidGround Issue #30, PH3-3) -- none part of TerrainRequestSettings at all. This Core-only
+    // test never references RevitSettings/RevitTargetSettings/RevitSharedCoordinatesSettings;
+    // JsonOptionsDecodesTheShippedTemplateTextVerbatim strips those three keys before decoding, simulating the
+    // split SolidGround.Revit's own settings I/O performs between the Request-shaped and Target-shaped/
+    // SharedCoordinates-shaped portions of the one flat document.
     private const string ShippedTemplateText = """
         // %ProgramData%\SolidGround\Revit\settings.json
         // SolidGround edits this file only to create it; it never rewrites an existing one.
@@ -57,6 +59,11 @@ public sealed class TerrainRequestSettingsTests
           "level": { "name": null },
           // Blank/null means: pick the first existing ToposolidType by name.
           "toposolidType": { "name": null },
+
+          // "writeIfAbsent": true lets SolidGround write this run's terrain origin as this model's shared
+          // coordinates (ActiveProjectLocation), but ONLY when the model has none yet -- Preflight refuses when it
+          // looks like the model already has shared coordinates set. Default false: unchanged from Issue #15.
+          "sharedCoordinates": { "writeIfAbsent": false },
 
           "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
 
@@ -408,9 +415,11 @@ public sealed class TerrainRequestSettingsTests
         JsonObject requestShapedPortion = Assert.IsType<JsonObject>(node);
         // "level"/"toposolidType" are RevitTargetSettings' own fields, not TerrainRequestSettings'; the real
         // RevitSettingsIo (Revit-side, SolidGround Issue #15 Stage 3) splits the one flat document the same
-        // way before decoding each half.
+        // way before decoding each half. "sharedCoordinates" is RevitSharedCoordinatesSettings' own field
+        // (SolidGround Issue #30, PH3-3), split out identically.
         requestShapedPortion.Remove("level");
         requestShapedPortion.Remove("toposolidType");
+        requestShapedPortion.Remove("sharedCoordinates");
 
         TerrainRequestSettings? settings = requestShapedPortion.Deserialize<TerrainRequestSettings>(TerrainRequestSettings.JsonOptions);
 

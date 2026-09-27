@@ -37,7 +37,8 @@ public static class LocalBoundaryValidator
     /// Validates <paramref name="boundary"/>'s own shape (every ring has at least three distinct vertices, no
     /// zero-length or otherwise duplicated cyclically-consecutive edge -- which also rejects a ring that still
     /// carries a redundant closing vertex equal to its first, since a stored <see cref="LocalBoundaryRing"/>
-    /// never repeats one, see orchestrator decision (a) -- no self-intersection, every hole inside its shell,
+    /// never repeats one, see docs/architecture/revit-toposolid-creation.md's "The ring closing-vertex
+    /// convention" section -- no self-intersection, every hole inside its shell,
     /// positive area) and <paramref name="retainedSamples"/> against it (no two retained samples share an
     /// (X, Y) position, every retained sample falls within <paramref name="containmentToleranceMeters"/> of
     /// the boundary, the retained count does not exceed <paramref name="pointBudget"/>, and the retained count

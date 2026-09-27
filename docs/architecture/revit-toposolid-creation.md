@@ -17,7 +17,12 @@ actually create the toposolid.
 
 Issue #15 ships **zero** Extensible Storage code (Issue #16's territory), no code-signing or packaging change
 (Issue #17's), and no ribbon-icon redesign (Issue #19's) beyond the button tooltip/long-description text
-update Issue #14's own scaffold note already anticipated.
+update Issue #14's own scaffold note already anticipated. It also ships no `PropertyLine` creation and no
+shared-coordinates write — Issue #30 (PH3-3)'s own territory, recorded in
+`docs/architecture/revit-property-line-and-shared-coordinates.md`, which amends this note's Command flow,
+Settings file reference, Error catalogue, Placement record schema, Unit conversion, and Known limitations
+sections in place (each amendment marked "Update, SolidGround Issue #30 (PH3-3)" at its point of change) rather
+than duplicating this note's own six-stage flow, transaction/rollback policy, or dialog helpers.
 
 ## Basis
 
@@ -312,6 +317,11 @@ documentation notes that `Commit()` itself auto-regenerates, so this separate, e
 to make the freshly created geometry visible to `PostCreationVerification.Verify` *before* `Commit()` runs, not
 as a redundant step.
 
+**Update, SolidGround Issue #30 (PH3-3):** this paragraph's "two `catch` clauses" description predates Issue
+#30's `PropertyLine`/shared-coordinates widening; see "Command flow" > "Stage 5 — Transaction" below for the
+current, three-exception-type clause and the ordered 4-way verification gate, and
+`docs/architecture/revit-property-line-and-shared-coordinates.md` for the full mechanism.
+
 ### Transaction status and the Result-code policy
 
 | Observed status | Meaning | `Result` |
@@ -368,6 +378,16 @@ their real-world definition, never an internal-unit correspondence. The code nev
 way; manual test step 8a item 3 below is the only thing that settles it. `PlacementUnitConversionRecord.RoundTripDelta`
 (`ConvertFromInternalUnits(ConvertToInternalUnits(1.0, id), id) - 1.0`) is a separate, automatic, every-run
 self-consistency check, not a substitute for that one-time probe.
+
+**Update, SolidGround Issue #30 (PH3-3).** The shared-coordinates opt-in write needs a *different* unit
+resolution than the one this section describes: `LocalCoordinateFrame.Origin` (the terrain's own local-frame
+source origin) is never itself converted through `OutputUnit`/`revitUnit` — only `ToLocal`/`ToLocalHorizontal`'s
+already-shifted results are. `SolidGround.Core.Transformations.SharedCoordinateOrigin.Resolve` resolves
+`Origin`'s own native horizontal/vertical units directly from the frame's own references, so that write's own
+Revit-side call site never has to (and never may) reach for `RevitUnitConversion.ToForgeTypeId(request.OutputUnit)`
+instead. See `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Unit convention for the
+shared-coordinates value" section for the full contract and the specific corruption failure mode it exists to
+rule out.
 
 ### No probe or test-only code ships in the add-in
 
@@ -463,6 +483,7 @@ always a decode failure (`System.Text.Json`'s own `required`-member support), ne
 | `simplification.coverageFloorFraction` | number | yes | `0.2` | `[0,1]` |
 | `level.name` | string? | no | `null` (lowest-elevation default rule) | non-blank must exact-match (ordinal) an existing `Level.Name` (Preflight) |
 | `toposolidType.name` | string? | no | `null` (first-by-ordinal-name default rule) | same shape as `level.name` |
+| `sharedCoordinates.writeIfAbsent` | boolean | no | `false` | none beyond JSON boolean decode; Preflight (row 9b) refuses the *run*, not the settings file, when `true` and the document already looks coordinated (SolidGround Issue #30, PH3-3 — see `docs/architecture/revit-property-line-and-shared-coordinates.md`) |
 | `output.directory` | string (path) | yes | — | non-blank; created if absent |
 | `output.baseName` | string | yes | `"terrain"` | `TerrainExportBaseName.Validate` |
 | `networkTimeoutSeconds` | integer | no | `300` | positive |
@@ -523,6 +544,11 @@ ever writes this file is when it is entirely absent:
   // Blank/null means: pick the first existing ToposolidType by name.
   "toposolidType": { "name": null },
 
+  // "writeIfAbsent": true lets SolidGround write this run's terrain origin as this model's shared
+  // coordinates (ActiveProjectLocation), but ONLY when the model has none yet -- Preflight refuses when it
+  // looks like the model already has shared coordinates set. Default false: unchanged from Issue #15.
+  "sharedCoordinates": { "writeIfAbsent": false },
+
   "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
 
   "networkTimeoutSeconds": 300
@@ -572,7 +598,7 @@ outer catch can have opened a `Transaction`.
 with three exceptions that return early (a structural problem makes every later check meaningless): no
 usable active document, the settings file having just been written, and a settings write or load failure.
 The no-document return is deferred until after settings load — steps 2 and 3 below still run with no
-document, so a missing document never masks a settings problem — which means steps 4 through 8 below only
+document, so a missing document never masks a settings problem — which means steps 4 through 9 below only
 run once step 1 found a usable, non-family document. In order:
 
 1. Active document present, not a family document.
@@ -605,10 +631,17 @@ run once step 1 found a usable, non-family document. In order:
    `NativeToposolidMaxPointThreshold` (or `null` if unavailable) is carried forward into
    `DocumentContext.NativeToposolidMaxPointThreshold` for Stage 5's `PostCreationVerification.Verify` call
    below, whether or not this step itself added a problem.
-9. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
-   baseline.
+9. **(SolidGround Issue #30, PH3-3.)** Reads and logs `commandData.Application.Application
+   .ShortCurveTolerance`/`.VertexTolerance` once (Revit-internal decimal feet), carried forward on
+   `DocumentContext` as `ShortCurveToleranceInternal`/`VertexToleranceInternal` for Stage 3's geometry cleanup.
+   Then, only when `sharedCoordinates.writeIfAbsent` is `true`: `SharedCoordinatesDetector
+   .LooksAlreadyCoordinated(document)` — error catalogue row 9b's refusal when the document already appears to
+   have shared coordinates set. See `docs/architecture/revit-property-line-and-shared-coordinates.md`'s
+   "Preflight refusal" and "Shared-coordinates detection" sections.
+10. If every check above accumulated zero problems: `OrphanCheck.Capture(document)` — the orphan-check
+    baseline.
 
-Steps 4 through 8 can all contribute problems to one combined dialog; only steps 2 and 3 short-circuit with a
+Steps 4 through 9 can all contribute problems to one combined dialog; only steps 2 and 3 short-circuit with a
 single-cause dialog, since nothing past a settings failure can be meaningfully checked. Any problem →
 `ShowProblemList("SolidGround Preflight found a problem.", ...)` (the existing `ProblemReportDialog.BuildRejectionBody`,
 capped at 8 inline lines, full list to the log folder) → `Result.Cancelled`. Nothing past this stage runs.
@@ -658,13 +691,24 @@ acquisition = Task.Run(() => RunPipelineAsync(request, wgs84Reference, aoi, cts.
 
 ### Stage 3 — Geometry Preflight (Core-only; still no Revit API call)
 
-1. `LocalBoundary boundary = LocalBoundaryFactory.FromPolygonalRegion(outcome.ClipResult.EffectiveRegion,
+1. `ForgeTypeId revitUnit = RevitUnitConversion.ToForgeTypeId(request.OutputUnit)` — **moved here from Stage 4**
+   (SolidGround Issue #30, PH3-3): it depends only on `request.OutputUnit`, not on any acquisition result, and
+   the geometry cleanup step below needs it too.
+2. `LocalBoundary rawBoundary = LocalBoundaryFactory.FromPolygonalRegion(outcome.ClipResult.EffectiveRegion,
    localFrame)` when a clip actually ran, else `LocalBoundaryFactory.FromGridEnvelope(grid, localFrame)` — the
    whole-grid fallback, which applies only when `process` mode configured no AOI at all (`fetch`/`run` always
    have one, since an AOI is how the fetch envelope itself is built).
-2. `LocalBoundaryValidator.Validate(boundary, payload.Samples, pointBudget, containmentTolerance: null)` — any
-   problem → one capped dialog ("SolidGround could not build a valid boundary."), `Result.Cancelled`. **Stop.**
-3. `new FileSystemTerrainExporter(output.Directory, output.BaseName).ExportAsync(payload, CancellationToken.None)`
+3. **(SolidGround Issue #30, PH3-3.)** `LocalBoundary boundary = LocalBoundaryCleaner.Clean(rawBoundary,
+   vertexTolerance, collinearityTolerance, minimumEdgeLength)` — unconditional, on every run regardless of AOI
+   kind or the shared-coordinates opt-in, using Stage 1's own `ShortCurveToleranceInternal`/
+   `VertexToleranceInternal` converted into `revitUnit`. See
+   `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Geometry cleanup contract" section.
+4. `LocalBoundaryValidator.Validate(boundary, payload.Samples, pointBudget, containmentTolerance,
+   minimumEdgeLength)` — `containmentTolerance` is `LocalBoundaryValidator.DefaultContainmentToleranceMeters`
+   converted into the request's own `OutputUnit` (SolidGround Issue #15 review fix), never a literal `null`.
+   Any problem → one capped dialog ("SolidGround could not build a valid boundary."), `Result.Cancelled`.
+   **Stop.**
+5. `new FileSystemTerrainExporter(output.Directory, output.BaseName).ExportAsync(payload, CancellationToken.None)`
    — written **before the transaction**, so a failure here leaves nothing Revit-side touched. A defensive
    `ArgumentException` from the constructor (Stage 1's settings validation should already have prevented this)
    gets its own headline, distinct from the boundary-validation text, per a review fix landed with the
@@ -672,31 +716,52 @@ acquisition = Task.Run(() => RunPipelineAsync(request, wgs84Reference, aoi, cts.
 
 ### Stage 4 — Geometry construction (pre-transaction; `Document` untouched)
 
-1. `ForgeTypeId revitUnit = RevitUnitConversion.ToForgeTypeId(request.OutputUnit)`.
-2. `IList<XYZ> points = BoundaryGeometryBuilder.BuildPoints(payload.Samples, revitUnit)`.
-3. `double constantZInternal = points.Min(p => p.Z)` — see "The boundary-Z decision" above. `payload.Samples`
+1. `IList<XYZ> points = BoundaryGeometryBuilder.BuildPoints(payload.Samples, revitUnit)`.
+2. `double constantZInternal = points.Min(p => p.Z)` — see "The boundary-Z decision" above. `payload.Samples`
    is guaranteed non-empty by this point (Stage 2's `TerrainProvenanceException` and Stage 3's
    `LocalBoundaryValidator` both already reject empty/insufficient terrain earlier), so this call is always
    safe.
-4. `IList<CurveLoop> profiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit)`.
-5. `BoundingBoxXYZ expected = BoundaryGeometryBuilder.ComputeExpectedBoundingBox(points)` — computed purely
+3. `IList<CurveLoop> profiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit)`.
+4. `BoundingBoxXYZ expected = BoundaryGeometryBuilder.ComputeExpectedBoundingBox(points)` — computed purely
    from `points`, never from `profiles`.
-6. `PostCreationVerification.AllProfilesArePlanar(profiles, out problem)` — a coding-error guard, not a
+5. `PostCreationVerification.AllProfilesArePlanar(profiles, out problem)` — a coding-error guard, not a
    data-driven one (see "The boundary-Z decision"); a failure here shows the same "could not build a valid
    boundary" headline as Stage 3's own boundary-validation dialog, `Result.Cancelled`. **Stop.**
+6. **(SolidGround Issue #30, PH3-3, parcel areas of interest only.)** `bool isParcelAoi =
+   context.Settings.Request.AreaOfInterest.Kind == AreaOfInterestKind.Parcel`; only when `true`, a second,
+   independently-built `IList<CurveLoop> propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(boundary,
+   constantZInternal, revitUnit)`, then `PostCreationVerification.BoundaryIsValidPropertyLine(propertyLineProfiles,
+   out problem)` — a failure here shows the same "could not build a valid boundary" headline, `Result.Cancelled`.
+   **Stop.** A non-parcel run never reaches this step at all. See
+   `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "PropertyLine creation (Revit)" section.
 
 ### Stage 5 — Transaction (the only stage that mutates `Document`)
 
 See "Transaction and failure handling" and "Transaction status and the Result-code policy" above for the
 full mechanism. Summary: `Transaction.Start()` not `Started` → immediate `Result.Cancelled`, nothing began.
-Otherwise: `ToposolidCreationService.Create` → `document.Regenerate()` → `PostCreationVerification.Verify`
-(and the failure-preprocessor's own blocking-failure flag) → the Issue #16 hook → `transaction.Commit()`,
-all inside one `try` whose two `catch` clauses derive `Result` from the observed `TransactionStatus`. A
-`Commit()` that returns anything but `Committed` is `Result.Failed` with no further `RollBack()` attempt (the
-transaction has already ended, one way or another). `Verify` also takes Stage 1's
+Otherwise: `ToposolidCreationService.Create` → (parcel AOI only) `PropertyLineCreationService.Create` →
+`document.Regenerate()` → `PostCreationVerification.Verify`/`VerifyPropertyLine` (and the failure-preprocessor's
+own blocking-failure flag) → (opt-in only) the shared-coordinates write and its own verification → the Issue
+#16 hook → `transaction.Commit()`, all inside one `try` whose `catch` clauses derive `Result` from the observed
+`TransactionStatus`. A `Commit()` that returns anything but `Committed` is `Result.Failed` with no further
+`RollBack()` attempt (the transaction has already ended, one way or another). `Verify` also takes Stage 1's
 `context.NativeToposolidMaxPointThreshold` (SolidGround Issue #15's 2026-09-21 threshold evidence, "Step 7"
 below): a vertex-count shortfall's message names that Preflight-parsed value as the likely cause only when the
 supplied point count actually exceeded it; otherwise the message says that setting is unlikely to be the cause.
+
+**Update, SolidGround Issue #30 (PH3-3).** The verification gate before `transaction.Commit()` widened from a
+2-way to an explicit, ordered 4-way choice: toposolid verification, then property-line verification (a fixed
+passing sentinel when no `PropertyLine` was attempted this run), then shared-coordinates-write verification (a
+fixed passing sentinel when the opt-in is off), then the blocking-Revit-failure fallback — in that fixed order.
+No partial element on rollback either way: the whole transaction (`Toposolid` + `PropertyLine`, when attempted,
++ any shared-coordinates write) rolls back together. **Review fix:** the shared-coordinates write itself is only
+attempted once the toposolid and property-line verifications have already passed and no blocking Revit failure
+is already known, so a write-time exception can never mask an already-known, higher-priority failure. The
+`catch (ToposolidCreationException ex)` clause widened to `catch (Exception ex) when (ex is
+ToposolidCreationException or PropertyLineCreationException or SharedCoordinatesWriteException)`, branching the
+dialog headline on the exception's runtime type. See
+`docs/architecture/revit-property-line-and-shared-coordinates.md` for the full mechanism, the `PropertyLine`
+AOI-kind gate, and the shared-coordinates detection/write/verification design.
 
 ### Stage 6 — Success (only after a confirmed `Committed` status)
 
@@ -707,11 +772,18 @@ is already durable by this point, so nothing here may flip `Result` away from `S
    written next to the export bundle. A write failure is logged only; the success dialog's own "Placement
    record:" line reads "could not be written (see log)" instead of a path.
 2. `OrphanCheck.Unchanged(before, OrphanCheck.Capture(document), out problem)` — logged (info if unchanged,
-   warning if not), never itself a rollback trigger, since the change is already durably committed.
+   warning if not), never itself a rollback trigger, since the change is already durably committed. **Update,
+   SolidGround Issue #30 (PH3-3):** skipped when `draft.SharedCoordinatesWrite.Attempted` is `true` (which
+   would otherwise misreport this run's own intended write as an unexpected change); the new position is
+   logged directly instead, read back fresh via `ActiveProjectLocation.GetProjectPosition(XYZ.Zero)`.
 3. `AddInLog.Info(...)` — build identity, Level/Type chosen, retained/original point counts, `toposolid.Id`.
-4. One `TaskDialog`: element id, Level/Type names, point count (retained of original, with budget), export
-   bundle path, placement-record path (or the "could not be written" line), log directory, and the retained
-   site-form/not-a-survey-instrument disclaimer.
+4. One `TaskDialog`: element id, Level/Type names, point count (retained of original, with budget), **a
+   `PropertyLine`-outcome line (SolidGround Issue #30, PH3-3, new)**, export bundle path, placement-record path
+   (or the "could not be written" line), log directory, and the site-form/not-a-survey-instrument disclaimer,
+   now followed by the **two-valued** `draft.SharedCoordinatesStatement` (SolidGround Issue #30, PH3-3: the
+   dialog body is built from this same field instead of carrying a second, independent, hardcoded copy of the
+   disclaimer sentence, so the two can never drift apart). See
+   `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Post-commit reporting" section.
 
 ## Placement record schema
 
@@ -723,7 +795,7 @@ serializer.
 ```jsonc
 {
   "schema": "solidground.revit-placement",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "createdUtc": "2026-09-21T04:00:00Z",
   "exportDocument": "terrain.solidground.json",
   "exportPoints": "terrain.points.csv",
@@ -758,7 +830,13 @@ serializer.
   },
   "sharedCoordinatesStatement": "SolidGround made no change to ActiveProjectLocation, the project base point, the survey point, or site location during this run.",
   "pointCounts": { "original": 48213, "retained": 14998, "budget": 15000 },
-  "extensibleStorage": { "schemaGuid": "bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e", "schemaVersion": 1 }
+  "extensibleStorage": { "schemaGuid": "bc03d923-8c8a-4a1e-bd2a-8e41f0a4ff6e", "schemaVersion": 1 },
+  "propertyLine": { "created": true, "elementId": 123457, "areaInternal": 1652.34 },
+  "sharedCoordinatesWrite": {
+    "attempted": false
+    // when true: "eastWest": 449674.0, "northSouth": 4604563.0, "elevation": 183.10, "angleInternal": 0.0,
+    //            "horizontalUnit": "meter", "verticalUnit": "meter", "verified": true
+  }
 }
 ```
 
@@ -770,9 +848,14 @@ described under "Unit conversion" above, always expected near zero.
 **Reversibility.** `source = localOrigin + (revitInternalPoint converted back to the output unit via
 unitConversion, then to source units via the same length-conversion component every other export uses)` —
 exactly `LocalCoordinateFrame.ToSource`, fed by `UnitUtils.ConvertFromInternalUnits`'s inverse.
-`ActiveProjectLocation`/`BasePoint`/`SurveyPoint`/`SiteLocation` are only ever **read**, never written,
-matching the locked design's "leave shared coordinates untouched" rule; `sharedCoordinatesStatement` states
-this explicitly rather than leaving it implicit.
+`ActiveProjectLocation`/`BasePoint`/`SurveyPoint` are only ever **read**, never written, matching the locked
+design's "leave shared coordinates untouched" rule, for every run before SolidGround Issue #30 and for every
+run today with `sharedCoordinates.writeIfAbsent` off — the shipped default; `SiteLocation` is never written by
+any run. **Update, SolidGround Issue #30 (PH3-3):** when that opt-in is on, and Preflight's row-9b proxy found
+the document uncoordinated, `SharedCoordinatesWriter.Write` does write `ActiveProjectLocation` and the survey
+`BasePoint` — see `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "The write itself and
+its source value" section. `sharedCoordinatesStatement` states whichever case actually applied, rather than
+leaving it implicit.
 
 **Repeated-run alignment.** `localOrigin.kind: "southwest"`/`"centroid"` reproduces the same origin between
 two runs only if the grid's own corner envelope is identical both times — exactly true for `process` mode
@@ -801,11 +884,32 @@ Core compile-time constants (`SolidGround.Core.Provenance.ExtensibleStorageProve
 — can reference them directly. See `docs/architecture/revit-extensible-storage-provenance.md` for the full
 36-field Extensible Storage schema this cross-reference points at.
 
+**Update, SolidGround Issue #30 (PH3-3):** the schema-version constant bumps **2 → 3** with the addition of two
+more new top-level objects, appended after `extensibleStorage`: `propertyLine` (`PlacementPropertyLineRecord`:
+`created`/`elementId`/`areaInternal`, the last two `null` whenever `created` is `false` — every non-parcel-AOI
+run) and `sharedCoordinatesWrite` (`PlacementSharedCoordinatesWriteRecord`: `attempted`/`eastWest`/`northSouth`/
+`elevation`/`angleInternal`/`horizontalUnit`/`verticalUnit`/`verified`, the last seven `null` whenever
+`attempted` is `false` — the shipped default). Neither is ever itself `null`; `created`/`attempted` each carry
+their own off/on distinction, matching this schema's own established "always-present nested object with a
+nullable leaf" idiom (for example `localOrigin.verticalReference.geoidModel`). `sharedCoordinatesWrite.eastWest`/
+`northSouth`/`elevation` are recorded in `localOrigin`'s own native unit — named by the paired `horizontalUnit`/
+`verticalUnit` fields, NOT always meters (a `process`-mode run can select a non-metric horizontal or vertical
+unit; see `docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Unit convention for the
+shared-coordinates value" section) — the identical values already recorded in `localOrigin.sourceX`/
+`sourceY`/`sourceElevation` — never the raw Revit-internal `double` actually passed to `ProjectPosition`'s
+constructor; `angleInternal` is the one exception, recorded Revit-internal (radians), since an angle has no
+length unit to convert into. `sharedCoordinatesWrite.verified`, whenever `attempted` is `true`, is always
+`true` (never `false`) in any placement record that reaches disk: a failed verification rolls back the whole
+transaction, so no placement record is ever written for that run at all. Whenever `attempted` is `false` — the
+shipped default — `verified` is `null`, like the other seven detail fields named above. See
+`docs/architecture/revit-property-line-and-shared-coordinates.md`'s "Placement record schema" section for the
+full field-by-field rationale.
+
 ## Error catalogue
 
 Doc Preflight (Stage 1) funnels every one of its own problems into **one shared dialog**,
 `"SolidGround Preflight found a problem."`, with the distinguishing text appearing as one capped inline
-problem line (never as a separate dialog headline) — rows 1 through 9a below all share that one `MainInstruction`.
+problem line (never as a separate dialog headline) — rows 1 through 9b below all share that one `MainInstruction`.
 Acquisition (Stage 2) funnels every one of its own exception types into a **shared headline per exception
 category** (rows 10 through 12), with the distinguishing text as the dialog's body detail. Every later stage
 shows its own distinct headline.
@@ -822,6 +926,7 @@ shows its own distinct headline.
 | 8 | `process.asc`/`.prj`/`.sourceJson` missing | Doc Preflight | Cancelled | shared dialog; one problem line per missing file |
 | 9 | Level / ToposolidType unresolved | Doc Preflight | Cancelled | shared dialog; one problem line per unresolved kind |
 | 9a | Configured `pointBudget` exceeds this machine's `Revit.ini` `NativeToposolidMaxPointThreshold` (added for Issue #15's 2026-09-21 threshold evidence; see "Step 7" and "Command flow" > "Stage 1") | Doc Preflight | Cancelled | shared dialog; "pointBudget \<N\> exceeds this machine's NativeToposolidMaxPointThreshold of \<M\> in '\<Revit.ini path\>'; lower pointBudget to at most \<M\> or raise the Revit.ini value within Autodesk's documented 10,000 to 50,000 range and restart Revit." Skipped (no problem line, just a log warning) when `Revit.ini` could not be read this session. |
+| 9b | `sharedCoordinates.writeIfAbsent` is `true` and `SharedCoordinatesDetector.LooksAlreadyCoordinated` is `true` (SolidGround Issue #30, PH3-3; see `docs/architecture/revit-property-line-and-shared-coordinates.md`) | Doc Preflight | Cancelled | shared dialog; "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared coordinates set (its survey point is not at the internal origin, is clipped, or the model already has more than one ProjectLocation). SolidGround will not overwrite existing shared coordinates. Set sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates." |
 | 10 | Network/OpenTopography failure, grid/transform reference mismatch, `GridClipException`, `TerrainProvenanceException`, or a translated vertical-reference `FormatException` | Acquisition | Cancelled | "SolidGround could not acquire terrain data." + `ex.Message` (already the translated sentence for the vertical-reference case) |
 | 11 | Fetch-mode timeout (`OperationCanceledException`) | Acquisition | Cancelled | "The request did not complete within \<N\> seconds." + a suggestion to raise `networkTimeoutSeconds` |
 | 12 | Local file unreadable (content read, not existence — an `IOException`) | Acquisition | Cancelled | "Could not read a configured file." + `ex.Message` |
@@ -829,19 +934,24 @@ shows its own distinct headline.
 | 14 | Output directory/base name invalid at export-construction time (defensive) | Geometry Preflight | Cancelled | "SolidGround could not use the configured output settings." + message |
 | 15 | Export-bundle write failure | Geometry Preflight | Cancelled | "The terrain export could not be written to '\<directory\>'." + `ex.Message` |
 | 16 | Defensive planarity check fails (construction bug only, never terrain data) | Geometry construction | Cancelled | same "could not build a valid boundary" headline as row 13 |
+| 16b | `PropertyLine.IsValidBoundary(propertyLineProfiles)` returns `false` (**parcel AOI only**, SolidGround Issue #30, PH3-3; structurally unreachable for a bounding-box/radius run) | Geometry construction | Cancelled | same "could not build a valid boundary" headline as row 13/16 |
 | 17 | `Transaction.Start()` not `Started` | Transaction | Cancelled | "SolidGround could not start a Revit transaction." + observed status |
 | 18 | Post-create bounding-box or slab-shape-vertex-count mismatch | Transaction | Cancelled if `RolledBack`, else Failed | "The created toposolid's geometry did not match the source data; the change was undone." (or the generic Failed text) + `PostCreationVerification`'s own detail — for a vertex-count shortfall specifically, the detail names Revit's own `Revit.ini` `NativeToposolidMaxPointThreshold` setting as the likely cause and states the remedy only when the supplied point count actually exceeded a Preflight-known threshold, per Step 7's evidence; otherwise it says that setting is unlikely to be the cause |
-| 19 | `IFailuresPreprocessor` observed a blocking (`Error`/`DocumentCorruption`) failure | Transaction | Cancelled if `RolledBack`, else Failed | "Revit reported a problem while creating the toposolid." + joined failure messages |
+| 18b | `PostCreationVerification.VerifyPropertyLine` fails: not closed, or non-positive area (**parcel AOI only**, SolidGround Issue #30, PH3-3, same reason as 16b) | Transaction | Cancelled if `RolledBack`, else Failed | "The created property line did not verify; the change was undone." + detail |
+| 18c | `SharedCoordinatesWriter.VerifyWritten` fails (SolidGround Issue #30, PH3-3, opt-in only) | Transaction | Cancelled if `RolledBack`, else Failed | "The shared-coordinates write did not verify; the change was undone." + requested-vs-read-back detail |
+| 19 | `IFailuresPreprocessor` observed a blocking (`Error`/`DocumentCorruption`) failure | Transaction | Cancelled if `RolledBack`, else Failed | "Revit reported a problem while finishing this run." (SolidGround Issue #30, PH3-3, review fix: broadened from "...while creating the toposolid." now that this failure log can also originate from `PropertyLine` creation or the shared-coordinates write) + joined failure messages |
 | 20 | `Toposolid.Create`/`AddPoints` throws (`ToposolidCreationException`) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the generated toposolid boundary or points." + inner exception message |
-| 21 | `Regenerate()`, the Issue #16 hook, or `Commit()` itself throwing | Transaction | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + `ex.Message` |
-| 21a | Attaching Extensible Storage provenance fails before or during the write: `ProvenanceSchemaAdapter.EnsurePublishedSchema` fails (`Finish()` throws, or an already-registered schema fails its own `RequireExactSchema` check), **or** the four-part read discipline run immediately after `SetEntity` finds the entity missing from `GetEntitySchemaGuids()`, invalid, unreadable, or `schemaVersion`-mismatched — this row covers the read discipline's own post-write throw sites, not only pre-write schema drift | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + one of several `ProvenanceAttachmentException` messages depending on which check failed — for example "The Extensible Storage schema already registered under GUID '\<guid\>' has SchemaName '\<name\>', expected '\<name\>'." (schema drift) or "SolidGround attached its Extensible Storage entity to element \<id\>, but its schemaVersion read back as \<n\>, expected \<n\>." (the read discipline's own post-write check) |
-| 21b | A length field's computed value is not finite (`ProvenanceFieldValueException`, including a record `with`-expression bypassing validation), detected in Core before the `Entity` is built | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + "field '\<name\>' is not a finite number." (verbatim, from `ExtensibleStorageProvenanceValues`'s `RequireFinite`) |
-| 21c | The entity attached, but the read-back field compare or the source-coordinate reconstruction compare fails `ExtensibleStorageRoundTripTolerance` | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing the toposolid." + "the immediate read-back did not match what was written: \<mismatches\> (deltas: \<deltas\>)." or "...reconstructing the first retained sample's source coordinate from the read-back entity produced a delta of (\<dx\>, \<dy\>, \<dz\>) meters against a \<tolerance\> m tolerance (deltas: \<deltas\>)." — both verbatim from `ProvenanceEntityWriter.Attach`, `CultureInfo.InvariantCulture`-formatted, matching this table's existing `"R"`-format convention |
-| 22 | `Commit()` returns anything but `Committed` | Transaction | Failed | "SolidGround could not confirm whether the toposolid was created. Check the document and Undo if needed." (no further `RollBack()` attempted) |
+| 20a | `PropertyLine.Create` throws (`PropertyLineCreationException`) (**parcel AOI only**, SolidGround Issue #30, PH3-3, same reason as 16b) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the generated property line boundary." + inner exception message |
+| 20b | `SharedCoordinatesWriter.Write` throws (`SharedCoordinatesWriteException`) (SolidGround Issue #30, PH3-3, opt-in only; review fix) | Transaction | Cancelled if `RolledBack`, else Failed | "Revit rejected the shared-coordinates write." + inner exception message |
+| 21 | `Regenerate()`, the Issue #16 hook, or `Commit()` itself throwing | Transaction | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing this run." (SolidGround Issue #30, PH3-3, review fix: broadened from "...while finishing the toposolid." for the same reason as row 19 — this catch-all can also be reached from `PropertyLine` creation, the shared-coordinates write, or the Issue #16 provenance hook) + `ex.Message` |
+| 21a | Attaching Extensible Storage provenance fails before or during the write: `ProvenanceSchemaAdapter.EnsurePublishedSchema` fails (`Finish()` throws, or an already-registered schema fails its own `RequireExactSchema` check), **or** the four-part read discipline run immediately after `SetEntity` finds the entity missing from `GetEntitySchemaGuids()`, invalid, unreadable, or `schemaVersion`-mismatched — this row covers the read discipline's own post-write throw sites, not only pre-write schema drift | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing this run." (see row 21) + one of several `ProvenanceAttachmentException` messages depending on which check failed — for example "The Extensible Storage schema already registered under GUID '\<guid\>' has SchemaName '\<name\>', expected '\<name\>'." (schema drift) or "SolidGround attached its Extensible Storage entity to element \<id\>, but its schemaVersion read back as \<n\>, expected \<n\>." (the read discipline's own post-write check) |
+| 21b | A length field's computed value is not finite (`ProvenanceFieldValueException`, including a record `with`-expression bypassing validation), detected in Core before the `Entity` is built | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing this run." (see row 21) + "field '\<name\>' is not a finite number." (verbatim, from `ExtensibleStorageProvenanceValues`'s `RequireFinite`) |
+| 21c | The entity attached, but the read-back field compare or the source-coordinate reconstruction compare fails `ExtensibleStorageRoundTripTolerance` | Transaction (hook) | Cancelled if `RolledBack`, else Failed | "SolidGround hit a problem while finishing this run." (see row 21) + "the immediate read-back did not match what was written: \<mismatches\> (deltas: \<deltas\>)." or "...reconstructing the first retained sample's source coordinate from the read-back entity produced a delta of (\<dx\>, \<dy\>, \<dz\>) meters against a \<tolerance\> m tolerance (deltas: \<deltas\>)." — both verbatim from `ProvenanceEntityWriter.Attach`, `CultureInfo.InvariantCulture`-formatted, matching this table's existing `"R"`-format convention |
+| 22 | `Commit()` returns anything but `Committed` | Transaction | Failed | "SolidGround could not confirm whether this run's changes were created. Check the document and Undo if needed." (SolidGround Issue #30, PH3-3, review fix: broadened from "...whether the toposolid was created..." — by this point a parcel AOI's `PropertyLine`, and an opted-in shared-coordinates write, may also be mid-flight and equally unconfirmed) (no further `RollBack()` attempted) |
 | 23 | Placement-record write fails post-commit | Post-commit | **Succeeded** | logged only; success dialog's own line says "could not be written (see log)" |
 | 24 | Orphan check detects an unexpected shared-coordinate change post-commit | Post-commit | **Succeeded** | logged only (info if unchanged, warning if not); never shown in any dialog |
 | 25 | Unhandled exception anywhere before Stage 5 opens a transaction, or any other bug the code above cannot name | any | Cancelled | `Execute`'s own outer catch: "SolidGround hit an unexpected problem and stopped. Nothing in the model changed." + `ex.Message` |
-| 26 | Success | Post-commit | Succeeded | element id, Level/Type, point counts, bundle/placement-record/log paths, disclaimer |
+| 26 | Success | Post-commit | Succeeded | element id, Level/Type, point counts, **the `PropertyLine` outcome (SolidGround Issue #30, PH3-3, new)**, bundle/placement-record/log paths, the now **two-valued** disclaimer (unchanged sentence when the shared-coordinates opt-in never fired this run, a new sentence naming the written values when it did) |
 
 **Update, Issue #16 (2026-09-21):** this table's own row numbers are authoritative for every citation
 elsewhere in this repository, including AGENTS.md. `CreateToposolidCommand.cs:657`'s inline comment used to
@@ -850,6 +960,14 @@ off from this table's own rows **18 and 19** for that same branch — the commen
 predated a since-renumbered version of this catalogue. The comment was corrected to "rows 18 and 19" as part
 of this same Issue #16 commit, alongside the hook-wiring edit in the same file
 (`CreateToposolidCommand.cs:669-670`).
+
+**Update, SolidGround Issue #30 (PH3-3):** rows 16b, 18b, and 20a apply only to a parcel area of interest — a
+bounding-box/radius run never calls `PostCreationVerification.BoundaryIsValidPropertyLine`,
+`PropertyLineCreationService.Create`, or `PostCreationVerification.VerifyPropertyLine` at all, so none of these
+three rows can fire for it; this is not a claim that they "pass" for that run, but that the code path producing
+them is never reached. No new row exists for "a bounding-box/radius AOI creates no `PropertyLine`": that is not
+an error at all (row 26 above covers it). See `docs/architecture/revit-property-line-and-shared-coordinates.md`
+for the full design.
 
 ## Manual evidence plan
 
@@ -1748,7 +1866,11 @@ existence, not compiler-verified independently of the real build (which itself d
     `Application.ShortCurveTolerance` is a real gap in `LocalBoundaryValidator`'s own "zero-length edges only"
     check: a boundary-ring edge that is short but not exactly zero-length could pass Core-side validation and
     still throw from `BoundaryGeometryBuilder.BuildProfiles`'s `Line.CreateBound` call on the Revit side. Not
-    fixed in this milestone; a candidate follow-up (see "Known limitations" below).
+    fixed in this milestone; a candidate follow-up (see "Known limitations" below). **Closed by SolidGround
+    Issue #30 (PH3-3): see "Known limitations and follow-ups" below — `LocalBoundaryCleaner.Clean` now dedupes
+    any edge below `Math.Max(vertexTolerance, minimumEdgeLength)` before `BuildProfiles` is ever reached, and
+    `LocalBoundaryValidator.Validate`'s own new `minimumEdgeLength` parameter still rejects, with a clear
+    Preflight message, any edge that reaches it anyway.**
 
 ## Verification
 
@@ -1788,11 +1910,15 @@ which is exactly why the manual plan exists as a separate, later step.
 - **The Issue #16 extension point is a bare nullable delegate, not a named stub method.** Functionally
   equivalent to the alternative considered; chosen for being one line shorter with no separate declaration
   needed.
-- **`Line.CreateBound`'s short-curve tolerance is not independently validated.** `LocalBoundaryValidator`
-  checks for exactly-zero-length edges only; an edge shorter than `Application.ShortCurveTolerance` but not
-  exactly zero could still reach `BoundaryGeometryBuilder.BuildProfiles` and throw
-  `ArgumentsInconsistentException` there instead of failing at Preflight with a clear message. Not fixed in
-  this milestone; a candidate follow-up once real-world fixtures are available to size the check against.
+- **`Line.CreateBound`'s short-curve tolerance — closed by SolidGround Issue #30 (PH3-3).** This item previously
+  read: "`LocalBoundaryValidator` checks for exactly-zero-length edges only; an edge shorter than
+  `Application.ShortCurveTolerance` but not exactly zero could still reach `BoundaryGeometryBuilder.BuildProfiles`
+  and throw `ArgumentsInconsistentException` there instead of failing at Preflight with a clear message." Issue
+  #30's `LocalBoundaryCleaner.Clean` now dedupes any edge below `Math.Max(vertexTolerance, minimumEdgeLength)`
+  before `BuildProfiles` is ever reached, and `LocalBoundaryValidator.Validate`'s own new `minimumEdgeLength`
+  parameter still rejects, with a clear Preflight message, any edge that reaches it anyway (a pathological or
+  slow-converging `Clean` input). See `docs/architecture/revit-property-line-and-shared-coordinates.md`'s
+  "Geometry cleanup contract" section.
 - **`FailureDefinitionId`'s own logged value is a `ToString()`, not a stable identifier.**
   `ToposolidCreationFailurePreprocessor` logs `message.GetFailureDefinitionId()?.ToString()` because
   `FailureDefinitionId`'s underlying `Guid`-bearing shape was not independently confirmed against the

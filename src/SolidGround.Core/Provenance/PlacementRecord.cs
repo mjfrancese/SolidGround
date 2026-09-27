@@ -79,6 +79,48 @@ public sealed record PlacementPointCountsRecord(int Original, int Retained, int 
 public sealed record PlacementExtensibleStorageRecord(string SchemaGuid, int SchemaVersion);
 
 /// <summary>
+/// The <c>PropertyLine</c> element SolidGround Issue #30 (PH3-3) creates alongside the <c>Toposolid</c> for a
+/// parcel area of interest only (owner decision 3, 2026-09-26): <see cref="Created"/> is always present;
+/// <see cref="ElementId"/>/<see cref="AreaInternal"/> are non-null exactly when <see cref="Created"/> is
+/// <see langword="true"/>. <see cref="AreaInternal"/> is Revit-internal (<c>PropertyLine.Area</c>'s own doc
+/// comment states only its closed-loop-detection meaning, not an explicit unit), matching this schema's
+/// existing <c>*Internal</c> suffix convention. See
+/// docs/architecture/revit-property-line-and-shared-coordinates.md's "Placement record schema" section.
+/// </summary>
+public sealed record PlacementPropertyLineRecord(bool Created, long? ElementId, double? AreaInternal);
+
+/// <summary>
+/// The opt-in shared-coordinates write SolidGround Issue #30 (PH3-3) performs when
+/// <c>sharedCoordinates.writeIfAbsent</c> is enabled and Preflight's detection proxy found no existing shared
+/// coordinates: <see cref="Attempted"/> is always present; every other field is non-null exactly when
+/// <see cref="Attempted"/> is <see langword="true"/>. <see cref="EastWest"/>/<see cref="NorthSouth"/>/
+/// <see cref="Elevation"/> are the terrain's own local-frame origin, in its own native unit -- named by the
+/// paired <see cref="HorizontalUnit"/>/<see cref="VerticalUnit"/> tokens, NOT always meters (a process-mode run
+/// can select a non-metric horizontal or vertical unit; see
+/// docs/architecture/revit-property-line-and-shared-coordinates.md's "Unit convention for the shared-coordinates
+/// value" section) -- the identical values already recorded in <see cref="PlacementLocalOriginRecord"/>'s own
+/// <c>SourceX</c>/<c>SourceY</c>/<c>SourceElevation</c> -- never the raw Revit-internal <see langword="double"/>
+/// actually passed to <c>ProjectPosition</c>'s constructor. <see cref="AngleInternal"/> is the one exception,
+/// recorded Revit-internal (radians): an angle has no length unit to convert into. Whenever
+/// <see cref="Attempted"/> is <see langword="true"/>,
+/// <see cref="Verified"/> is always <see langword="true"/> (never <see langword="false"/>) in any placement
+/// record that reaches disk -- a failed verification rolls back the whole transaction, so no placement record is
+/// ever written for that run; whenever <see cref="Attempted"/> is <see langword="false"/> (the shipped default),
+/// <see cref="Verified"/> is <see langword="null"/>, like every other field here. See
+/// docs/architecture/revit-property-line-and-shared-coordinates.md's "Shared-coordinates detection, write, and
+/// verification" and "Placement record schema" sections.
+/// </summary>
+public sealed record PlacementSharedCoordinatesWriteRecord(
+    bool Attempted,
+    double? EastWest,
+    double? NorthSouth,
+    double? Elevation,
+    double? AngleInternal,
+    string? HorizontalUnit,
+    string? VerticalUnit,
+    bool? Verified);
+
+/// <summary>
 /// The full, final placement record written next to the export bundle only after a confirmed
 /// <c>Autodesk.Revit.DB.TransactionStatus.Committed</c> status (design record §9). Assembled from a
 /// <see cref="PlacementRecordDraft"/> plus the confirmed element id (§6.6 step 1). Revit-free: kept in
@@ -99,7 +141,9 @@ public sealed record PlacementRecord(
     PlacementRevitCoordinatesRecord RevitCoordinates,
     string SharedCoordinatesStatement,
     PlacementPointCountsRecord PointCounts,
-    PlacementExtensibleStorageRecord ExtensibleStorage);
+    PlacementExtensibleStorageRecord ExtensibleStorage,
+    PlacementPropertyLineRecord PropertyLine,
+    PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite);
 
 /// <summary>
 /// Every placement-record value computed before <c>transaction.Commit()</c> (design record §5): the created
@@ -123,15 +167,20 @@ public sealed record PlacementRecordDraft(
     PlacementRevitCoordinatesRecord RevitCoordinates,
     string SharedCoordinatesStatement,
     PlacementPointCountsRecord PointCounts,
-    PlacementExtensibleStorageRecord ExtensibleStorage)
+    PlacementExtensibleStorageRecord ExtensibleStorage,
+    PlacementPropertyLineRecord PropertyLine,
+    PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite)
 {
     public const string Schema = "solidground.revit-placement";
 
     /// <summary>
-    /// Bumped 1 -> 2 for SolidGround Issue #16: the record's required shape changed with the addition of
-    /// <see cref="PlacementExtensibleStorageRecord"/> (design record §5).
+    /// Bumped 2 -> 3 for SolidGround Issue #30 (PH3-3): the record's required shape changed with the addition
+    /// of <see cref="PlacementPropertyLineRecord"/>/<see cref="PlacementSharedCoordinatesWriteRecord"/>. A
+    /// counter independent of <c>TerrainProvenance.CurrentSchemaVersion</c> and of the Extensible Storage
+    /// schema's own version -- three separate counters that share a field name. See
+    /// docs/architecture/revit-property-line-and-shared-coordinates.md's "Placement record schema" section.
     /// </summary>
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     public PlacementRecord ToRecord(long confirmedElementId, DateTime createdUtc) => new(
         Schema,
@@ -146,5 +195,7 @@ public sealed record PlacementRecordDraft(
         RevitCoordinates,
         SharedCoordinatesStatement,
         PointCounts,
-        ExtensibleStorage);
+        ExtensibleStorage,
+        PropertyLine,
+        SharedCoordinatesWrite);
 }

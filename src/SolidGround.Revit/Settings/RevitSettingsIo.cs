@@ -71,6 +71,11 @@ internal static class RevitSettingsIo
           // Blank/null means: pick the first existing ToposolidType by name.
           "toposolidType": { "name": null },
 
+          // "writeIfAbsent": true lets SolidGround write this run's terrain origin as this model's shared
+          // coordinates (ActiveProjectLocation), but ONLY when the model has none yet -- Preflight refuses when it
+          // looks like the model already has shared coordinates set. Default false: unchanged from Issue #15.
+          "sharedCoordinates": { "writeIfAbsent": false },
+
           "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
 
           "networkTimeoutSeconds": 300
@@ -194,6 +199,7 @@ internal static class RevitSettingsIo
         JsonObject requestShapedPortion;
         string? levelName;
         string? toposolidTypeName;
+        bool sharedCoordinatesWriteIfAbsent;
         try
         {
             JsonDocumentOptions documentOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
@@ -206,8 +212,10 @@ internal static class RevitSettingsIo
 
             levelName = (string?)root["level"]?["name"];
             toposolidTypeName = (string?)root["toposolidType"]?["name"];
+            sharedCoordinatesWriteIfAbsent = (bool?)root["sharedCoordinates"]?["writeIfAbsent"] ?? false;
             root.Remove("level");
             root.Remove("toposolidType");
+            root.Remove("sharedCoordinates");
             requestShapedPortion = root;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
@@ -247,7 +255,10 @@ internal static class RevitSettingsIo
             return false;
         }
 
-        settings = new RevitSettings(request, new RevitTargetSettings(levelName, toposolidTypeName));
+        settings = new RevitSettings(
+            request,
+            new RevitTargetSettings(levelName, toposolidTypeName),
+            new RevitSharedCoordinatesSettings(sharedCoordinatesWriteIfAbsent));
         return true;
     }
 
