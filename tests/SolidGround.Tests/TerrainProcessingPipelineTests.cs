@@ -103,15 +103,50 @@ public sealed class TerrainProcessingPipelineTests
         Assert.Equal(outcome.Payload.Provenance.OriginalPointCount, outcome.SimplificationDiagnostics.CandidatePointCount);
     }
 
+    [Fact]
+    public async Task RunAsyncThreadsAddressParcelProvenanceIntoTheAssembledPayloadWhenSupplied()
+    {
+        Fixture fixture = LoadFixture();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        AddressParcelProvenance addressParcel = new(
+            new DateOnly(2026, 9, 27),
+            new GeocodeProvenance(
+                AddressGeocoderProvider.Census,
+                "100 Example Loop",
+                "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau."),
+            parcel: null);
+
+        TerrainProcessingOutcome withAddressParcel = await RunPipelineAsync(
+            fixture, aoi: null, LocalSouthwestOrigin(), cancellationToken, addressParcel);
+
+        Assert.Same(addressParcel, withAddressParcel.Payload.Provenance.AddressParcel);
+
+        // Omitting the new argument must keep relying on RunAsync's own null default -- the exact default every
+        // existing process/run/Revit call site already relies on. (A byte-for-byte comparison between an
+        // omitted-argument call and an explicit-addressParcel:-null call would be tautological: C# compiles an
+        // omitted optional argument to the same literal default, so the two calls are argument-for-argument
+        // identical before either reaches RunAsync, and such a comparison could never fail regardless of
+        // correctness. The genuine "output stays byte-identical to before this change" claim is independently
+        // anchored by this file's own four Facts above, which call RunAsync -- via RunPipelineAsync -- without
+        // the new argument and keep their pre-existing assertions unchanged, and by
+        // TerrainExportGoldenFileTests's committed golden-file comparison, which calls
+        // TerrainExportPayloadAssembler.Assemble directly with no addressParcel argument.)
+        TerrainProcessingOutcome omittedArgument = await RunPipelineAsync(fixture, aoi: null, LocalSouthwestOrigin(), cancellationToken);
+        Assert.Null(omittedArgument.Payload.Provenance.AddressParcel);
+    }
+
     private static LocalOriginRequest LocalSouthwestOrigin() => new(LocalOriginKind.Southwest, 0, 0, 0);
 
     private static Task<TerrainProcessingOutcome> RunPipelineAsync(
-        Fixture fixture, AreaOfInterest? aoi, LocalOriginRequest origin, CancellationToken cancellationToken) =>
+        Fixture fixture, AreaOfInterest? aoi, LocalOriginRequest origin, CancellationToken cancellationToken,
+        AddressParcelProvenance? addressParcel = null) =>
         TerrainProcessingPipeline.RunAsync(
             fixture.Grid, fixture.Transform, fixture.VerticalReference,
             new ReferenceOrigins(ReferenceOrigin.Operator, ReferenceOrigin.Operator),
             new ElevationSourceMetadata("Example-site synthetic fixture", "example-site-synthetic"),
-            aoi, origin, LengthUnit.Meter, SimplificationMethod.CurvatureAware, GenerousBudget, DefaultCoverageFloor, cancellationToken);
+            aoi, origin, LengthUnit.Meter, SimplificationMethod.CurvatureAware, GenerousBudget, DefaultCoverageFloor, cancellationToken,
+            addressParcel);
 
     private static Fixture LoadFixture()
     {

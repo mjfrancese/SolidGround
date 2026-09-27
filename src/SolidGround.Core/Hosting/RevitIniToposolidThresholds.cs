@@ -96,6 +96,30 @@ public static class RevitIniToposolidThresholds
         return new Thresholds(nativeThreshold, linkThreshold);
     }
 
+    /// <summary>
+    /// True when <paramref name="thresholds"/>'s <see cref="Thresholds.NativeToposolidMaxPointThreshold"/> is
+    /// known and <paramref name="pointBudget"/> exceeds it. False, tolerant-by-design, when the threshold could
+    /// not be read this session -- matching <c>CreateToposolidCommand.CheckRevitIniPointThreshold</c>'s own
+    /// existing contract. Shared by <c>CreateToposolidCommand</c>'s Preflight guard and
+    /// <c>SolidGroundDialog</c>'s own inline point-budget warning (SolidGround Issue #31), so the two rules can
+    /// never drift apart. See docs/architecture/revit-toposolid-creation.md's "Command flow" > "Stage 1" step 8.
+    /// </summary>
+    public static bool ExceedsNativeThreshold(int pointBudget, Thresholds thresholds) =>
+        thresholds.NativeToposolidMaxPointThreshold is { } native && pointBudget > native;
+
+    /// <summary>
+    /// The exact sentence <c>CreateToposolidCommand</c>'s Preflight rejection and <c>SolidGroundDialog</c>'s own
+    /// inline point-budget warning both use verbatim (SolidGround Issue #31), so the two can never drift apart.
+    /// Only meaningful when <see cref="ExceedsNativeThreshold"/> is true for the same <paramref name="pointBudget"/>/
+    /// <paramref name="nativeThreshold"/>. See docs/architecture/revit-toposolid-creation.md's "Command flow" >
+    /// "Stage 1" step 8.
+    /// </summary>
+    public static string DescribeExceedance(int pointBudget, int nativeThreshold, string revitIniPath) =>
+        $"pointBudget {pointBudget.ToString(CultureInfo.InvariantCulture)} exceeds this machine's " +
+        $"NativeToposolidMaxPointThreshold of {nativeThreshold.ToString(CultureInfo.InvariantCulture)} in " +
+        $"'{revitIniPath}'; lower pointBudget to at most {nativeThreshold.ToString(CultureInfo.InvariantCulture)} " +
+        "or raise the Revit.ini value within Autodesk's documented 10,000 to 50,000 range and restart Revit.";
+
     private static int? ParseIntOrNull(string value) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result) ? result : null;
 }

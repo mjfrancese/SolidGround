@@ -147,4 +147,35 @@ public sealed class RevitIniToposolidThresholdsTests
 
         Assert.Equal(20000, result.NativeToposolidMaxPointThreshold);
     }
+
+    [Theory]
+    [InlineData(20001, 20000, true)] // over the threshold
+    [InlineData(20000, 20000, false)] // exactly at the threshold -- not an excess
+    [InlineData(19999, 20000, false)] // under the threshold
+    [InlineData(999999, null, false)] // threshold unknown this session -- tolerant-by-design, never true
+    public void ExceedsNativeThresholdMatchesPointBudgetAgainstTheParsedNativeThreshold(int pointBudget, int? nativeThreshold, bool expected)
+    {
+        RevitIniToposolidThresholds.Thresholds thresholds = new(nativeThreshold, LinkToposolidMaxPointThreshold: null);
+
+        bool result = RevitIniToposolidThresholds.ExceedsNativeThreshold(pointBudget, thresholds);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void DescribeExceedanceNamesTheBudgetTheThresholdAndTheRevitIniPath()
+    {
+        // A synthetic placeholder path only -- "[UserName]" matches this repository's own existing convention
+        // for an unidentified user profile folder (see CreateToposolidCommand.cs's "Similar to
+        // C:\Users\[UserName]\AppData\Roaming\Autodesk\[ProductType]\[ReleaseName]" comment) and is on
+        // PersonalInformationGuardTests' own documented placeholder allow-list -- never a real, identifiable
+        // person's or client's location (AGENTS.md "Secrets, downloads, and logs").
+        const string revitIniPath = @"C:\Users\[UserName]\AppData\Roaming\Autodesk\Revit\Autodesk Revit 2027\Revit.ini";
+
+        string message = RevitIniToposolidThresholds.DescribeExceedance(20001, 20000, revitIniPath);
+
+        Assert.Contains("20001", message, StringComparison.Ordinal);
+        Assert.Contains("exceeds this machine's NativeToposolidMaxPointThreshold of 20000", message, StringComparison.Ordinal);
+        Assert.Contains(revitIniPath, message, StringComparison.Ordinal);
+    }
 }

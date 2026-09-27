@@ -631,6 +631,18 @@ run once step 1 found a usable, non-family document. In order:
    `NativeToposolidMaxPointThreshold` (or `null` if unavailable) is carried forward into
    `DocumentContext.NativeToposolidMaxPointThreshold` for Stage 5's `PostCreationVerification.Verify` call
    below, whether or not this step itself added a problem.
+
+   **Update, SolidGround Issue #31 (PH3-4), Stage A (2026-09-27):** `SolidGround.Core.Hosting
+   .RevitIniToposolidThresholds` gained two `public static` methods beside `Parse` --
+   `ExceedsNativeThreshold(pointBudget, thresholds)` (the same `NativeToposolidMaxPointThreshold is {} native
+   && pointBudget > native` comparison this step performs inline above) and `DescribeExceedance(pointBudget,
+   nativeThreshold, revitIniPath)` (a pure extraction of the exact problem-line text this step adds to error
+   catalogue row 9a, byte-identical to today's inline text) -- so the interactive dialog's own inline
+   point-budget warning (Issue #31's remaining stages) can share this exact rule and wording with
+   `CheckRevitIniPointThreshold` and never drift apart from it. This Stage A addition is Core-only:
+   `CheckRevitIniPointThreshold` itself still performs this comparison and builds this text inline exactly as
+   shown above; a later Issue #31 stage switches it to call these two Core methods instead, with no behavior
+   change, alongside the paired `RevitHostFilesTests` update that migration needs.
 9. **(SolidGround Issue #30, PH3-3.)** Reads and logs `commandData.Application.Application
    .ShortCurveTolerance`/`.VertexTolerance` once (Revit-internal decimal feet), carried forward on
    `DocumentContext` as `ShortCurveToleranceInternal`/`VertexToleranceInternal` for Stage 3's geometry cleanup.

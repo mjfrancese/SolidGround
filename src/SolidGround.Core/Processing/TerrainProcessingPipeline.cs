@@ -36,7 +36,11 @@ public sealed record TerrainProcessingOutcome(
 /// such that <c>wgs84ToGridTransform.Definition.TargetReference == grid.HorizontalReference</c> already holds
 /// (true by construction for `process`; explicitly checked by `RunCommand` before calling this) and that
 /// <paramref name="verticalReference"/> is the exact same value used to parse <paramref name="grid"/>, so
-/// `TerrainExportPayloadAssembler.Assemble`'s own equality checks hold trivially.
+/// `TerrainExportPayloadAssembler.Assemble`'s own equality checks hold trivially. <see cref="RunAsync"/>'s own
+/// optional, trailing <c>addressParcel</c> parameter (SolidGround Issue #31) is threaded straight into that
+/// same `Assemble` call's identically-optional parameter and defaults to <see langword="null"/>, so every
+/// existing caller -- both CLI commands and both `SolidGround.Revit` call sites -- keeps compiling and
+/// behaving unchanged. See docs/architecture/address-parcel-provenance.md's "Population path".
 /// </summary>
 public static class TerrainProcessingPipeline
 {
@@ -52,7 +56,8 @@ public static class TerrainProcessingPipeline
         SimplificationMethod method,
         int pointBudget,
         double coverageFloorFraction,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AddressParcelProvenance? addressParcel = null)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(wgs84ToGridTransform);
@@ -89,7 +94,8 @@ public static class TerrainProcessingPipeline
 
         // Step 6: assemble.
         TerrainExportPayload payload = TerrainExportPayloadAssembler.Assemble(
-            sourceMetadata, wgs84ToGridTransform.Definition, verticalReference, referenceOrigins, localFrame, candidateGrid, simplification);
+            sourceMetadata, wgs84ToGridTransform.Definition, verticalReference, referenceOrigins, localFrame, candidateGrid, simplification,
+            addressParcel);
 
         return new TerrainProcessingOutcome(payload, clipResult, simplification.Diagnostics);
     }

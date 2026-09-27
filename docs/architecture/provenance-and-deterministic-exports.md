@@ -184,6 +184,14 @@ as a `TerrainExportException` naming the address/parcel provenance record invali
 property order, null-vs-omitted, number/date/enum formatting, determinism -- applies identically to version 3;
 nothing else in the manifest changed.
 
+**Update, SolidGround Issue #31 (PH3-4), Stage A (2026-09-27):** `TerrainProcessingPipeline.RunAsync` itself now
+also carries this same optional, trailing `addressParcel` parameter (defaulting to `null`), threaded straight
+into its one `Assemble` call; previously only `Assemble` accepted this parameter directly, with `RunAsync`
+never passing an 8th argument to it at all (see docs/architecture/address-parcel-provenance.md's "Population
+path"). This is still Core-only plumbing: nothing yet supplies a non-null value -- `process`, `run`, and both
+`SolidGround.Revit` call sites all still omit the argument, so `addressParcel` remains `null` for every export
+this repository's current scope actually produces, exactly as before this addition.
+
 No key, authorization header, or request query string ever reaches this object: `queryText` is the operator's
 own plain address text (never a request URI on any shipped geocoder provider), and `attribution`/
 `sourceIdentity`/`licenseDisclaimerText` are host-supplied, non-secret strings. A populated record does,
