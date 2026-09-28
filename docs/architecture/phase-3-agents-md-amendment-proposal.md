@@ -10,9 +10,9 @@ creates or changes. Both files stay exactly as they are at this issue's close �
 showing no changes to either path.
 
 Every change below carries a stable ID (`A1`, `A2`, ... for `AGENTS.md`; `C1`, `C2`, ... for the conventions
-note) and its own `Disposition` field. Every disposition in this version of the note reads `Pending owner`;
-the owner has not yet been asked to accept, edit, or reject any individual change — that is the next step
-after this issue closes. The "Disposition record" table at the end of this note is the single place every
+note) and its own `Disposition` field. The owner recorded a disposition for every change on 2026-09-27 (see
+"Disposition record" below): every change was accepted, and `A1` was accepted in a condensed form whose exact
+accepted text is given under `A1`. The "Disposition record" table at the end of this note is the single place every
 change's disposition is tracked going forward. No dependent issue may apply any wording proposed here until
 that specific change's disposition is recorded as something other than `Pending owner`; accepting this note's
 existence is not the same as accepting any individual change inside it.
@@ -53,7 +53,7 @@ that records a decision or a shipped fact that already exists.
     section title that records it, so the owner or a later reader can verify the claim independently of this
     note.
   - **Rationale** — one to two sentences on why the change is needed.
-  - **Disposition** — always `Pending owner` in this version of the note; see "Disposition record" below.
+  - **Disposition** — the owner's recorded decision for that change; see "Disposition record" below.
 - Every "Old text" quote below was checked verbatim against `AGENTS.md` and
   `docs/architecture/revit-add-in-conventions.md` as they stand at commit `ace27ba` (neither file changed
   between `9c1cb0a` and `ace27ba`). Neither file is edited by this issue; both stay byte-identical to that
@@ -130,7 +130,30 @@ Listed in file order (top to bottom).
   3 issues that sentence authorized have since shipped and closed. Continuing the same paragraph in the same
   style keeps it an accurate, current record instead of leaving readers to piece Phase 3's status together
   from closed-issue comments.
-- **Disposition:** Pending owner
+- **Accepted text (condensed, per the owner's 2026-09-27 disposition "Accept, but condense": keep the Phase 3
+  status in a few sentences that name each issue's outcome and design note, without commit hashes or type
+  names).** This, not the longer proposed text above, is the wording to apply:
+
+  > Phase 3's child issues were completed by 2026-09-27, each recorded in its own design note. Issue #27
+  > (PH3-0) moved API-key resolution and query redaction into one shared Core component
+  > (`docs/architecture/shared-http-redaction-and-key-resolution.md`). Issue #28 (PH3-1) added address
+  > geocoding: the keyless Census Geocoder by default, with Geocodio and Esri as keyed opt-ins
+  > (`docs/architecture/address-geocoding.md`). Issue #29 (PH3-2) added parcel-boundary sources: a
+  > machine-local county registry, which ships with no real county, and a user-supplied local parcel file
+  > (`docs/architecture/parcel-boundary-sources.md`). Issue #30 (PH3-3) added a native property line for
+  > parcel areas of interest and an opt-in, default-off shared-coordinates write
+  > (`docs/architecture/revit-property-line-and-shared-coordinates.md`). Issue #31 (PH3-4) added the
+  > interactive dialog inside the Create Toposolid command, including a nearby-parcel fallback when a geocoded
+  > point misses its parcel (`docs/architecture/revit-interactive-dialog.md`). Issue #32 (PH3-5) added the CLI
+  > `geocode` and `parcel` commands with an automatic Census county lookup (`docs/architecture/cli-workflow.md`
+  > and `docs/architecture/census-county-lookup.md`). Issue #33 (PH3-6) added address and parcel provenance to
+  > the JSON export (`docs/architecture/address-parcel-provenance.md`). Issue #35 (PH3-8) recorded every
+  > source's attribution and the providers that must never be a default
+  > (`docs/architecture/source-licensing-and-attribution.md`). Issue #34 (PH3-7) recorded the owner's
+  > disposition of each resulting `AGENTS.md` and conventions-note change
+  > (`docs/architecture/phase-3-agents-md-amendment-proposal.md`).
+
+- **Disposition:** Accepted with edit (condensed; accepted text above), 2026-09-27.
 
 ### A2. Architecture table — `SolidGround.Core` row
 
@@ -155,7 +178,7 @@ Listed in file order (top to bottom).
 - **Rationale:** Core gained five Phase 3 capabilities (two pluggable-source families, shared HTTP plumbing,
   county lookup, and boundary cleanup) that this row's description doesn't name, even though it is still
   correct that none of them are Revit-specific.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A3. Architecture table — `SolidGround.Revit` row
 
@@ -177,7 +200,7 @@ Listed in file order (top to bottom).
   "Purpose and boundary").
 - **Rationale:** The row still says "in Phase 2" even though Phase 3 code now lives in the same project, and
   names neither the dialog nor the two Revit-side capabilities Issues #30 and #31 added.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A4. Revit 2027 rules — new API surface paragraph
 
@@ -204,7 +227,7 @@ Listed in file order (top to bottom).
   member (see the point-budget and add-in-isolation paragraphs already there); Issue #30 verified a new
   surface this section says nothing about yet, plus a documented negative finding worth stating in
   `AGENTS.md`'s own voice.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A5. Revit 2027 rules — point-budget paragraph, one-clause addition
 
@@ -219,7 +242,7 @@ Listed in file order (top to bottom).
 - **Trace:** PH3-4 #31 (`revit-interactive-dialog.md`, "Purpose and boundary", Stage A bullet).
 - **Rationale:** Issue #31 shared this exact rule's own implementation with the new dialog; naming that
   consumer keeps the paragraph complete with no change to the rule itself.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A6. Revit add-in conventions (AGENTS.md section) — Ribbon and command bullet
 
@@ -240,7 +263,7 @@ Listed in file order (top to bottom).
 - **Rationale:** This is the `AGENTS.md`-side twin of the conventions note's own "Ribbon and command structure"
   bullet (`C5` below); both need the identical one-sentence fact so a reader of either file learns the dialog
   did not add a second command.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A7. Data and numeric contracts — new never-default source-licensing paragraph
 
@@ -274,7 +297,7 @@ Listed in file order (top to bottom).
   failures... must not silently fall back" rule for one source; Phase 3 added seven more sources whose own
   terms need the identical never-default discipline, formalized and cited by Issue #35, with nothing in
   `AGENTS.md` recording it yet.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A8. Dependency policy — new `CommunityToolkit.Mvvm` paragraph
 
@@ -296,7 +319,7 @@ Listed in file order (top to bottom).
   Nice3point); `CommunityToolkit.Mvvm` is a real, shipped, direct dependency with no equivalent paragraph yet,
   even though the dependency-policy rule it must satisfy ("must document why each package is needed") is
   already met by the design note.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A9. Dependency policy — ProjNet/NetTopologySuite hedge cleanup
 
@@ -318,7 +341,7 @@ Listed in file order (top to bottom).
 - **Rationale:** The "must avoid adding it if... Phase 1 scope narrows" clause is a dead Phase-1-era
   conditional that has not applied for some time; Phase 3 now depends on NetTopologySuite for real, so the
   sentence should state why, not carry a hedge about a decision already settled two phases ago.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A10. Secrets, downloads, and logs — key paragraph generalization
 
@@ -342,7 +365,7 @@ Listed in file order (top to bottom).
 - **Rationale:** The rule's substance (environment variable then user secrets, never logged, redact query
   strings) is unchanged and must stay exactly as strict, but the OpenTopography-only framing is now
   incomplete: two more keyed providers resolve through the same shared component.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A11. Secrets, downloads, and logs — downloaded rasters and fixtures paragraph
 
@@ -358,7 +381,7 @@ Listed in file order (top to bottom).
 - **Rationale:** The county parcel registry file and a user's local parcel file are new classes of local,
   never-committed data this paragraph doesn't name yet, even though the existing "clearly labeled synthetic
   data" rule in the next paragraph already covers fixtures derived from them.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A12. Test fixture and verification — example-site paragraph clarification
 
@@ -375,7 +398,7 @@ Listed in file order (top to bottom).
   input; without this clarification a reader could misread the existing sentence as barring any address-shaped
   test data at all, including clearly labeled synthetic data, which is not what Issues #28 and #29 actually
   needed or did.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### A13. Authoritative references — optional additions
 
@@ -403,7 +426,7 @@ Listed in file order (top to bottom).
   design-note and pull-request work, matching this section's own "prefer these primary sources" framing;
   every citation already lives correctly in the Phase 3 design notes regardless of whether this list is
   extended.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ## Proposed changes to the Revit add-in conventions note
 
@@ -433,7 +456,7 @@ Listed in file order (top to bottom). All IDs below target
   explicitly decided against a Revit abstraction-interface or Fakes layer — Issue #31's own design note and
   comments record only the adopted test suite, never a stated rejection of an abstraction layer — so the
   owner's disposition on this change is a real design decision, not merely a wording sign-off.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### C2. Section 2, "Target framework and reference assemblies" — stale "No `UseWPF`" sentence
 
@@ -448,7 +471,7 @@ Listed in file order (top to bottom). All IDs below target
 - **Trace:** PH3-4 #31 Stage B (`revit-interactive-dialog.md`, "Package: CommunityToolkit.Mvvm 8.4.2").
 - **Rationale:** The WPF surface this sentence said didn't exist yet now ships; the gate it described has
   fired.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### C3. Section 2 — `CommunityToolkit.Mvvm` direct-dependency clause
 
@@ -464,7 +487,7 @@ Listed in file order (top to bottom). All IDs below target
 - **Trace:** PH3-4 #31 Stage B (`revit-interactive-dialog.md`, "Package: CommunityToolkit.Mvvm 8.4.2").
 - **Rationale:** The bullet's own rationale is specific to Core's transitive packages and is still true, but
   silent on the new package's direct reference; nothing stated is wrong, only incomplete.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### C4. Section 3, "Manifest and isolated add-in context" — optional cross-reference
 
@@ -478,7 +501,7 @@ Listed in file order (top to bottom). All IDs below target
 - **Trace:** PH3-4 #31 (`revit-interactive-dialog.md`, "Package: CommunityToolkit.Mvvm 8.4.2").
 - **Rationale:** Optional. Documents why a new direct dependency needed no manifest change; this section is
   still accurate without it, only silent on a question a future reader might otherwise have to re-derive.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### C5. Section 4, "Ribbon and command structure" — dialog-ordering clarification (AC3)
 
@@ -500,7 +523,7 @@ Listed in file order (top to bottom). All IDs below target
 - **Rationale:** This is the AC3 item named in Issue #34's own scope: the sentence is still true as far as it
   goes, but now incomplete about the dialog's place in the command's flow. See "Push button versus a second
   command" below for the full recommendation.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### C6. Section 5, "Settings" — stale settings-file-hypothetical sentence
 
@@ -526,7 +549,7 @@ Listed in file order (top to bottom). All IDs below target
   has existed since Issue #15 and gained two more real sections in Phase 3 that this bullet never named,
   unlike several other sections in this same note that carry an explicit "Update, Issue #NN" annotation for a
   change of this kind.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ### C7. Section 6, "Logging and diagnostics" — stale "no custom WPF dialog shell" sentence
 
@@ -545,7 +568,7 @@ Listed in file order (top to bottom). All IDs below target
 - **Rationale:** This is a flat factual claim now contradicted by a shipped, named class (`SolidGroundDialog`
   is exactly a "custom WPF dialog shell"); the narrower, still-true half — terminal/outside-dialog failures
   still surface through one native `TaskDialog` — needs restating, not just a clause.
-- **Disposition:** Pending owner
+- **Disposition:** Accepted as written, 2026-09-27.
 
 ## Push button versus a second command
 
@@ -635,28 +658,30 @@ repeating that collision.
 
 ## Disposition record
 
-All dispositions below are `Pending owner` as of this note's authorship (2026-09-27). The "Date" column is
-filled in only when the owner actually records a disposition for that change; it stays blank until then.
+The owner recorded these dispositions on 2026-09-27, answering four questions: `A1` "Accept, but condense";
+`A2` through `A13` "Accept all"; `C1` through `C7` "Accept all" (which includes keeping the single push button,
+see "Push button versus a second command" above); and "Apply after #34 closes" for applying the accepted
+wording to `AGENTS.md` and the conventions note in a separate commit once this issue closes.
 
 | ID | Summary | Disposition | Date |
 | --- | --- | --- | --- |
-| A1 | Append a Phase 3 status paragraph to "Mission and current boundary" narrating Issues #27-#33 and #35 | Pending owner | |
-| A2 | Update the Architecture table's Core row to name Phase 3's new capabilities | Pending owner | |
-| A3 | Update the Architecture table's Revit row to drop "in Phase 2" and name the dialog/PropertyLine/shared-coordinates write | Pending owner | |
-| A4 | Add a new "Revit 2027 rules" paragraph recording the `PropertyLine`/`ProjectLocation`/`BasePoint` API surface | Pending owner | |
-| A5 | Add one sentence to the point-budget paragraph noting the dialog now shares the same threshold check | Pending owner | |
-| A6 | Add one sentence to the AGENTS.md "Ribbon and command" bullet stating the dialog is not a second command | Pending owner | |
-| A7 | Add a new "Data and numeric contracts" paragraph recording the seven-vendor never-default policy | Pending owner | |
-| A8 | Add a new "Dependency policy" paragraph naming `CommunityToolkit.Mvvm` 8.4.2 | Pending owner | |
-| A9 | Replace the dead Phase-1-only hedge in the ProjNet/NetTopologySuite paragraph with Phase 3's real justification | Pending owner | |
-| A10 | Generalize the OpenTopography-only key paragraph to name `GEOCODIO_API_KEY`/`ARCGIS_API_KEY` and the shared resolver | Pending owner | |
-| A11 | Extend the downloaded-rasters/fixtures paragraph to name the county registry file and local parcel file | Pending owner | |
-| A12 | Add one sentence to the example-site paragraph permitting clearly labeled synthetic address/county fixtures | Pending owner | |
-| A13 | Add three optional citations (Census, Regrid License, Nominatim policy) to "Authoritative references" | Pending owner | |
-| C1 | Rewrite Section 1's stale "only Revit call site" sentence and name the adopted testing strategy | Pending owner | |
-| C2 | Rewrite Section 2's stale "No `UseWPF`" sentence | Pending owner | |
-| C3 | Add one sentence to Section 2's `CopyLocalLockFileAssemblies` bullet naming `CommunityToolkit.Mvvm`'s direct reference | Pending owner | |
-| C4 | Add one optional bullet to Section 3 cross-referencing `CommunityToolkit.Mvvm`'s manifest-safety verification | Pending owner | |
-| C5 | Add one sentence to Section 4's Preflight bullet describing the dialog's place before Preflight (AC3) | Pending owner | |
-| C6 | Rewrite Section 5's stale settings-file-hypothetical sentence to name the real four settings sections | Pending owner | |
-| C7 | Rewrite Section 6's stale "no custom WPF dialog shell" sentence | Pending owner | |
+| A1 | Append a Phase 3 status paragraph to "Mission and current boundary" narrating Issues #27-#33 and #35 | Accepted with edit (condensed) | 2026-09-27 |
+| A2 | Update the Architecture table's Core row to name Phase 3's new capabilities | Accepted | 2026-09-27 |
+| A3 | Update the Architecture table's Revit row to drop "in Phase 2" and name the dialog/PropertyLine/shared-coordinates write | Accepted | 2026-09-27 |
+| A4 | Add a new "Revit 2027 rules" paragraph recording the `PropertyLine`/`ProjectLocation`/`BasePoint` API surface | Accepted | 2026-09-27 |
+| A5 | Add one sentence to the point-budget paragraph noting the dialog now shares the same threshold check | Accepted | 2026-09-27 |
+| A6 | Add one sentence to the AGENTS.md "Ribbon and command" bullet stating the dialog is not a second command | Accepted | 2026-09-27 |
+| A7 | Add a new "Data and numeric contracts" paragraph recording the seven-vendor never-default policy | Accepted | 2026-09-27 |
+| A8 | Add a new "Dependency policy" paragraph naming `CommunityToolkit.Mvvm` 8.4.2 | Accepted | 2026-09-27 |
+| A9 | Replace the dead Phase-1-only hedge in the ProjNet/NetTopologySuite paragraph with Phase 3's real justification | Accepted | 2026-09-27 |
+| A10 | Generalize the OpenTopography-only key paragraph to name `GEOCODIO_API_KEY`/`ARCGIS_API_KEY` and the shared resolver | Accepted | 2026-09-27 |
+| A11 | Extend the downloaded-rasters/fixtures paragraph to name the county registry file and local parcel file | Accepted | 2026-09-27 |
+| A12 | Add one sentence to the example-site paragraph permitting clearly labeled synthetic address/county fixtures | Accepted | 2026-09-27 |
+| A13 | Add three optional citations (Census, Regrid License, Nominatim policy) to "Authoritative references" | Accepted | 2026-09-27 |
+| C1 | Rewrite Section 1's stale "only Revit call site" sentence and name the adopted testing strategy | Accepted | 2026-09-27 |
+| C2 | Rewrite Section 2's stale "No `UseWPF`" sentence | Accepted | 2026-09-27 |
+| C3 | Add one sentence to Section 2's `CopyLocalLockFileAssemblies` bullet naming `CommunityToolkit.Mvvm`'s direct reference | Accepted | 2026-09-27 |
+| C4 | Add one optional bullet to Section 3 cross-referencing `CommunityToolkit.Mvvm`'s manifest-safety verification | Accepted | 2026-09-27 |
+| C5 | Add one sentence to Section 4's Preflight bullet describing the dialog's place before Preflight (AC3) | Accepted | 2026-09-27 |
+| C6 | Rewrite Section 5's stale settings-file-hypothetical sentence to name the real four settings sections | Accepted | 2026-09-27 |
+| C7 | Rewrite Section 6's stale "no custom WPF dialog shell" sentence | Accepted | 2026-09-27 |
