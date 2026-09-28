@@ -370,6 +370,7 @@ public sealed class OpenTopographyUsgs1mSourceTests
         Assert.Equal("USGS1m", result.Acquisition.Source.DatasetIdentifier);
         Assert.Null(result.Acquisition.Source.CollectionPeriod);
         Assert.Null(result.Acquisition.Source.QualityLevel);
+        Assert.Equal(OpenTopographyUsgs1mSource.AttributionNotice, result.Acquisition.Source.Attribution);
 
         Assert.Equal(HttpStatusCode.OK, result.Evidence.StatusCode);
         Assert.Equal("application/zip", result.Evidence.ContentType);
@@ -986,6 +987,8 @@ public sealed class OpenTopographyUsgs1mSourceTests
         AssertAaiGridRequest(handler.Requests[0]);
         AssertMetadataRequest(handler.Requests[1]);
         AssertIdenticalAreaParameters(handler.Requests[0], handler.Requests[1]);
+
+        Assert.Equal(OpenTopographyUsgs1mSource.AttributionNotice, result.Acquisition.Source.Attribution);
 
         HorizontalReference horizontal = result.Acquisition.Data.HorizontalReference;
         Assert.Equal("EPSG:26915", horizontal.CoordinateReferenceSystem);

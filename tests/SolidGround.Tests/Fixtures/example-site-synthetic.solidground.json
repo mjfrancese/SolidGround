@@ -1,12 +1,13 @@
 {
   "schema": "solidground.terrain-export",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provenance": {
     "source": {
       "sourceName": "OpenTopography",
       "datasetIdentifier": "USGS1m",
       "collectionPeriod": null,
-      "qualityLevel": null
+      "qualityLevel": null,
+      "attribution": "Data source: U.S. Geological Survey (USGS) 3D Elevation Program (3DEP), 1-meter Digital Elevation Model, accessed through the OpenTopography Facility. This work is based on API services provided by the OpenTopography Facility with support from the National Science Foundation under NSF Award Numbers 2410799, 2410800 \u0026 2410801."
     },
     "horizontalTransformation": {
       "sourceReference": {

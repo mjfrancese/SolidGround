@@ -202,6 +202,35 @@ export.
 See docs/architecture/address-parcel-provenance.md for the full type definitions, the field-mapping table
 Issue #16's future Extensible Storage schema version will need, and this design's remaining open questions.
 
+## Export document manifest, schema version 4
+
+**Update, SolidGround Issue #35 (PH3-8) (2026-09-27):** `TerrainProvenance.CurrentSchemaVersion` is now `4`.
+Version 4 adds exactly one required property, `provenance.source.attribution`, written by `WriteSource` as the
+new, final property of the `source` object, immediately after `qualityLevel` -- the version 3 manifest's
+property order above is otherwise unchanged:
+
+```text
+provenance                     object  TerrainProvenance
+  source                        object  ElevationSourceMetadata
+    sourceName                   string
+    datasetIdentifier             string
+    collectionPeriod              object | null   -- unchanged from version 1
+    qualityLevel                   string | null   -- unchanged from version 1
+    attribution                    string | null   the source's own required attribution/citation text, or
+                                                    null when the source does not carry one
+```
+
+`attribution` is a string, or explicit JSON `null`, never omitted, matching every other optional property in
+this manifest. It is non-null for every export OpenTopography's `USGS1m` source produces
+(`OpenTopographyUsgs1mSource.AttributionNotice`, a fixed constant) and null for the manifest's other own
+`ElevationSourceMetadata` construction sites unless a caller supplies one; `ElevationSourceMetadata`'s
+constructor validates it exactly like `qualityLevel` -- non-null, non-blank, or rejected. Every other version 3
+rule -- property order, null-vs-omitted, number/date/enum formatting, determinism -- applies identically to
+version 4; nothing else in the manifest changed. See `docs/architecture/source-licensing-and-attribution.md`'s
+"Provenance export: schema version 4" section for why this field was added, which call sites needed a new
+argument to keep supplying it, and the full list of byte-pinned tests and fixtures this bump required updating;
+it is not duplicated here.
+
 ## Points file format, version 1
 
 `TerrainExportBundleRenderer.RenderPoints` writes one line per retained sample, in `payload.Samples`' order — the simplifier's own row-major order, see "Decisions". There is no header row, no comments, no byte-order mark, and no blank lines: Revit's points-file toposolid import fallback expects bare comma-separated `x,y,z` lines, and a header line would break it.
@@ -237,6 +266,8 @@ Phase 2's Extensible Storage mapping (out of this issue's scope) is expected to 
 **Update, Issue #21 (2026-09-19):** this policy's first paragraph is exercised for the first time: `CurrentSchemaVersion` is now `2` (see "Export document manifest, schema version 2"), and a version 1 document — including one written by an earlier build of this CLI — is rejected by `TerrainExportBundleReader.ParseDocument`'s existing `schemaVersion` check with the same `TerrainExportException` it always threw for any non-current version, naming the actual and expected version. There is no migration path from a version 1 document to version 2; the version 1 manifest above stays documented as what that earlier writer produced, exactly as this section already said it would.
 
 **Update, Issue #33 (2026-09-26):** this policy's first paragraph is exercised again: `CurrentSchemaVersion` is now `3` (see "Export document manifest, schema version 3"), and a version 1 or version 2 document — including one written by an earlier build of this CLI — is rejected by the same `schemaVersion` check with the same `TerrainExportException`, naming the actual and expected version. There is no migration path from a version 1 or version 2 document to version 3; both earlier manifests above stay documented as what those earlier writers produced, exactly as this section already said they would.
+
+**Update, SolidGround Issue #35 (2026-09-27):** this policy's first paragraph is exercised a third time: `CurrentSchemaVersion` is now `4` (see "Export document manifest, schema version 4"), and a version 1, 2, or 3 document — including one written by an earlier build of this CLI — is rejected by the same `schemaVersion` check with the same `TerrainExportException`, naming the actual and expected version. There is no migration path from a version 1, 2, or 3 document to version 4; all three earlier manifests above stay documented as what those earlier writers produced, exactly as this section already said they would. `RasterSourceSidecarIo.CurrentSchemaVersion` (a separate, independent version number for the `.source.json` sidecar; see `docs/architecture/cli-workflow.md`'s "Raster set persistence" section) is bumped the same way, for the same reason, in the same commit.
 
 ## NODATA, empty candidate sets, and statistics
 
@@ -293,7 +324,7 @@ The detail that matters for reconstruction: `Origin` is a plain `Coordinate3D`, 
 | Mapping the export document manifest onto a Revit Extensible Storage schema (stable GUID, per-field storage) | Phase 2 | AGENTS.md's Extensible Storage decision; the manifest here is deliberately nested, not pre-flattened, so that mapping can walk the same structure. |
 | Attaching provenance to a created toposolid element, and any Revit-side read-back | Phase 2 | `TerrainExportBundleReader` reconstructs a `TerrainProvenance`/`TerrainExportPayload` from bytes; a Revit-side adapter that calls it is a separate, later concern. |
 | An export destination other than the local file system | Not scheduled | `ITerrainExporter` (Issue #2) stays destination-neutral; `FileSystemTerrainExporter` is the only implementation this issue adds. |
-| A schema version 4 manifest | Not scheduled | See "Versioning and compatibility policy": the version 1, version 2, and version 3 manifests all stay documented once a version 4 is ever added. |
+| A schema version 5 manifest | Not scheduled | Schema version 4 shipped with Issue #35 (see "Export document manifest, schema version 4"); per "Versioning and compatibility policy," the version 1, version 2, version 3, and version 4 manifests all stay documented once a version 5 is ever added. |
 
 ## Known limitations
 

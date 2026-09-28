@@ -171,7 +171,7 @@ public static class TerrainExportBundleReader
     private static ElevationSourceMetadata ParseSource(JsonElement obj, string path)
     {
         RequireObject(obj, path);
-        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path, ["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel"]);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path, ["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel", "attribution"]);
 
         string sourceName = RequireString(props["sourceName"], $"{path}.sourceName");
         string datasetIdentifier = RequireString(props["datasetIdentifier"], $"{path}.datasetIdentifier");
@@ -182,10 +182,11 @@ public static class TerrainExportBundleReader
             : ParseCollectionPeriod(collectionPeriodElement, $"{path}.collectionPeriod");
 
         string? qualityLevel = RequireStringOrNull(props["qualityLevel"], $"{path}.qualityLevel");
+        string? attribution = RequireStringOrNull(props["attribution"], $"{path}.attribution");
 
         try
         {
-            return new ElevationSourceMetadata(sourceName, datasetIdentifier, collectionPeriod, qualityLevel);
+            return new ElevationSourceMetadata(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, attribution);
         }
         catch (ArgumentException ex)
         {

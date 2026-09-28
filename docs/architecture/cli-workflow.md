@@ -632,6 +632,38 @@ a previously unavailable fact: the identical (possibly expanded) box was already
 without parsing a URI's query string. See `docs/architecture/aoi-normalization-and-clipping.md`'s "Minimum
 fetch envelope, verified 2026-09-20" section for the rule this reflects.
 
+**Update, SolidGround Issue #35 (PH3-8) (2026-09-27):** `RasterSourceSidecarIo.CurrentSchemaVersion` is now `4`.
+A version 3 sidecar (or version 2 or version 1) is rejected by `process`'s strict reader exactly like any other
+wrong `schemaVersion`, naming the sidecar's own path; there is no migration path from version 3 to version 4,
+the same as every earlier version bump above. The version 3 table above stays documented per the versioning
+convention; the remedy for a version 3 (or earlier) `.source.json` is the same one already documented for
+version 1: re-run `fetch` against the same AOI to write a fresh version 4 raster set before running `process`
+against it again, not to hand-edit the old sidecar. The version 4 shape adds exactly one top-level property,
+immediately after `qualityLevel` and before `vertical`:
+
+```text
+schema                          string   constant "solidground.raster-source"
+schemaVersion                    int     constant 4
+sourceName                        string
+datasetIdentifier                  string
+collectionPeriod                    object { start, end } as "yyyy-MM-dd" strings, or JSON null
+qualityLevel                         string | null
+attribution                           string | null   the source's own required attribution/citation text, or
+                                                        null when the source does not carry one
+vertical                               object  { datum, unit, geoidModel } -- unchanged from version 3
+horizontalReferenceOrigin               string  ReferenceOrigin member name
+verticalReferenceOrigin                  string  ReferenceOrigin member name
+acquisition                               object  -- unchanged from version 3
+```
+
+`fetch`'s own `BuildSidecar` now copies `acquisition.Acquisition.Source.Attribution` into this new field, so a
+later `process` run reproduces the same attribution the original `fetch` recorded; `process` in turn passes
+`sidecar?.Attribution` into the `ElevationSourceMetadata` it rebuilds, and any of the corresponding CLI options
+still overrides the sidecar's own value for every *other* field the way it already did -- no `--attribution`
+override exists, so the sidecar's value (or its absence) always wins for this one field. See
+`docs/architecture/source-licensing-and-attribution.md`'s "Provenance export: schema version 4" section for why
+this field was added and the full list of call sites and tests it touched.
+
 **Update, Issue #21 (2026-09-19):** `fetch`/`run` sets `HttpClient.Timeout` from `--timeout` once, but the
 hybrid GeoTIFF-GeoKeys flow sends that same `HttpClient` two sequential `GET` requests for one acquisition
 (`docs/architecture/opentopography-usgs1m-source.md`'s "Two-request contract, verified 2026-09-19" section);

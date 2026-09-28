@@ -117,7 +117,8 @@ internal static class RunCommand
             acquisition.Acquisition.Source.SourceName,
             acquisition.Acquisition.Source.DatasetIdentifier,
             cliCollectionPeriod ?? acquisition.Acquisition.Source.CollectionPeriod,
-            cliQualityLevel ?? acquisition.Acquisition.Source.QualityLevel);
+            cliQualityLevel ?? acquisition.Acquisition.Source.QualityLevel,
+            acquisition.Acquisition.Source.Attribution);
 
         ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(

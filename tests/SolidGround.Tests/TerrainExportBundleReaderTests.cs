@@ -7,6 +7,7 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
@@ -47,6 +48,23 @@ public sealed class TerrainExportBundleReaderTests
         Assert.Equal(
             BitConverter.DoubleToInt64Bits(payload.Provenance.LocalFrame.Origin.Elevation),
             BitConverter.DoubleToInt64Bits(roundTripped.Provenance.LocalFrame.Origin.Elevation));
+    }
+
+    [Fact]
+    public void ReadOfARenderedPayloadRoundTripsAPopulatedSourceAttributionByteForByte()
+    {
+        // AC1's "an attribution string for every shipped source, asserted present in the JSON provenance
+        // export by a test" for OpenTopography specifically -- see
+        // docs/architecture/source-licensing-and-attribution.md's "Provenance export: schema version 4"
+        // section. Uses the real, shipped OpenTopographyUsgs1mSource.AttributionNotice text, not a placeholder,
+        // so this proves the actual production string round-trips through render+read unchanged.
+        TerrainExportPayload payload = CreatePayload(attribution: OpenTopographyUsgs1mSource.AttributionNotice);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-round-trip-attribution");
+
+        TerrainExportPayload roundTripped = TerrainExportBundleReader.Read(bundle.DocumentBytes.Span, bundle.PointsBytes.Span);
+
+        Assert.Equal(OpenTopographyUsgs1mSource.AttributionNotice, roundTripped.Provenance.Source.Attribution);
+        Assert.Equal(payload.Provenance, roundTripped.Provenance);
     }
 
     [Fact]
@@ -337,6 +355,25 @@ public sealed class TerrainExportBundleReaderTests
     }
 
     [Fact]
+    public void ReadProvenanceRejectsADocumentMissingTheSourceAttributionProperty()
+    {
+        TerrainExportPayload payload = CreatePayload(qualityLevel: "QL2");
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-tamper-missing-attribution");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement source = document.RootElement.GetProperty("provenance").GetProperty("source");
+        // attribution is the last property WriteSource writes (see docs/architecture/source-licensing-and-
+        // attribution.md's "Provenance export: schema version 4" section), so it carries no trailing comma of
+        // its own; RemoveJsonProperty's own trailing-comma assumption does not apply here.
+        string tamperedText = RemoveTrailingJsonProperty(documentText, source, "attribution");
+        byte[] tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(() => TerrainExportBundleReader.ReadProvenance(tamperedBytes));
+        Assert.Contains("missing", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ReadProvenanceRejectsAUnitDefinitionWhoseMetersPerUnitIsAlteredInItsLastDigit()
     {
         TerrainExportPayload payload = CreatePayload(projectedUnit: LengthUnit.UsSurveyFoot);
@@ -611,7 +648,7 @@ public sealed class TerrainExportBundleReaderTests
     {
         // A genuine version 2 document (from before SolidGround Issue #33) never wrote addressParcel at all;
         // reconstructing one exactly means omitting that property entirely in addition to changing the
-        // schemaVersion number, so this document is built by hand rather than by tampering with a version 3
+        // schemaVersion number, so this document is built by hand rather than by tampering with a version 4
         // rendering (mirrors ReadProvenanceRejectsAVersionOneDocumentBecauseVersionOneNeverWroteTheReferenceOriginFields's
         // own precedent for the v1-to-v2 transition).
         const string version2Document = """
@@ -676,6 +713,26 @@ public sealed class TerrainExportBundleReaderTests
         return ReplaceExactlyOnce(documentText, token, string.Empty);
     }
 
+    /// <summary>
+    /// Removes a property that <see cref="RemoveJsonProperty"/> cannot: one written last within its parent
+    /// object, and therefore carrying no trailing comma of its own. Removes the preceding sibling's own
+    /// trailing comma instead, so the result stays valid JSON with one fewer property.
+    /// </summary>
+    private static string RemoveTrailingJsonProperty(string documentText, JsonElement parent, string propertyName)
+    {
+        string token = $"\"{propertyName}\": {parent.GetProperty(propertyName).GetRawText()}";
+        int tokenIndex = documentText.IndexOf(token, StringComparison.Ordinal);
+        Assert.True(tokenIndex >= 0, $"Token '{token}' was not found in the rendered document.");
+        Assert.True(
+            documentText.IndexOf(token, tokenIndex + 1, StringComparison.Ordinal) < 0,
+            $"Token '{token}' was not unique in the rendered document.");
+
+        int precedingCommaIndex = documentText.LastIndexOf(',', tokenIndex);
+        Assert.True(precedingCommaIndex >= 0, $"No preceding comma was found before token '{token}'.");
+
+        return documentText[..precedingCommaIndex] + documentText[(tokenIndex + token.Length)..];
+    }
+
     private static string TamperLastDigit(string numberText)
     {
         char lastChar = numberText[^1];
@@ -694,6 +751,7 @@ public sealed class TerrainExportBundleReaderTests
         IReadOnlyList<LocalTerrainSample>? samples = null,
         CollectionPeriod? collectionPeriod = null,
         string? qualityLevel = null,
+        string? attribution = null,
         string? geoidModel = "Geoid12B",
         LengthUnit verticalUnit = LengthUnit.InternationalFoot,
         LengthUnit projectedUnit = LengthUnit.Meter,
@@ -710,6 +768,7 @@ public sealed class TerrainExportBundleReaderTests
             Math.Max(originalPointCount, effectiveSamples.Count),
             collectionPeriod,
             qualityLevel,
+            attribution,
             geoidModel,
             verticalUnit,
             projectedUnit,
@@ -728,6 +787,7 @@ public sealed class TerrainExportBundleReaderTests
         int originalPointCount,
         CollectionPeriod? collectionPeriod,
         string? qualityLevel,
+        string? attribution,
         string? geoidModel,
         LengthUnit verticalUnit,
         LengthUnit projectedUnit,
@@ -742,7 +802,7 @@ public sealed class TerrainExportBundleReaderTests
         HorizontalReference projected = ProjectedReference(projectedUnit);
         return new TerrainProvenance(
             TerrainProvenance.CurrentSchemaVersion,
-            Source(collectionPeriod, qualityLevel),
+            Source(collectionPeriod, qualityLevel, attribution),
             Transformation(projected),
             vertical,
             horizontalReferenceOrigin,
@@ -755,8 +815,8 @@ public sealed class TerrainExportBundleReaderTests
             addressParcel);
     }
 
-    private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null) =>
-        new("OpenTopography", "USGS1m", collectionPeriod, qualityLevel);
+    private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null, string? attribution = null) =>
+        new("OpenTopography", "USGS1m", collectionPeriod, qualityLevel, attribution);
 
     private static HorizontalReference GeographicReference() => new(
         "EPSG:4326", "WGS84", HorizontalReferenceKind.Geographic, HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);

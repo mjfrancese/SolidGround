@@ -39,7 +39,7 @@ public sealed class CliProcessCommandTests
     private const string ValidSourceJson = """
         {
           "schema": "solidground.raster-source",
-          "schemaVersion": 3,
+          "schemaVersion": 4,
           "sourceName": "OpenTopography",
           "datasetIdentifier": "USGS1m",
           "collectionPeriod": {
@@ -47,6 +47,7 @@ public sealed class CliProcessCommandTests
             "end": "2024-05-02"
           },
           "qualityLevel": "QL2",
+          "attribution": null,
           "vertical": {
             "datum": "NAVD88",
             "unit": "UsSurveyFoot",
@@ -642,6 +643,35 @@ public sealed class CliProcessCommandTests
         }
     }
 
+    [Fact]
+    public async Task ProcessCarriesForwardTheSourceJsonSidecarsAttributionIntoTheExportedProvenance()
+    {
+        DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            string sidecarPath = Path.Combine(tempDirectory.FullName, "terrain.source.json");
+            string sidecarJson = ValidSourceJson.Replace(
+                "\"attribution\": null,", "\"attribution\": \"Sidecar attribution notice.\",", StringComparison.Ordinal);
+            File.WriteAllText(sidecarPath, sidecarJson);
+
+            (int exitCode, _, _) = await RunAsync(
+                [
+                    "process", "--asc", FixturePath("example-site-synthetic.asc"), "--prj", FixturePath("example-site-synthetic.prj"),
+                    "--source-json", sidecarPath, "--output", tempDirectory.FullName,
+                ],
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(CliExitCodes.Success, exitCode);
+            using JsonDocument document = ReadDocument(tempDirectory.FullName, "terrain");
+            string attribution = document.RootElement.GetProperty("provenance").GetProperty("source").GetProperty("attribution").GetString()!;
+            Assert.Equal("Sidecar attribution notice.", attribution);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory.FullName, recursive: true);
+        }
+    }
+
     // ---- --source-json strict validation (RasterSourceSidecarIo.Read rejects every malformed class) -----
 
     [Fact]
@@ -670,11 +700,21 @@ public sealed class CliProcessCommandTests
     }
 
     [Fact]
-    public async Task SourceJsonWithSchemaVersionFourExitsWithUsageErrorNamingTheSidecarPath()
+    public async Task SourceJsonWithSchemaVersionFiveExitsWithUsageErrorNamingTheSidecarPath()
     {
         // An unsupported future schemaVersion (newer than RasterSourceSidecarIo.CurrentSchemaVersion) is
         // rejected the same way any other wrong schemaVersion is.
-        string json = ValidSourceJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 4,", StringComparison.Ordinal);
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 4,", "\"schemaVersion\": 5,", StringComparison.Ordinal);
+        await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SourceJsonWithSchemaVersionThreeExitsWithUsageErrorNamingTheSidecarPath()
+    {
+        // A genuine version 3 sidecar (from before SolidGround Issue #35's attribution field addition) is now
+        // rejected as an old version, exactly like versions 1 and 2 below -- there is no migration path from
+        // version 3 to version 4.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 4,", "\"schemaVersion\": 3,", StringComparison.Ordinal);
         await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
     }
 
@@ -683,8 +723,8 @@ public sealed class CliProcessCommandTests
     {
         // A genuine version 2 sidecar (from before SolidGround Issue #23's fetchEnvelope addition) is now
         // rejected as an old version, exactly like version 1 below -- there is no migration path from version
-        // 2 to version 3.
-        string json = ValidSourceJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 2,", StringComparison.Ordinal);
+        // 2 to version 4.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 4,", "\"schemaVersion\": 2,", StringComparison.Ordinal);
         await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
     }
 
@@ -692,8 +732,8 @@ public sealed class CliProcessCommandTests
     public async Task SourceJsonWithSchemaVersionOneExitsWithUsageErrorNamingTheSidecarPath()
     {
         // A genuine version 1 sidecar (from before SolidGround Issue #21) is rejected the same way any other
-        // wrong schemaVersion is -- there is no migration path from version 1 to version 3.
-        string json = ValidSourceJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 1,", StringComparison.Ordinal);
+        // wrong schemaVersion is -- there is no migration path from version 1 to version 4.
+        string json = ValidSourceJson.Replace("\"schemaVersion\": 4,", "\"schemaVersion\": 1,", StringComparison.Ordinal);
         await AssertSourceJsonRejectedAsync(json, expectedAbsentText: null, TestContext.Current.CancellationToken);
     }
 

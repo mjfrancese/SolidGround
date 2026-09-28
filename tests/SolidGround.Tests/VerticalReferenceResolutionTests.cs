@@ -71,6 +71,7 @@ public sealed class VerticalReferenceResolutionTests
         "USGS1m",
         CollectionPeriod: null,
         QualityLevel: null,
+        Attribution: null,
         new RasterSourceVertical(datum, unit, geoidModel),
         HorizontalReferenceOrigin: ReferenceOrigin.SourceResponse,
         VerticalReferenceOrigin: verticalOrigin,

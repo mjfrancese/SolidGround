@@ -18,6 +18,7 @@ public sealed record RasterSourceSidecar(
     string DatasetIdentifier,
     CollectionPeriod? CollectionPeriod,
     string? QualityLevel,
+    string? Attribution,
     RasterSourceVertical Vertical,
     ReferenceOrigin HorizontalReferenceOrigin,
     ReferenceOrigin VerticalReferenceOrigin,

@@ -428,6 +428,67 @@ public sealed class RevitInteractiveDialogTests
     }
 
     // ------------------------------------------------------------------------------------------------
+    // SolidGround Issue #35 (PH3-8): OpenTopography attribution shown once per run
+    // (docs/architecture/source-licensing-and-attribution.md's "Dialog: attribution shown once per run"
+    // section). OpenTopography's own attribution was never shown anywhere in this dialog before this change,
+    // on either AoiSource path, because nothing threaded TerrainRequestSettings.Mode (or any elevation-source
+    // fact) into it at all. ShowFetchModeSourceAttribution/ShowProcessModeSourceNote are the exact, mutually
+    // exclusive, Mode-gated conditions for the two new sentences.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SolidGroundDialogSourceShowsTheOpenTopographyAttributionInFetchModeAndAConditionalSourceNoteInProcessMode()
+    {
+        string dialogSource = ReadDialogFile("SolidGroundDialog.cs");
+        string viewModelSource = ReadDialogFile("SolidGroundDialogViewModel.cs");
+
+        // "public", not "internal" -- covered generically going forward by
+        // SolidGroundDialogViewModelPropertiesReferencedByAWpfBindingAreAllPublicNotInternal below, but pinned
+        // explicitly here too, matching this file's own precedent for every other provenance-preview property.
+        Assert.Contains("public bool ShowFetchModeSourceAttribution", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("public bool ShowProcessModeSourceNote", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("ShowFetchModeSourceAttribution", dialogSource, StringComparison.Ordinal);
+        Assert.Contains("ShowProcessModeSourceNote", dialogSource, StringComparison.Ordinal);
+
+        // Review finding, major: pin the exact Visibility bindings (control, property, and converter), not
+        // just bare-substring presence anywhere in the file -- a swapped, missing, or wrong-converter binding
+        // (for example TextPresenceToVisibility, which always collapses a bool to Collapsed) would otherwise
+        // still pass every check above, silently. Same idiom as
+        // SolidGroundDialogSourceBindsAnAlwaysOnPointBudgetRangeErrorAlongsideTheRevitIniWarning, above.
+        string panelBody = ExtractMethodBody(dialogSource, "private static StackPanel BuildProvenancePreviewPanel(DialogPalette palette)");
+        Assert.Contains(
+            "fetchModeSourceAttribution.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowFetchModeSourceAttribution)) { Converter = BooleanToVisibility });",
+            panelBody, StringComparison.Ordinal);
+        Assert.Contains(
+            "processModeSourceNote.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowProcessModeSourceNote)) { Converter = BooleanToVisibility });",
+            panelBody, StringComparison.Ordinal);
+
+        // A stable substring of the OpenTopography constant, resolved through the same using this file relies
+        // on, plus the using itself -- SolidGroundDialog.cs shows OpenTopographyUsgs1mSource.AttributionNotice
+        // directly (a compile-time constant), never a second, duplicated copy of the notice text.
+        Assert.Contains("OpenTopographyUsgs1mSource.AttributionNotice", dialogSource, StringComparison.Ordinal);
+        Assert.Contains("using SolidGround.Core.Sources.OpenTopography;", dialogSource, StringComparison.Ordinal);
+
+        // Deliberately conditional wording, not a promised attribution string: a process-mode run's actual
+        // source sidecar is not read at dialog-construction time.
+        Assert.Contains("This run processes an already-downloaded elevation file.", dialogSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolidGroundDialogHostThreadsTheConfiguredModeIntoSolidGroundDialogInputs()
+    {
+        // The provenance-preview panel decides which of the two new sentences to show from
+        // TerrainRequestSettings.Mode, read from the settings file before the dialog opens (independent of
+        // AoiSource) -- ShowModal must thread it into SolidGroundDialogInputs so the view-model can see it at
+        // all.
+        string hostSource = ReadDialogFile("SolidGroundDialogHost.cs");
+        string inputsSource = ReadDialogFile("SolidGroundDialogInputs.cs");
+
+        Assert.Contains("settings.Request.Mode", hostSource, StringComparison.Ordinal);
+        Assert.Contains("TerrainAcquisitionMode Mode", inputsSource, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // Stage E live-session findings, Stage F fixes (docs/architecture/revit-interactive-dialog.md "Stage E
     // live-session findings and Stage F fixes"): a live Revit 2027 session exercising the Stage D wiring found
     // defects B (step 9 provenance preview showed every conditional sentence at once), C (step 3's

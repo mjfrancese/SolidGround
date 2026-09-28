@@ -95,6 +95,12 @@ internal static class RevitSettingsIo
             "countyGeoidOverride": null,
             "localParcelFilePath": null,
             "localParcelFileSourceLabel": null,
+            // If this is ever configured against a real, purchased Regrid Data Store export, this string must
+            // name the purchase date and the license's own one-year Term, after which it requires promptly
+            // ceasing all use of the data or deleting it entirely -- this exact text is what the interactive
+            // dialog shows verbatim, every run (LocalParcelFileOptions.LicenseDisclaimerText; see
+            // docs/architecture/source-licensing-and-attribution.md's "Regrid Data Store obligations" section
+            // for the license's exact wording).
             "localParcelFileLicenseDisclaimerText": null,
             // Overrides the nearby-parcel fallback tier's own default search radius (30 m), used only when a
             // geocoded point resolves zero parcels outright. Must be a finite, positive number of meters when

@@ -22,7 +22,7 @@ public sealed class RasterSourceSidecarIoTests
     private const string ValidJson = """
         {
           "schema": "solidground.raster-source",
-          "schemaVersion": 3,
+          "schemaVersion": 4,
           "sourceName": "OpenTopography",
           "datasetIdentifier": "USGS1m",
           "collectionPeriod": {
@@ -30,6 +30,7 @@ public sealed class RasterSourceSidecarIoTests
             "end": "2024-05-02"
           },
           "qualityLevel": "QL2",
+          "attribution": null,
           "vertical": {
             "datum": "NAVD88",
             "unit": "UsSurveyFoot",
@@ -86,6 +87,21 @@ public sealed class RasterSourceSidecarIoTests
     }
 
     [Fact]
+    public void WriteThenReadRoundTripsANullAttributionAsExplicitJsonNull()
+    {
+        RasterSourceSidecar original = BuildSidecar(attribution: null);
+
+        using MemoryStream stream = new();
+        RasterSourceSidecarIo.Write(original, stream);
+
+        string json = Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Contains("\"attribution\": null", json, StringComparison.Ordinal);
+
+        RasterSourceSidecar roundTripped = RasterSourceSidecarIo.Read(stream.ToArray(), "sidecar.source.json");
+        Assert.Null(roundTripped.Attribution);
+    }
+
+    [Fact]
     public void ReadThrowsFormatExceptionOnMalformedJson()
     {
         byte[] bytes = Encoding.UTF8.GetBytes("{ this is not well-formed json ");
@@ -100,7 +116,7 @@ public sealed class RasterSourceSidecarIoTests
         string wrongSchema = ValidJson.Replace("\"schema\": \"solidground.raster-source\",", "\"schema\": \"not-the-right-schema\",", StringComparison.Ordinal);
         Assert.Throws<FormatException>(() => RasterSourceSidecarIo.Read(Utf8(wrongSchema), "path"));
 
-        string wrongVersion = ValidJson.Replace("\"schemaVersion\": 3,", "\"schemaVersion\": 4,", StringComparison.Ordinal);
+        string wrongVersion = ValidJson.Replace("\"schemaVersion\": 4,", "\"schemaVersion\": 5,", StringComparison.Ordinal);
         Assert.Throws<FormatException>(() => RasterSourceSidecarIo.Read(Utf8(wrongVersion), "path"));
     }
 
@@ -135,11 +151,12 @@ public sealed class RasterSourceSidecarIoTests
 
     private static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);
 
-    private static RasterSourceSidecar BuildSidecar() => new(
+    private static RasterSourceSidecar BuildSidecar(string? attribution = "QL2 attribution notice.") => new(
         "OpenTopography",
         "USGS1m",
         new CollectionPeriod(new DateOnly(2024, 5, 1), new DateOnly(2024, 5, 2)),
         "QL2",
+        attribution,
         new RasterSourceVertical("NAVD88", LengthUnit.UsSurveyFoot, "Geoid12B"),
         ReferenceOrigin.SourceResponse,
         ReferenceOrigin.SourceResponse,

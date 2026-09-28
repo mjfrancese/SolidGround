@@ -114,6 +114,7 @@ internal static class FetchCommand
         acquisition.Acquisition.Source.DatasetIdentifier,
         acquisition.Acquisition.Source.CollectionPeriod,
         acquisition.Acquisition.Source.QualityLevel,
+        acquisition.Acquisition.Source.Attribution,
         new RasterSourceVertical(
             acquisition.Acquisition.Data.VerticalReference.Datum,
             acquisition.Acquisition.Data.VerticalReference.Unit,

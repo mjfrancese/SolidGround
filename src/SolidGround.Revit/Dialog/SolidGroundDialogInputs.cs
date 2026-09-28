@@ -31,4 +31,5 @@ internal sealed record SolidGroundDialogInputs(
     string RevitIniPath,
     int NetworkTimeoutSeconds,
     AoiSettings ConfiguredAreaOfInterest,
-    double NearbySearchRadiusMeters);
+    double NearbySearchRadiusMeters,
+    TerrainAcquisitionMode Mode);

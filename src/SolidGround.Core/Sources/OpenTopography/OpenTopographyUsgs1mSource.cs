@@ -241,6 +241,20 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
     /// <summary>The <c>datasetName</c> value this source always requests.</summary>
     public const string DatasetName = "USGS1m";
 
+    /// <summary>
+    /// This dataset's required attribution/citation text, attached to every successful acquisition's
+    /// <see cref="ElevationSourceMetadata.Attribution"/>. The second sentence is OpenTopography's own required
+    /// acknowledgment text, verbatim. See docs/architecture/source-licensing-and-attribution.md's
+    /// "OpenTopography USGS 1 m attribution" section for the citation and retrieval date this text is drawn
+    /// from, and for why the first sentence is SolidGround's own honest dataset description rather than a
+    /// verbatim per-dataset citation string.
+    /// </summary>
+    public const string AttributionNotice =
+        "Data source: U.S. Geological Survey (USGS) 3D Elevation Program (3DEP), 1-meter Digital Elevation " +
+        "Model, accessed through the OpenTopography Facility. This work is based on API services provided by " +
+        "the OpenTopography Facility with support from the National Science Foundation under NSF Award Numbers " +
+        "2410799, 2410800 & 2410801.";
+
     /// <summary>The <c>outputFormat</c> value the data request always sends. OpenTopography's default is GTiff, so this must always be sent explicitly.</summary>
     public const string OutputFormat = "AAIGrid";
 
@@ -776,7 +790,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                     new FormatException(redactedDetail));
             }
 
-            var acquisition = new ElevationAcquisition(grid, new ElevationSourceMetadata("OpenTopography", DatasetName));
+            var acquisition = new ElevationAcquisition(grid, new ElevationSourceMetadata("OpenTopography", DatasetName, attribution: AttributionNotice));
 
             string? redactedCitation = metadata.Citation is null ? null : OpenTopographyRedaction.RedactText(metadata.Citation, apiKey);
             var metadataRequestEvidence = new OpenTopographyMetadataRequestEvidence(
@@ -1156,7 +1170,7 @@ public sealed class OpenTopographyUsgs1mSource : IElevationSource
                     ex);
             }
 
-            var acquisition = new ElevationAcquisition(grid, new ElevationSourceMetadata("OpenTopography", DatasetName));
+            var acquisition = new ElevationAcquisition(grid, new ElevationSourceMetadata("OpenTopography", DatasetName, attribution: AttributionNotice));
             // The evidence record is explicitly documented as something a caller may log or inspect, so every
             // field it stores must already be redacted; parsing above intentionally used the unredacted
             // wellKnownText, and wellKnownText's redacted copy disables truncation (maximumLength:

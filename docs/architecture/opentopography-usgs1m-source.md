@@ -155,7 +155,19 @@ AGENTS.md forbids assuming the USGS 1 m mosaic uses the projected CRS and vertic
 
 ## Contract adjustment (deliverable A)
 
-`ElevationSourceMetadata.CollectionPeriod` and `QualityLevel` are now `CollectionPeriod?` and `string?`, defaulting to `null`. The `usgsdem` response carries neither a collection period nor a catalog quality level, and fabricating catalog values (for example, borrowing the point-cloud collection's 2017-02-17..2017-02-27 dates) would violate the same "fail rather than assume" rule. A supplied, non-null `QualityLevel` that is blank or whitespace-only is still rejected. `OpenTopographyUsgs1mSource` always builds `ElevationSourceMetadata("OpenTopography", "USGS1m", null, null)`.
+`ElevationSourceMetadata.CollectionPeriod` and `QualityLevel` are now `CollectionPeriod?` and `string?`, defaulting to `null`. The `usgsdem` response carries neither a collection period nor a catalog quality level, and fabricating catalog values (for example, borrowing the point-cloud collection's 2017-02-17..2017-02-27 dates) would violate the same "fail rather than assume" rule. A supplied, non-null `QualityLevel` that is blank or whitespace-only is still rejected. `OpenTopographyUsgs1mSource` always builds `ElevationSourceMetadata("OpenTopography", "USGS1m", null, null)` for these two fields.
+
+**Update, SolidGround Issue #35 (PH3-8) (2026-09-27):** the same construction call also now always supplies a
+fifth argument, `attribution: AttributionNotice` -- see "Attribution" below.
+
+## Attribution
+
+`OpenTopographyUsgs1mSource.AttributionNotice` is a fixed constant attached to every successful acquisition's
+`ElevationSourceMetadata.Attribution`, at both of this source's construction sites (the bare-AAIGrid-plus-GeoKeys
+path and the zip-sidecar path). See `docs/architecture/source-licensing-and-attribution.md`'s "OpenTopography
+USGS 1 m attribution" section for the constant's exact text, its citation and retrieval date, and why its first
+sentence is SolidGround's own dataset description rather than a verbatim per-dataset citation string; it is not
+duplicated here.
 
 ## User secrets deferral
 

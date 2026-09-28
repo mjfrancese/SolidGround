@@ -70,7 +70,8 @@ internal static class SolidGroundDialogHost
             revitIniPath,
             settings.Request.NetworkTimeoutSeconds,
             settings.Request.AreaOfInterest,
-            nearbySearchRadiusMeters);
+            nearbySearchRadiusMeters,
+            settings.Request.Mode);
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         SolidGroundDialog dialog = new(viewModel);

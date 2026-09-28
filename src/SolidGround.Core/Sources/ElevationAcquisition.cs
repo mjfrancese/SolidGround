@@ -45,7 +45,14 @@ public sealed record ElevationSourceMetadata
     /// "fail rather than assume" rule, so both are optional.
     /// </param>
     /// <param name="qualityLevel">The dataset's quality level, or null when the source does not report one. When supplied, it cannot be blank.</param>
-    public ElevationSourceMetadata(string sourceName, string datasetIdentifier, CollectionPeriod? collectionPeriod = null, string? qualityLevel = null)
+    /// <param name="attribution">
+    /// The source's own required attribution/citation text, or null when the source does not carry one. When
+    /// supplied, it cannot be blank. See docs/architecture/source-licensing-and-attribution.md's "Attribution
+    /// catalogue" section for each shipped source's own attribution text and citation.
+    /// </param>
+    public ElevationSourceMetadata(
+        string sourceName, string datasetIdentifier,
+        CollectionPeriod? collectionPeriod = null, string? qualityLevel = null, string? attribution = null)
     {
         if (string.IsNullOrWhiteSpace(sourceName))
         {
@@ -62,16 +69,23 @@ public sealed record ElevationSourceMetadata
             throw new ArgumentException("Quality level cannot be blank when it is supplied.", nameof(qualityLevel));
         }
 
+        if (attribution is not null && string.IsNullOrWhiteSpace(attribution))
+        {
+            throw new ArgumentException("Attribution cannot be blank when it is supplied.", nameof(attribution));
+        }
+
         SourceName = sourceName;
         DatasetIdentifier = datasetIdentifier;
         CollectionPeriod = collectionPeriod;
         QualityLevel = qualityLevel;
+        Attribution = attribution;
     }
 
     public string SourceName { get; }
     public string DatasetIdentifier { get; }
     public CollectionPeriod? CollectionPeriod { get; }
     public string? QualityLevel { get; }
+    public string? Attribution { get; }
 }
 
 /// <summary>An inclusive, validated date interval for data collection.</summary>

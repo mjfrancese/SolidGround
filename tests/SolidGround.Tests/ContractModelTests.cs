@@ -144,6 +144,18 @@ public sealed class ContractModelTests
     }
 
     [Fact]
+    public void SourceMetadataRejectsABlankAttributionAndAcceptsNullOrANonBlankValue()
+    {
+        Assert.Throws<ArgumentException>(() => new ElevationSourceMetadata("source", "dataset", attribution: " "));
+
+        ElevationSourceMetadata withoutAttribution = new("OpenTopography", "USGS1m");
+        Assert.Null(withoutAttribution.Attribution);
+
+        ElevationSourceMetadata withAttribution = new("OpenTopography", "USGS1m", attribution: "Example attribution notice.");
+        Assert.Equal("Example attribution notice.", withAttribution.Attribution);
+    }
+
+    [Fact]
     public void SimplificationResultCarriesRequestAndEnforcesRequestedBudget()
     {
         TerrainSample[] retained = [new(new Coordinate3D(1d, 2d, 3d))];
@@ -290,6 +302,23 @@ public sealed class ContractModelTests
             null,
             null,
             "Synthetic fixture data; no real license applies."));
+    }
+
+    [Fact]
+    public void AddressGeocoderProviderHasExactlyTheThreeApprovedMembersCensusGeocodioEsri()
+    {
+        // An enum-completeness guard so a fourth provider (for example a future Nominatim adapter) cannot be
+        // added without a deliberate, reviewed test change. See
+        // docs/architecture/source-licensing-and-attribution.md's "Fixture and default-path guarantees" section.
+        Assert.Equal(["Census", "Geocodio", "Esri"], Enum.GetNames<AddressGeocoderProvider>());
+    }
+
+    [Fact]
+    public void ParcelBoundarySourceKindHasExactlyTheTwoApprovedMembersCountyRegistryAndLocalParcelFile()
+    {
+        // Same guard as AddressGeocoderProviderHasExactlyTheThreeApprovedMembersCensusGeocodioEsri, above, for
+        // ParcelBoundarySourceKind.
+        Assert.Equal(["CountyRegistry", "LocalParcelFile"], Enum.GetNames<ParcelBoundarySourceKind>());
     }
 
     [Fact]

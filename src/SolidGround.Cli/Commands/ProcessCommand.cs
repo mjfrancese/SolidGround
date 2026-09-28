@@ -117,7 +117,7 @@ internal static class ProcessCommand
         string datasetIdentifier = invocation.GetValue("dataset") ?? sidecar?.DatasetIdentifier ?? Path.GetFileNameWithoutExtension(ascPath);
         CollectionPeriod? collectionPeriod = ParseCollectionPeriod(invocation) ?? sidecar?.CollectionPeriod;
         string? qualityLevel = invocation.GetValue("quality-level") ?? sidecar?.QualityLevel;
-        ElevationSourceMetadata sourceMetadata = new(sourceName, datasetIdentifier, collectionPeriod, qualityLevel);
+        ElevationSourceMetadata sourceMetadata = new(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, sidecar?.Attribution);
 
         cancellationToken.ThrowIfCancellationRequested();
 

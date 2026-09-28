@@ -12,6 +12,7 @@ using SolidGround.Core.Provenance;
 using SolidGround.Core.Rasters;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Terrain;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
@@ -264,7 +265,8 @@ public sealed class TerrainExportGoldenFileTests
         return PolygonalRegion.FromGeometry(geometry, reference);
     }
 
-    private static ElevationSourceMetadata GoldenSourceMetadata() => new("OpenTopography", "USGS1m");
+    private static ElevationSourceMetadata GoldenSourceMetadata() =>
+        new("OpenTopography", "USGS1m", attribution: OpenTopographyUsgs1mSource.AttributionNotice);
 
     // ---- real parcel pipeline: GeoJSON parcel -> AoiNormalizer -> forward reprojection -> buffered clip -> steps 5-7 ----
 

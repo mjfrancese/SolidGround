@@ -22,7 +22,7 @@ namespace SolidGround.Core.Sources;
 public static class RasterSourceSidecarIo
 {
     internal const string Schema = "solidground.raster-source";
-    internal const int CurrentSchemaVersion = 3;
+    internal const int CurrentSchemaVersion = 4;
 
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
@@ -75,6 +75,15 @@ public static class RasterSourceSidecarIo
             else
             {
                 writer.WriteNull("qualityLevel");
+            }
+
+            if (sidecar.Attribution is { } attribution)
+            {
+                writer.WriteString("attribution", attribution);
+            }
+            else
+            {
+                writer.WriteNull("attribution");
             }
 
             writer.WritePropertyName("vertical");
@@ -246,7 +255,7 @@ public static class RasterSourceSidecarIo
             Dictionary<string, JsonElement> top = ReadObjectProperties(root, sourcePathForErrors, "$",
                 [
                     "schema", "schemaVersion", "sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel",
-                    "vertical", "horizontalReferenceOrigin", "verticalReferenceOrigin", "acquisition",
+                    "attribution", "vertical", "horizontalReferenceOrigin", "verticalReferenceOrigin", "acquisition",
                 ]);
 
             string schema = RequireString(top["schema"], sourcePathForErrors, "$.schema");
@@ -276,13 +285,14 @@ public static class RasterSourceSidecarIo
                 : ParseCollectionPeriod(collectionPeriodElement, sourcePathForErrors, "$.collectionPeriod");
 
             string? qualityLevel = RequireStringOrNull(top["qualityLevel"], sourcePathForErrors, "$.qualityLevel");
+            string? attribution = RequireStringOrNull(top["attribution"], sourcePathForErrors, "$.attribution");
             RasterSourceVertical vertical = ParseVertical(top["vertical"], sourcePathForErrors, "$.vertical");
             ReferenceOrigin horizontalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["horizontalReferenceOrigin"], sourcePathForErrors, "$.horizontalReferenceOrigin");
             ReferenceOrigin verticalReferenceOrigin = RequireEnum<ReferenceOrigin>(top["verticalReferenceOrigin"], sourcePathForErrors, "$.verticalReferenceOrigin");
             RasterSourceAcquisition acquisition = ParseAcquisition(top["acquisition"], sourcePathForErrors, "$.acquisition");
 
             return new RasterSourceSidecar(
-                sourceName, datasetIdentifier, collectionPeriod, qualityLevel, vertical,
+                sourceName, datasetIdentifier, collectionPeriod, qualityLevel, attribution, vertical,
                 horizontalReferenceOrigin, verticalReferenceOrigin, acquisition);
         }
     }

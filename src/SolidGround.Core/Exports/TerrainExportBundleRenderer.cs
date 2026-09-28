@@ -195,6 +195,15 @@ public static class TerrainExportBundleRenderer
             writer.WriteNull("qualityLevel");
         }
 
+        if (source.Attribution is { } attribution)
+        {
+            writer.WriteString("attribution", attribution);
+        }
+        else
+        {
+            writer.WriteNull("attribution");
+        }
+
         writer.WriteEndObject();
     }
 

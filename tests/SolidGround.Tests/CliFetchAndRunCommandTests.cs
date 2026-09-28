@@ -124,8 +124,9 @@ public sealed class CliFetchAndRunCommandTests
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
             Assert.Equal("solidground.raster-source", sidecar.RootElement.GetProperty("schema").GetString());
-            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(4, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("OpenTopography", sidecar.RootElement.GetProperty("sourceName").GetString());
+            Assert.Equal(OpenTopographyUsgs1mSource.AttributionNotice, sidecar.RootElement.GetProperty("attribution").GetString());
 
             // The zip response carries its own .prj sidecar, so both references came straight from the
             // response itself (SourceResponse/SourceResponse), and no metadata request was ever made.
@@ -263,7 +264,7 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(NorthAmericanUtmWellKnownText.Create(26915, new VerticalReference("NAVD88", LengthUnit.Meter)), File.ReadAllText(prjPath));
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
-            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(4, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("SourceResponse", sidecar.RootElement.GetProperty("horizontalReferenceOrigin").GetString());
             Assert.Equal("SourceResponse", sidecar.RootElement.GetProperty("verticalReferenceOrigin").GetString());
             Assert.Equal(JsonValueKind.Null, sidecar.RootElement.GetProperty("acquisition").GetProperty("metadataRequest").ValueKind);
@@ -307,7 +308,7 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(expectedWkt, File.ReadAllText(prjPath));
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
-            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(4, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("SourceMetadataResponse", sidecar.RootElement.GetProperty("horizontalReferenceOrigin").GetString());
             Assert.Equal("DatasetDocumentation", sidecar.RootElement.GetProperty("verticalReferenceOrigin").GetString());
 
@@ -393,6 +394,12 @@ public sealed class CliFetchAndRunCommandTests
             JsonElement collectionPeriod = source.GetProperty("collectionPeriod");
             Assert.Equal("2024-05-01", collectionPeriod.GetProperty("start").GetString());
             Assert.Equal("2024-05-02", collectionPeriod.GetProperty("end").GetString());
+
+            // No CLI override exists for attribution (see docs/architecture/source-licensing-and-attribution.md's
+            // "Provenance export: schema version 4" section), so run's own exported provenance document must
+            // still carry the acquisition's own attribution through unchanged -- proving RunCommand.cs's
+            // ElevationSourceMetadata rebuild reaches this primary export, not only the --save-raster sidecar.
+            Assert.Equal(OpenTopographyUsgs1mSource.AttributionNotice, source.GetProperty("attribution").GetString());
         }
         finally
         {
@@ -625,7 +632,7 @@ public sealed class CliFetchAndRunCommandTests
             Assert.Equal(expectedWkt, File.ReadAllText(prjPath));
 
             using JsonDocument sidecar = JsonDocument.Parse(File.ReadAllBytes(sourceJsonPath));
-            Assert.Equal(3, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(4, sidecar.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("SourceMetadataResponse", sidecar.RootElement.GetProperty("horizontalReferenceOrigin").GetString());
             Assert.Equal("DatasetDocumentation", sidecar.RootElement.GetProperty("verticalReferenceOrigin").GetString());
 

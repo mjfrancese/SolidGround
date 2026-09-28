@@ -74,5 +74,16 @@ public sealed record LocalParcelFileOptions
     public required string SourceLabel { get; init; }
 
     /// <summary>The file's own license/disclaimer text, surfaced verbatim. Host-supplied; SolidGround never hardcodes a real license's text.</summary>
+    /// <remarks>
+    /// If this option is ever configured against a real, purchased Regrid Data Store export, include the
+    /// purchase date and the license's own one-year Term, after which it requires the licensee to promptly
+    /// cease all use of the data or delete it entirely, directly in this string. This exact string is what the
+    /// dialog's provenance/accuracy preview panel displays verbatim, every run (<c>parcelDisclaimer</c> in
+    /// <c>SolidGround.Revit/Dialog/SolidGroundDialog.cs</c>), so it is where an operator will actually see that
+    /// obligation before the Term lapses. See docs/architecture/source-licensing-and-attribution.md's "Regrid
+    /// Data Store obligations" section for the license's exact wording. As of this writing no Regrid data has
+    /// ever been purchased, so this remains an instruction for a future real configuration, not a description
+    /// of any data shipped here.
+    /// </remarks>
     public required string LicenseDisclaimerText { get; init; }
 }

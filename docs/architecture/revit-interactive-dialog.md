@@ -136,8 +136,15 @@ milestone, not a reduced slice) exactly, unchanged in order or shape.
    `AddressParcelProvenanceFactory.Create`'s own contract, which omits `GeocodeProvenance` entirely in that
    sub-case. Both sentences require the AOI source to be a parcel lookup; when the AOI source is the settings
    file instead, a separate, third statement says plainly that no address/parcel lookup was performed and no
-   such provenance will be attached. Either way, AGENTS.md's fixed "site-form tool, not a survey instrument"
-   sentence is always shown.
+   such provenance will be attached. **Update, SolidGround Issue #35 (PH3-8):** two further, mutually exclusive
+   sentences are gated on `TerrainRequestSettings.Mode` instead, independent of `AoiSource`: in `Fetch` mode, a
+   fixed `TextBlock` showing `OpenTopographyUsgs1mSource.AttributionNotice` verbatim; in `Process` mode, a fixed,
+   deliberately conditional sentence that this run's own source sidecar attribution, when it carries one, will
+   be included in the exported provenance record. See `docs/architecture/source-licensing-and-attribution.md`'s
+   "Dialog: attribution shown once per run" section for why these two are `Mode`-gated rather than
+   `AoiSource`-gated, and for why geocode/parcel attribution showing only on the `FindParcel` path (never on
+   `UseSettingsFile`) is correct behavior, not a defect. Either way, AGENTS.md's fixed "site-form tool, not a
+   survey instrument" sentence is always shown.
 10. **Preflight summary with Create/Cancel** — a read-only recap of every prior choice (area of interest,
     buffer, point budget with its warning state, unit, level name, toposolid type name, checkbox state) plus
     a note that Preflight still runs afterward and can still reject. The Create/Cancel buttons themselves live
@@ -1182,3 +1189,9 @@ this note's own sections plus this session:
 - No defensive re-verification that the dialog's chosen Level/ToposolidType still belong to `document` before
   Preflight uses them (owner decision 4: same open `Document`, same synchronous call, no transaction opened on
   any path that could invalidate an element reference).
+- **Not a defect (SolidGround Issue #35, PH3-8):** no geocode/parcel attribution shown when `AoiSource` is
+  `UseSettingsFile`. That path truly performs no address/parcel lookup, so `settingsFileNote`'s own sentence
+  stating that plainly is already accurate. OpenTopography's own attribution is gated on `Mode`, not
+  `AoiSource`, so it is unaffected and still shows on that same settings-file path whenever `Mode` is `Fetch`.
+  See `docs/architecture/source-licensing-and-attribution.md`'s "Dialog: attribution shown once per run"
+  section.

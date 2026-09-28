@@ -8,6 +8,7 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.Esri;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
@@ -96,7 +97,7 @@ public sealed class TerrainExportBundleRendererTests
             ],
             PropertyNames(provenance));
 
-        Assert.Equal(["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel"], PropertyNames(provenance.GetProperty("source")));
+        Assert.Equal(["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel", "attribution"], PropertyNames(provenance.GetProperty("source")));
 
         JsonElement horizontalTransformation = provenance.GetProperty("horizontalTransformation");
         Assert.Equal(
@@ -168,8 +169,28 @@ public sealed class TerrainExportBundleRendererTests
 
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("source").GetProperty("collectionPeriod").ValueKind);
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("source").GetProperty("qualityLevel").ValueKind);
+        Assert.Equal(JsonValueKind.Null, provenance.GetProperty("source").GetProperty("attribution").ValueKind);
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("sourceVerticalReference").GetProperty("geoidModel").ValueKind);
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("localFrame").GetProperty("verticalReference").GetProperty("geoidModel").ValueKind);
+    }
+
+    [Fact]
+    public void APopulatedAttributionRendersAsItsLiteralStringAndAnAbsentOneRendersAsExplicitNull()
+    {
+        TerrainExportPayload absent = CreatePayload(attribution: null);
+        TerrainExportBundle absentBundle = TerrainExportBundleRenderer.Render(absent, "renderer-attribution-absent");
+        using JsonDocument absentDocument = JsonDocument.Parse(absentBundle.DocumentBytes);
+        Assert.Equal(
+            JsonValueKind.Null,
+            absentDocument.RootElement.GetProperty("provenance").GetProperty("source").GetProperty("attribution").ValueKind);
+
+        const string attributionText = "Data source: an example attribution notice.";
+        TerrainExportPayload populated = CreatePayload(attribution: attributionText);
+        TerrainExportBundle populatedBundle = TerrainExportBundleRenderer.Render(populated, "renderer-attribution-populated");
+        using JsonDocument populatedDocument = JsonDocument.Parse(populatedBundle.DocumentBytes);
+        Assert.Equal(
+            attributionText,
+            populatedDocument.RootElement.GetProperty("provenance").GetProperty("source").GetProperty("attribution").GetString());
     }
 
     [Fact]
@@ -550,6 +571,76 @@ public sealed class TerrainExportBundleRendererTests
         }
     }
 
+    [Fact]
+    public void GeocodeAttributionRendersEsrisRealFixedAttributionNoticeVerbatim()
+    {
+        // AddressParcelWritesGeocodeAndParcelSubObjectsInFixedPropertyOrderWhenPresent and
+        // RenderedDocumentContainingAddressParcelProvenanceContainsNoKeyAuthorizationHeaderOrQueryStringMarker
+        // both already exercise AddressGeocoderProvider.Esri, but neither asserts the rendered attribution
+        // property equals Esri's own real, shipped EsriGeocoder.AttributionNotice text -- see
+        // docs/architecture/source-licensing-and-attribution.md's "Attribution catalogue" section.
+        GeocodeProvenance geocode = new(AddressGeocoderProvider.Esri, "100 Example Loop", EsriGeocoder.AttributionNotice);
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, parcel: null);
+
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-esri-attribution");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        string attribution = document.RootElement.GetProperty("provenance").GetProperty("addressParcel")
+            .GetProperty("geocode").GetProperty("attribution").GetString()!;
+        Assert.Equal(EsriGeocoder.AttributionNotice, attribution);
+    }
+
+    [Fact]
+    public void GeocodeAttributionRendersGeocodiosRealisticPerCandidateWireValueVerbatim()
+    {
+        // Geocodio has no fixed constant of its own (see docs/architecture/source-licensing-and-attribution.md's
+        // "Attribution catalogue" section): its own wire `source` field is the attribution. This case uses a
+        // realistic per-candidate value, distinct from the null-propagation placeholder
+        // AddressParcelWritesNullGeocodeWhenOnlyParcelIsPresentAndNullParcelWhenOnlyGeocodeIsPresent uses.
+        const string geocodioWireSource = "Virginia GIS Clearinghouse";
+        GeocodeProvenance geocode = new(AddressGeocoderProvider.Geocodio, "100 Example Loop", geocodioWireSource);
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode, parcel: null);
+
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-geocodio-attribution");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        string attribution = document.RootElement.GetProperty("provenance").GetProperty("addressParcel")
+            .GetProperty("geocode").GetProperty("attribution").GetString()!;
+        Assert.Equal(geocodioWireSource, attribution);
+    }
+
+    [Fact]
+    public void ParcelLicenseDisclaimerRendersALocalParcelFileRegridShapedDisclaimerVerbatim()
+    {
+        // Distinct from the generic CountyRegistry placeholder ("Synthetic fixture data; no real license
+        // applies.") already used elsewhere in this file: this disclaimer is shaped like a real Regrid
+        // Standard export's terms, carrying the AC4 Term/cease-use-or-delete language. See
+        // docs/architecture/source-licensing-and-attribution.md's "Regrid Data Store obligations" section.
+        // SolidGround never hardcodes this text; LocalParcelFileOptions.LicenseDisclaimerText is host-supplied.
+        const string regridShapedDisclaimer =
+            "Synthetic fixture data; no real license applies. Illustrative only: a real Regrid Data Store " +
+            "export's Term begins on the purchase date and continues for one year, after which the licensee " +
+            "must promptly cease all use of the data or delete it entirely.";
+        ParcelProvenance parcel = new(
+            ParcelBoundarySourceKind.LocalParcelFile,
+            "Local Regrid Standard export (fixture only)",
+            "99-99-999-999",
+            stableParcelId: null,
+            legalDescription: null,
+            licenseDisclaimerText: regridShapedDisclaimer);
+        AddressParcelProvenance addressParcel = new(new DateOnly(2026, 9, 21), geocode: null, parcel);
+
+        TerrainExportPayload payload = CreatePayload(addressParcel: addressParcel);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "renderer-local-parcel-file-disclaimer");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        string licenseDisclaimerText = document.RootElement.GetProperty("provenance").GetProperty("addressParcel")
+            .GetProperty("parcel").GetProperty("licenseDisclaimerText").GetString()!;
+        Assert.Equal(regridShapedDisclaimer, licenseDisclaimerText);
+    }
+
     private static void AssertNoByteOrderMark(byte[] bytes)
     {
         bool hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
@@ -576,6 +667,7 @@ public sealed class TerrainExportBundleRendererTests
         IReadOnlyList<LocalTerrainSample>? samples = null,
         CollectionPeriod? collectionPeriod = null,
         string? qualityLevel = null,
+        string? attribution = null,
         string? geoidModel = "Geoid12B",
         LengthUnit verticalUnit = LengthUnit.InternationalFoot,
         LengthUnit projectedUnit = LengthUnit.Meter,
@@ -588,6 +680,7 @@ public sealed class TerrainExportBundleRendererTests
             Math.Max(originalPointCount, effectiveSamples.Count),
             collectionPeriod,
             qualityLevel,
+            attribution,
             geoidModel,
             verticalUnit,
             projectedUnit,
@@ -602,6 +695,7 @@ public sealed class TerrainExportBundleRendererTests
         int originalPointCount,
         CollectionPeriod? collectionPeriod,
         string? qualityLevel,
+        string? attribution,
         string? geoidModel,
         LengthUnit verticalUnit,
         LengthUnit projectedUnit,
@@ -612,7 +706,7 @@ public sealed class TerrainExportBundleRendererTests
         HorizontalReference projected = ProjectedReference(projectedUnit);
         return new TerrainProvenance(
             TerrainProvenance.CurrentSchemaVersion,
-            Source(collectionPeriod, qualityLevel),
+            Source(collectionPeriod, qualityLevel, attribution),
             Transformation(projected),
             vertical,
             ReferenceOrigin.Operator,
@@ -625,8 +719,8 @@ public sealed class TerrainExportBundleRendererTests
             addressParcel);
     }
 
-    private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null) =>
-        new("OpenTopography", "USGS1m", collectionPeriod, qualityLevel);
+    private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null, string? attribution = null) =>
+        new("OpenTopography", "USGS1m", collectionPeriod, qualityLevel, attribution);
 
     private static HorizontalReference GeographicReference() => new(
         "EPSG:4326", "WGS84", HorizontalReferenceKind.Geographic, HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);

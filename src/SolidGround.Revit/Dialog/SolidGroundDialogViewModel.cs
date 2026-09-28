@@ -319,6 +319,33 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     internal bool SharedCoordinatesCheckboxEnabled => !_inputs.DocumentAlreadyHasSharedCoordinates;
 
     /// <summary>
+    /// Read once from settings at dialog-construction time (<see cref="SolidGroundDialogInputs.Mode"/>) and
+    /// never changed afterward, so unlike <see cref="AoiSource"/> it needs no change notification.
+    /// </summary>
+    internal TerrainAcquisitionMode Mode => _inputs.Mode;
+
+    /// <summary>
+    /// True exactly when this run is <see cref="TerrainAcquisitionMode.Fetch"/> -- gates the provenance-preview
+    /// panel's OpenTopography attribution <c>TextBlock</c>, mutually exclusive with
+    /// <see cref="ShowProcessModeSourceNote"/>. See
+    /// docs/architecture/source-licensing-and-attribution.md's "Dialog: attribution shown once per run" section.
+    /// </summary>
+    /// <remarks>
+    /// <see langword="public"/>, not <see langword="internal"/> -- a hand-written computed property bound by a
+    /// WPF string-Path <c>Binding</c> (see <see cref="ShowNoParcelCandidatesMessage"/>'s own remarks for the
+    /// full mechanism this repeats).
+    /// </remarks>
+    public bool ShowFetchModeSourceAttribution => Mode == TerrainAcquisitionMode.Fetch;
+
+    /// <summary>
+    /// True exactly when this run is <see cref="TerrainAcquisitionMode.Process"/> -- gates the
+    /// provenance-preview panel's fixed, conditional process-mode sentence. See
+    /// <see cref="ShowFetchModeSourceAttribution"/>.
+    /// </summary>
+    /// <remarks><see langword="public"/>, not <see langword="internal"/> -- see <see cref="ShowFetchModeSourceAttribution"/>'s own remarks.</remarks>
+    public bool ShowProcessModeSourceNote => Mode == TerrainAcquisitionMode.Process;
+
+    /// <summary>
     /// Visible exactly when <see cref="PointBudget"/> exceeds this machine's own configured
     /// <c>NativeToposolidMaxPointThreshold</c> -- the same rule <c>CreateToposolidCommand</c>'s Preflight
     /// guard applies (<see cref="RevitIniToposolidThresholds.ExceedsNativeThreshold"/>), so ignoring this

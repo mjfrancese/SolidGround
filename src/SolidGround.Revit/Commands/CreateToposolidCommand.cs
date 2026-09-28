@@ -697,7 +697,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
             acquisition.Acquisition.Source.SourceName,
             acquisition.Acquisition.Source.DatasetIdentifier,
             acquisition.Acquisition.Source.CollectionPeriod,
-            acquisition.Acquisition.Source.QualityLevel);
+            acquisition.Acquisition.Source.QualityLevel,
+            acquisition.Acquisition.Source.Attribution);
         ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
 
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
@@ -761,7 +762,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string datasetIdentifier = process.Dataset ?? sidecar?.DatasetIdentifier ?? Path.GetFileNameWithoutExtension(ascPath);
         CollectionPeriod? collectionPeriod = ParseCollectionPeriod(process) ?? sidecar?.CollectionPeriod;
         string? qualityLevel = process.QualityLevel ?? sidecar?.QualityLevel;
-        ElevationSourceMetadata sourceMetadata = new(sourceName, datasetIdentifier, collectionPeriod, qualityLevel);
+        ElevationSourceMetadata sourceMetadata = new(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, sidecar?.Attribution);
 
         ReferenceOrigins referenceOrigins = new(ReferenceOrigin.Operator, resolvedVertical.Origin);
 

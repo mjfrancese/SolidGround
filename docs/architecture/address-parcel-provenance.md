@@ -134,7 +134,7 @@ questions" below.
 ## Field mapping table (for Issue #16's future Extensible Storage schema version)
 
 Every field a future Extensible Storage schema version needs, its CLR type, and its Core source. None of the
-15 rows below is a `double`, so unlike several of the existing 36 fields, none of them needs a
+17 rows below is a `double`, so unlike several of the existing 36 fields, none of them needs a
 `ProvenanceFieldSpec.Length`/`.Number` decision.
 
 | # | Field | CLR type | Absent representation | Core source |
@@ -154,10 +154,21 @@ Every field a future Extensible Storage schema version needs, its CLR type, and 
 | 13 | `hasLegalDescription` | `bool` | n/a -- always written | `provenance.AddressParcel?.Parcel?.LegalDescription is not null` |
 | 14 | `legalDescription` | `string` | empty when `hasLegalDescription` is false | `provenance.AddressParcel?.Parcel?.LegalDescription` |
 | 15 | `parcelLicenseDisclaimerText` | `string` | empty when `hasParcel` is false | `provenance.AddressParcel?.Parcel?.LicenseDisclaimerText` |
+| 16 | `hasSourceAttribution` | `bool` | n/a -- always written | `provenance.Source.Attribution is not null` (see below) |
+| 17 | `sourceAttribution` | `string` | empty when `hasSourceAttribution` is false | `provenance.Source.Attribution` |
 
-Every "Core source" expression above dereferences `provenance.AddressParcel` itself with a leading `?.`: every
-payload this issue's own scope actually produces today has `AddressParcel == null` (see "Population path"), so
-omitting that leading `?` would throw `NullReferenceException` for the ordinary case.
+Every "Core source" expression for rows 1-15 above dereferences `provenance.AddressParcel` itself with a
+leading `?.`: every payload this issue's own scope actually produces today has `AddressParcel == null` (see
+"Population path"), so omitting that leading `?` would throw `NullReferenceException` for the ordinary case.
+
+**Rows 16-17 are not `AddressParcel` fields.** SolidGround Issue #35 (PH3-8) added this pair to this same
+future-schema table because they are another still-unimplemented Extensible Storage addition mirroring the
+existing `hasQualityLevel`/`qualityLevel` pair's own shape exactly, and recording them once, here, avoids a
+second field-list decision later -- the same reason this table exists at all (see "Purpose and boundary"). Their
+source, `provenance.Source.Attribution` (`ElevationSourceMetadata.Attribution`, added in schema version 4; see
+`docs/architecture/source-licensing-and-attribution.md`'s "Extensible Storage: deliberately unchanged" and
+"Provenance export: schema version 4" sections), is reached with no leading `?.`: unlike `AddressParcel`,
+`TerrainProvenance.Source` itself is never null -- only its own `Attribution` property is.
 
 **Why the Extensible Storage table needs `has*` bool flags but the JSON schema does not.** JSON's own `null` is
 already the "is this present" signal (`"geocode": null` in the export document). A flat Extensible Storage
@@ -166,7 +177,7 @@ schema has no null concept for a simple field, so each optional group's presence
 `ElevationRange`'s own optionality (`hasCollectionPeriod`, `hasQualityLevel`, `hasElevationRange`; see
 `docs/architecture/revit-extensible-storage-provenance.md`'s "Field table").
 
-36 existing fields plus these 15 is 51, comfortably under Revit's 256-field `SchemaBuilder.Finish()` ceiling
+36 existing fields plus these 17 is 53, comfortably under Revit's 256-field `SchemaBuilder.Finish()` ceiling
 (the existing `FieldCountStaysUnderRevitsTwoHundredAndFiftySixFieldLimit` test's own margin).
 
 ## Privacy
@@ -217,3 +228,6 @@ against, only a fact to disclose here plainly.
 - `docs/architecture/parcel-boundary-sources.md` -- "Core types and files", "Not a survey".
 - `docs/architecture/phase-3-interactive-add-in-research.md` -- "Owner decisions (2026-09-21)", decision 7 (not
   the same-numbered decision 7 in `docs/architecture/revit-add-in-conventions.md`, which is unrelated).
+- `docs/architecture/source-licensing-and-attribution.md` -- "Extensible Storage: deliberately unchanged" (rows
+  16-17 above), "Provenance export: schema version 4" (`ElevationSourceMetadata.Attribution`, the field rows
+  16-17 read from).

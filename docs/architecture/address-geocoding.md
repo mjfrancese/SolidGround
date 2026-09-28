@@ -130,6 +130,15 @@ The one place the three providers genuinely diverge in shape:
   https://developers.arcgis.com/documentation/esri-and-data-attribution/no-map/ (retrieved 2026-09-25), whose
   own "no map" examples show exactly this phrase.
 
+See `docs/architecture/source-licensing-and-attribution.md`'s "Attribution catalogue" section for these same
+three providers alongside every other shipped source (elevation and parcel); its "Never-default sources"
+section for why a county `GeocodeServer` proxy (whose "no published terms" fact is carried forward from
+2026-09-21 and not re-verified this session) and public Nominatim (freshly re-verified 2026-09-27) are excluded
+as defaults; and its "Open questions and owner decisions" section, open question 2, for a fresh 2026-09-27
+re-check of this same paragraph's still-unresolved Census question above (Open Question 2 below) -- no primary
+source found resolves it either way, so `CensusGeocoder.AttributionNotice` continues to be shown regardless, out
+of caution. This section's own content above is unchanged and already accurate.
+
 ## Ranking and precision semantics
 
 `Score` and `PrecisionLabel` are nullable because Census's schema has neither. The two keyed providers' scales

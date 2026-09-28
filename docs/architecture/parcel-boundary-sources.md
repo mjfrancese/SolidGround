@@ -608,6 +608,14 @@ not quote or reproduce Regrid's actual license/terms-of-service text anywhere (t
 fixtures and tests already follow) -- an operator configuring `LocalParcelFileSource` in a real deployment must
 supply their own accurate license/disclaimer text via `LocalParcelFileOptions.LicenseDisclaimerText`.
 
+**Update, SolidGround Issue #35 (PH3-8) (2026-09-27):** the Regrid Data Store License's own Term runs one year
+from the purchase date, after which the licensee must promptly cease all use of the data or delete it entirely
+-- verified, with the clauses quoted verbatim, retrieved 2026-09-27. Since no Regrid data has ever actually been
+purchased for this repository, that obligation has no real lapse date to track today; it is recorded as
+operator guidance instead, at the two points an operator who does configure a real purchase will actually see
+it before lapse. See `docs/architecture/source-licensing-and-attribution.md`'s "Regrid Data Store obligations"
+section for the verbatim clauses, the citation, and the mechanism.
+
 ## Non-goals (explicit)
 
 - No `SolidGround.Cli`/`SolidGround.Revit`/`TerrainRequestSettings` wiring -- a future issue selects and wires a
@@ -657,6 +665,9 @@ supply their own accurate license/disclaimer text via `LocalParcelFileOptions.Li
 - `docs/architecture/address-geocoding.md` (Issue #28) -- the sibling source this design mirrors most closely
 - `docs/architecture/shared-http-redaction-and-key-resolution.md` (Issue #27) -- the redaction/key-resolution helper reused here
 - `docs/architecture/phase-3-interactive-add-in-research.md` -- owner decision 8 (parcel resolution converts into today's AOI shape)
+- [Regrid Data Store License](https://app.regrid.com/store/license) (retrieved 2026-09-27) -- Term and
+  cease-use-or-delete clauses, quoted verbatim in `docs/architecture/source-licensing-and-attribution.md`'s
+  "Regrid Data Store obligations" section; no license/ToS text reproduced here
 
 No real county name, address, GEOID, service URL, or license text appears anywhere in this document or in any
 file this issue adds.

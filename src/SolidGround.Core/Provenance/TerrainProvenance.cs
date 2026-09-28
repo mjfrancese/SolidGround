@@ -16,9 +16,10 @@ public sealed record TerrainProvenance
     /// (SolidGround Issue #21) added <see cref="SourceHorizontalReferenceOrigin"/> and
     /// <see cref="SourceVerticalReferenceOrigin"/>; see "Export document manifest, schema version 2".
     /// Version 3 (SolidGround Issue #33) added <see cref="AddressParcel"/>; see "Export document manifest,
-    /// schema version 3".
+    /// schema version 3". Version 4 (SolidGround Issue #35) added
+    /// <see cref="ElevationSourceMetadata.Attribution"/>; see "Export document manifest, schema version 4".
     /// </summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public TerrainProvenance(
         int schemaVersion,

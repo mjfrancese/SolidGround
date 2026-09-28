@@ -7,6 +7,7 @@ using System.Windows.Media;
 using Autodesk.Revit.UI;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Units;
 // Autodesk.Revit.UI also declares TextBox/ComboBox (ribbon controls of the same short name); these aliases
 // pin every unqualified use in this file to the WPF control instead.
@@ -701,6 +702,35 @@ internal sealed class SolidGroundDialog : Window
         };
         settingsFileNote.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.AoiSource)) { Converter = visibleWhenSettingsFile });
 
+        // Mode-gated, not AoiSource-gated (docs/architecture/source-licensing-and-attribution.md's "Dialog:
+        // attribution shown once per run" section): a fetch-mode run's elevation always comes from
+        // OpenTopography, regardless of which AoiSource path resolved this run's area of interest, so this
+        // shows the fixed OpenTopographyUsgs1mSource.AttributionNotice text directly -- a compile-time
+        // constant, so no Binding is needed for Text, only for Visibility.
+        TextBlock fetchModeSourceAttribution = new()
+        {
+            Text = OpenTopographyUsgs1mSource.AttributionNotice,
+            Foreground = palette.WindowText,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        fetchModeSourceAttribution.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowFetchModeSourceAttribution)) { Converter = BooleanToVisibility });
+
+        // Deliberately conditional wording, not a promised attribution string (same design-note section as
+        // above): a process-mode run's actual source sidecar is not read at dialog-construction time, so this
+        // panel cannot know here whether one exists or what it says.
+        TextBlock processModeSourceNote = new()
+        {
+            Text =
+                "This run processes an already-downloaded elevation file. Its own source attribution, when " +
+                "its optional source sidecar carries one, will be included in this run's exported provenance " +
+                "record.",
+            Foreground = palette.WindowText,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        processModeSourceNote.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowProcessModeSourceNote)) { Converter = BooleanToVisibility });
+
         // AGENTS.md "Accuracy and product claims": this exact sentence must remain, verbatim, wherever
         // SolidGround describes itself to an operator.
         TextBlock siteFormDisclaimer = new()
@@ -719,6 +749,8 @@ internal sealed class SolidGroundDialog : Window
         panel.Children.Add(parcelAccuracy);
         panel.Children.Add(parcelDisclaimer);
         panel.Children.Add(settingsFileNote);
+        panel.Children.Add(fetchModeSourceAttribution);
+        panel.Children.Add(processModeSourceNote);
         panel.Children.Add(siteFormDisclaimer);
         return panel;
     }
