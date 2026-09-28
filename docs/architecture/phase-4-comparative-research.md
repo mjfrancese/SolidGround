@@ -31,7 +31,7 @@ This note compares SolidGround's design against Groundit and other similar proje
 
 (c) **Issue #18 (classified ground-return point-cloud source): "Yes, investigate."** This authorizes an investigation-first track only: verify current EPT/COPC access over USGS's own public bucket, evaluate fully managed decoding options, and report back. It does not authorize any implementation; Issue #18's own acceptance criteria already state that no implementation begins without a separate, owner-approved scope decision, and this round-2 decision does not change that gate. As of this note, Issue #18's GitHub labels (`status: blocked`, `future`) have not yet been updated to reflect this decision; that update is part of the next step below, not this note.
 
-(d) **Next step.** Commit this note to `docs/architecture`, then prepare a Phase 4 milestone and draft issues for owner review, before anything is published to GitHub. This mirrors how Phase 3's own research note and draft-issues file were sequenced.
+(d) **Next step.** Commit this note to `docs/architecture`, then prepare a Phase 4 milestone and draft issues for owner review, before anything is published to GitHub. This mirrors how Phase 3's own research note and draft-issues file were sequenced. Done on 2026-09-27 at the owner's approval: milestone "Phase 4: Accuracy, integrity, geolocation, and site context" with issues #40 to #59 (plan in `docs/planning/phase-4-draft-issues.md`). Issue #18 was moved into that milestone as `status: ready`, which supersedes the label note in (c).
 
 **Still open.** See "Open owner questions" below for the three questions this round of decisions deliberately left open.
 
