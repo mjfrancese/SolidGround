@@ -268,6 +268,29 @@ and `...SolidGroundDialogHostThreadsTheConfiguredModeIntoSolidGroundDialogInputs
 existing plain-text-scrape idiom (it greps `src/SolidGround.Revit/Dialog/*.cs` as text and never loads
 `SolidGround.Revit.dll`, so it can run on the Linux self-hosted CI runner without WPF/Revit).
 
+### Manual evidence (Revit 2027, 2026-09-27)
+
+The owner approved a short live check ("Go", 2026-09-27). It ran against the installed Revit 2027 application
+(build `27.0.10.13`) on commit `3186138` (CI run `36360892079` green; deployed build id
+`20260927-190748-fdddfc27`, `SolidGround.Revit.dll` SHA-256 prefix `FDDDFC27...`, `SolidGround.Core.dll`
+SHA-256 prefix `63A37B28...`, both signed Valid, `deploy -Verify` OK on 7 files). It used the same handle-only
+UI Automation method and the same image-capture limitation as `docs/architecture/revit-interactive-dialog.md`'s
+"Manual evidence (Revit 2027, 2026-09-27)" section, so the evidence is the text UI Automation reports as
+displayed, not pixels. Every run used the committed synthetic example-site fixtures, stopped at the summary
+without Create, and made no OpenTopography request.
+
+- **Process mode, Find a parcel by coordinates.** The provenance step showed the process-mode sentence above
+  and did not show the OpenTopography notice.
+- **Fetch mode, Find a parcel by coordinates.** The provenance step showed the full OpenTopography notice,
+  word for word as `OpenTopographyUsgs1mSource.AttributionNotice`, once, and did not show the process-mode
+  sentence.
+- **Fetch mode, Use the area in the settings file.** The provenance step showed the settings-file sentence and
+  the OpenTopography notice once, with no geocode or parcel attribution, as described above.
+
+Cancel closed the dialog quietly each time, with no `TaskDialog`. Revit closed without a save prompt. The
+settings file was restored to its original content, the default template's hash was unchanged, no output was
+written, and the session log showed no errors and no unredacted key parameter.
+
 ## Regrid Data Store obligations
 
 The Regrid Data Store License (https://app.regrid.com/store/license, retrieved 2026-09-27) states, verbatim:
@@ -404,7 +427,7 @@ All retrieved 2026-09-27 unless noted.
 
 ## Open questions and owner decisions
 
-**Owner decisions**, each already applied above:
+**Design decisions**, each already applied above. The owner selected this issue as part of Phase 3's "Continue in order" sequence; each choice below took the recommended option, backed by the repository precedent cited with it, and the owner may revise any of them:
 
 1. **OpenTopography attribution wording.** The two-sentence constant in "OpenTopography USGS 1 m attribution"
    above: the NSF sentence verbatim, plus SolidGround's own honest dataset description, not a fabricated
@@ -441,7 +464,7 @@ All retrieved 2026-09-27 unless noted.
 2. Whether the general census.gov Data API Terms of Service (https://www.census.gov/data/developers/about/terms-of-service.html)
    contractually binds the separate, keyless `geocoding.geo.census.gov` host remains unresolved by any primary
    source, even after a fresh 2026-09-27 check -- this mirrors `docs/architecture/address-geocoding.md`'s own
-   pre-existing Open Question 2. `CensusGeocoder.AttributionNotice` is shown regardless (owner decision 7
+   pre-existing Open Question 2. `CensusGeocoder.AttributionNotice` is shown regardless (design decision 7
    above).
 3. No Census-issued (as opposed to a Data.gov catalog metadata record) TIGERweb-specific terms/license page was
    found; if a future note wants a Census-issued TIGERweb license statement rather than the catalog record
