@@ -549,7 +549,12 @@ Listed in file order (top to bottom). All IDs below target
   has existed since Issue #15 and gained two more real sections in Phase 3 that this bullet never named,
   unlike several other sections in this same note that carry an explicit "Update, Issue #NN" annotation for a
   change of this kind.
-- **Disposition:** Accepted as written, 2026-09-27.
+- **Disposition:** Accepted as written, 2026-09-27, then corrected on application. The accepted text named
+  the C# `RevitSettings` record's four parts (`request`, `target`, ...) as if they were the JSON file's own
+  top-level sections; the settings file actually keeps the terrain-request keys and `level`/`toposolidType` at
+  its top level, with only `sharedCoordinates` and `addressAndParcel` as nested objects
+  (`RevitSettingsIo.TryLoad`). The applied sentence names the same four groups accurately; the rest of C6 is
+  applied as written, and the owner was told of the correction.
 
 ### C7. Section 6, "Logging and diagnostics" — stale "no custom WPF dialog shell" sentence
 
@@ -683,5 +688,5 @@ wording to `AGENTS.md` and the conventions note in a separate commit once this i
 | C3 | Add one sentence to Section 2's `CopyLocalLockFileAssemblies` bullet naming `CommunityToolkit.Mvvm`'s direct reference | Accepted | 2026-09-27 |
 | C4 | Add one optional bullet to Section 3 cross-referencing `CommunityToolkit.Mvvm`'s manifest-safety verification | Accepted | 2026-09-27 |
 | C5 | Add one sentence to Section 4's Preflight bullet describing the dialog's place before Preflight (AC3) | Accepted | 2026-09-27 |
-| C6 | Rewrite Section 5's stale settings-file-hypothetical sentence to name the real four settings sections | Accepted | 2026-09-27 |
+| C6 | Rewrite Section 5's stale settings-file-hypothetical sentence to name the real four settings sections | Accepted; corrected on application (see C6) | 2026-09-27 |
 | C7 | Rewrite Section 6's stale "no custom WPF dialog shell" sentence | Accepted | 2026-09-27 |
