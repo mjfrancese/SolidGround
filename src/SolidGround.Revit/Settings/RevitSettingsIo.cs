@@ -86,6 +86,20 @@ internal static class RevitSettingsIo
         return SettingsDialog.ShowModal(owner, draft!, current, palette);
     }
 
+    /// <summary>Opens the editor as an owned child of Revit's verified main-window handle.</summary>
+    internal static RevitSettings? Edit(IntPtr ownerHandle, RevitSettings current, DialogPalette palette)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        string path = RevitSettingsLocator.Resolve();
+        if (!UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
+        {
+            AddInLog.Warning(error ?? "Could not load per-user settings for editing.");
+            draft = new UiSettingsDraft(current, SolidGround.Core.Configuration.AtomicSettingsFile.Read(path).Version, path);
+        }
+
+        return SettingsDialog.ShowModal(ownerHandle, draft!, current, palette);
+    }
+
     /// <summary>Turns persisted relative file references into absolute paths using the document that supplied them.</summary>
     internal static RevitSettings RebaseInputPaths(RevitSettings settings, string settingsDocumentPath)
     {

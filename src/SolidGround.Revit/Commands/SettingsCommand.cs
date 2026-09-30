@@ -1,6 +1,8 @@
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using System.Windows;
+using SolidGround.Revit.Dialog;
 using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit.Commands;
@@ -14,14 +16,25 @@ public sealed class SettingsCommand : IExternalCommand
     {
         try
         {
+            // UIThemeManager.CurrentTheme and UIApplication.MainWindowHandle were verified against the
+            // installed Revit 2027 (27.0.10.13) API XML; see revit-usability-settings-and-workflow.md.
+            DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
             RevitSettings current = RevitSettingsIo.LoadForUi(owner: null);
-            RevitSettingsIo.Edit(owner: null, current);
-            return Result.Succeeded;
+            return RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current, palette) is null
+                ? Result.Cancelled
+                : Result.Succeeded;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             message = "SolidGround could not open Settings. See the SolidGround log for details.";
             Diagnostics.AddInLog.Error("Could not open SolidGround Settings.", ex);
+            TaskDialog dialog = new("SolidGround Settings")
+            {
+                MainInstruction = "SolidGround could not open Settings.",
+                MainContent = message,
+                CommonButtons = TaskDialogCommonButtons.Close,
+            };
+            dialog.Show();
             return Result.Failed;
         }
     }

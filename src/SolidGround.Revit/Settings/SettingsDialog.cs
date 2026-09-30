@@ -1,11 +1,14 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using Microsoft.Win32;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.CountyParcels;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Dialog;
 
@@ -36,6 +39,16 @@ internal sealed class SettingsDialog : Window
     private readonly TextBox localParcelLicense;
     private readonly TextBox countyRegistryPath;
     private readonly CheckBox countyAuthorization;
+    private readonly TextBox countyName;
+    private readonly TextBox countyGeoid;
+    private readonly TextBox countyServiceUrl;
+    private readonly TextBox countyAttribution;
+    private readonly TextBox countyLicense;
+    private readonly ComboBox countyLayer;
+    private readonly ComboBox countyParcelIdField;
+    private readonly ComboBox countySitusAddressField;
+    private readonly ComboBox countyLegalDescriptionField;
+    private readonly TextBlock countyMetadataStatus;
     private readonly ComboBox geocoderProvider;
     private readonly PasswordBox openTopographyKey;
     private readonly PasswordBox geocodioKey;
@@ -43,6 +56,8 @@ internal sealed class SettingsDialog : Window
     private readonly TextBlock sessionKeyStatus;
     private readonly TextBlock error;
     private DistanceDisplayFormat extensionFormat;
+    private CountyParcelServiceMetadata? countyMetadata;
+    private static readonly HttpClient CountyMetadataHttpClient = new();
 
     private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette)
     {
@@ -53,10 +68,12 @@ internal sealed class SettingsDialog : Window
         Width = 720;
         Height = 580;
         WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner;
+        ClampSettingsWorkArea();
 
         DialogPalette colors = palette ?? new DialogPalette(SystemColors.WindowBrush, SystemColors.WindowTextBrush, SystemColors.ControlTextBrush, SystemColors.WindowBrush, SystemColors.HighlightBrush, SystemColors.WindowTextBrush, SystemColors.GrayTextBrush, SystemColors.ActiveBorderBrush);
         Background = colors.Window;
         Foreground = colors.WindowText;
+        DialogControlStyles.Apply(this, colors);
         Grid shell = new() { Margin = new Thickness(18) };
         shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         shell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -86,6 +103,21 @@ internal sealed class SettingsDialog : Window
         localParcelLicense = Text(current.AddressAndParcel.LocalParcelFileLicenseDisclaimerText ?? string.Empty, true);
         countyRegistryPath = Text(current.AddressAndParcel.CountyRegistryPath ?? string.Empty);
         countyAuthorization = new CheckBox { Content = "I am authorized to use this county parcel service and accept its license/disclaimer.", IsChecked = current.AddressAndParcel.CountyServiceAuthorizedUseAcknowledged };
+        countyName = Text(string.Empty);
+        countyGeoid = Text(current.AddressAndParcel.CountyGeoidOverride ?? string.Empty);
+        countyServiceUrl = Text(string.Empty);
+        countyAttribution = Text(string.Empty, true);
+        countyLicense = Text(string.Empty, true);
+        countyLayer = new ComboBox { MinWidth = 360, DisplayMemberPath = nameof(CountyParcelServiceLayerMetadata.DisplayName) };
+        countyLayer.SelectionChanged += (_, _) => PopulateCountyFieldChoices();
+        countyParcelIdField = new ComboBox { MinWidth = 360 };
+        countySitusAddressField = new ComboBox { MinWidth = 360 };
+        countyLegalDescriptionField = new ComboBox { MinWidth = 360 };
+        countyMetadataStatus = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = colors.GrayText };
+        Button fetchCountyMetadata = new() { Content = "Fetch service metadata", Margin = new Thickness(0, 4, 6, 4) };
+        fetchCountyMetadata.Click += async (_, _) => await FetchCountyMetadataAsync();
+        Button saveCountyRegistration = new() { Content = "Save county registration", Margin = new Thickness(0, 4, 6, 4) };
+        saveCountyRegistration.Click += (_, _) => SaveCountyRegistration();
         geocoderProvider = Choice(Enum.GetValues<AddressGeocoderProvider>(), current.AddressAndParcel.GeocoderProvider);
         openTopographyKey = new PasswordBox { MinWidth = 360 };
         geocodioKey = new PasswordBox { MinWidth = 360 };
@@ -98,9 +130,19 @@ internal sealed class SettingsDialog : Window
         pages.Items.Add(Page("Sources", Panel(
             Label("Elevation mode"), acquisitionMode, Label("Local raster (.asc)"), FileField(ascPath, "AAIGrid (*.asc)|*.asc|All files|*.*"),
             Label("Projection sidecar (.prj)"), FileField(prjPath, "Projection (*.prj)|*.prj|All files|*.*"), Label("Source metadata sidecar (.source.json)"), FileField(sidecarPath, "Source metadata (*.json)|*.json|All files|*.*"),
-            Label("Local parcel file"), FileField(localParcelPath, "Parcel data (*.geojson;*.json)|*.geojson;*.json|All files|*.*"), Label("Local source label"), localParcelLabel,
+            Label("Local parcel file (GeoJSON or WKT)"), FileField(localParcelPath, "Parcel data (*.geojson;*.json;*.wkt)|*.geojson;*.json;*.wkt|All files|*.*"), Label("Local source label"), localParcelLabel,
             Label("Local license or disclaimer"), localParcelLicense,
-            Label("County registry file"), FileField(countyRegistryPath, "County registry (*.json)|*.json|All files|*.*"), countyAuthorization,
+            Label("County registry file"), FileField(countyRegistryPath, "County registry (*.json)|*.json|All files|*.*"),
+            new Separator { Margin = new Thickness(0, 12, 0, 8) },
+            new TextBlock { Text = "County ArcGIS parcel service", FontWeight = FontWeights.SemiBold },
+            new TextBlock { Text = "Fetch the county's advertised metadata, choose the parcel layer and fields, then save a local registration. No county configuration requires JSON editing.", TextWrapping = TextWrapping.Wrap },
+            Label("County source identity"), countyName, Label("County GEOID (five digits)"), countyGeoid,
+            Label("ArcGIS FeatureServer or MapServer URL"), countyServiceUrl, fetchCountyMetadata, countyMetadataStatus,
+            Label("Parcel layer"), countyLayer, Label("Parcel ID field"), countyParcelIdField,
+            Label("Situs address field"), countySitusAddressField, Label("Legal-description field (optional)"), countyLegalDescriptionField,
+            Label("County attribution (shown with parcel results)"), countyAttribution,
+            Label("County license/disclaimer (shown verbatim with parcel results)"), countyLicense,
+            countyAuthorization, saveCountyRegistration,
             Label("OpenTopography session key"), openTopographyKey, sessionKeyStatus, Horizontal(useKey, clearKey),
             Label("Geocoder provider"), geocoderProvider,
             Label("Geocodio session key"), geocodioKey, KeyButtons(geocodioKey, SessionApiKeyOverrides.UseGeocodio, SessionApiKeyOverrides.ClearGeocodio),
@@ -117,7 +159,10 @@ internal sealed class SettingsDialog : Window
         pages.Items.Add(Page("Advanced", Panel(Label("Simplification method"), simplificationMethod, Label("Network timeout (seconds)"), timeout, Label("Nearby parcel search distance (metres; blank uses default)"), nearbyRadius, Label("Sampler coverage fraction (0 through 1)"), coverageFloor, new TextBlock { Text = "The local-origin policy and full process metadata are preserved unless changed by a dedicated source workflow.", TextWrapping = TextWrapping.Wrap })));
         Register("pointBudget", pointBudget); Register("terrainExtension", extension); Register("outputUnit", outputUnit); Register("distanceDisplayFormat", displayFormat);
         Register("acquisitionMode", acquisitionMode); Register("rasterPath", ascPath); Register("projectionPath", prjPath); Register("sourceSidecarPath", sidecarPath);
-        Register("localParcelPath", localParcelPath); Register("countyRegistryPath", countyRegistryPath); Register("geocoderProvider", geocoderProvider);
+        Register("localParcelPath", localParcelPath); Register("localParcelLabel", localParcelLabel); Register("localParcelLicense", localParcelLicense);
+        Register("countyRegistryPath", countyRegistryPath); Register("countyAuthorization", countyAuthorization); Register("geocoderProvider", geocoderProvider);
+        Register("countyName", countyName); Register("countyGeoid", countyGeoid); Register("countyServiceUrl", countyServiceUrl); Register("countyAttribution", countyAttribution); Register("countyLicense", countyLicense);
+        Register("countyLayer", countyLayer); Register("countyParcelIdField", countyParcelIdField); Register("countySitusAddressField", countySitusAddressField); Register("countyLegalDescriptionField", countyLegalDescriptionField);
         Register("openTopographyKey", openTopographyKey); Register("geocodioKey", geocodioKey); Register("esriKey", esriKey);
         Register("exportDirectory", exportDirectory); Register("exportBaseName", exportBaseName); Register("networkTimeout", timeout); Register("nearbyRadius", nearbyRadius); Register("coverageFloor", coverageFloor); Register("simplificationMethod", simplificationMethod);
         shell.Children.Add(pages);
@@ -129,6 +174,7 @@ internal sealed class SettingsDialog : Window
         Button cancel = new() { Content = "Cancel", MinWidth = 100, Margin = new Thickness(6) };
         cancel.Click += (_, _) => { DialogResult = false; Close(); };
         Button save = new() { Content = "Save settings", MinWidth = 120, Margin = new Thickness(6), IsDefault = true };
+        save.Style = (Style)Resources[DialogControlStyles.PrimaryButtonStyleKey];
         save.Click += (_, _) => Save();
         footer.Children.Add(cancel); footer.Children.Add(save);
         Grid.SetRow(footer, 3); shell.Children.Add(footer);
@@ -146,6 +192,17 @@ internal sealed class SettingsDialog : Window
     internal static RevitSettings? ShowModal(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette = null)
     {
         SettingsDialog dialog = new(owner, draft, current, palette);
+        return dialog.ShowDialog() == true ? dialog.Result : null;
+    }
+
+    /// <summary>Shows the editor as an owned Revit child without constructing a WPF owner window.</summary>
+    internal static RevitSettings? ShowModal(IntPtr ownerHandle, UiSettingsDraft draft, RevitSettings current, DialogPalette palette)
+    {
+        SettingsDialog dialog = new(null, draft, current, palette);
+        if (ownerHandle != IntPtr.Zero)
+        {
+            _ = new WindowInteropHelper(dialog) { Owner = ownerHandle };
+        }
         return dialog.ShowDialog() == true ? dialog.Result : null;
     }
 
@@ -242,6 +299,15 @@ internal sealed class SettingsDialog : Window
     }
     private static string? BlankAsNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private void ClampSettingsWorkArea()
+    {
+        Rect workArea = SystemParameters.WorkArea;
+        MaxWidth = workArea.Width;
+        MaxHeight = workArea.Height;
+        Width = Math.Min(Width, MaxWidth);
+        Height = Math.Min(Height, MaxHeight);
+    }
+
     private void UseSessionKey()
     {
         if (string.IsNullOrWhiteSpace(openTopographyKey.Password)) { error.Text = "Enter a nonblank key before using it for this Revit session."; openTopographyKey.Focus(); return; }
@@ -250,6 +316,125 @@ internal sealed class SettingsDialog : Window
         sessionKeyStatus.Text = "A session key is active until Revit exits or you clear it.";
         error.Text = string.Empty;
     }
+
+    /// <summary>Lets the Windows-only rendered-control lane populate the same live selectors without a network request.</summary>
+    internal void SetCountyMetadataForTesting(CountyParcelServiceMetadata metadata)
+    {
+        countyMetadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
+        countyServiceUrl.Text = metadata.ServiceBaseUri.AbsoluteUri;
+        countyLayer.ItemsSource = metadata.Layers.OrderBy(layer => layer.LayerIndex).ToArray();
+        countyLayer.SelectedIndex = countyLayer.Items.Count == 0 ? -1 : 0;
+        countyMetadataStatus.Text = $"Loaded {metadata.Layers.Count.ToString(CultureInfo.InvariantCulture)} advertised layer(s).";
+    }
+
+    private async Task FetchCountyMetadataAsync()
+    {
+        if (!Uri.TryCreate(countyServiceUrl.Text.Trim(), UriKind.Absolute, out Uri? serviceUri)
+            || !string.Equals(serviceUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
+            || !string.IsNullOrEmpty(serviceUri.Query)
+            || !string.IsNullOrEmpty(serviceUri.Fragment))
+        {
+            error.Text = "Enter an absolute https ArcGIS service URL without a query or fragment before fetching metadata.";
+            countyServiceUrl.Focus();
+            return;
+        }
+
+        try
+        {
+            countyMetadataStatus.Text = "Retrieving county service metadata…";
+            CountyParcelServiceMetadata metadata = await new CountyParcelServiceMetadataClient(CountyMetadataHttpClient)
+                .FetchAsync(serviceUri, CancellationToken.None);
+            SetCountyMetadataForTesting(metadata);
+            error.Text = string.Empty;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or FormatException or JsonException or TaskCanceledException)
+        {
+            countyMetadata = null;
+            countyLayer.ItemsSource = null;
+            countyParcelIdField.ItemsSource = null;
+            countySitusAddressField.ItemsSource = null;
+            countyLegalDescriptionField.ItemsSource = null;
+            countyMetadataStatus.Text = "Could not retrieve usable parcel-layer metadata.";
+            error.Text = $"County metadata fetch failed: {ex.Message}";
+        }
+    }
+
+    private void PopulateCountyFieldChoices()
+    {
+        if (countyLayer.SelectedItem is not CountyParcelServiceLayerMetadata layer)
+        {
+            return;
+        }
+
+        string[] fields = layer.Fields.OrderBy(field => field, StringComparer.OrdinalIgnoreCase).ToArray();
+        countyParcelIdField.ItemsSource = fields;
+        countySitusAddressField.ItemsSource = fields;
+        countyLegalDescriptionField.ItemsSource = new[] { string.Empty }.Concat(fields).ToArray();
+        countyParcelIdField.SelectedItem = PreferField(fields, "parcel", "pin", "account", "apn") ?? fields.FirstOrDefault();
+        countySitusAddressField.SelectedItem = PreferField(fields, "situs", "address", "siteaddr") ?? fields.FirstOrDefault();
+        countyLegalDescriptionField.SelectedItem = PreferField(fields, "legal", "description") ?? string.Empty;
+    }
+
+    private void SaveCountyRegistration()
+    {
+        if (countyMetadata is null || countyLayer.SelectedItem is not CountyParcelServiceLayerMetadata layer)
+        {
+            error.Text = "Fetch county service metadata and select a parcel layer before saving a registration.";
+            return;
+        }
+
+        string? parcelId = countyParcelIdField.SelectedItem as string;
+        string? situsAddress = countySitusAddressField.SelectedItem as string;
+        string? legalDescription = countyLegalDescriptionField.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(countyName.Text) || !IsCountyGeoid(countyGeoid.Text)
+            || string.IsNullOrWhiteSpace(parcelId) || string.IsNullOrWhiteSpace(situsAddress)
+            || string.IsNullOrWhiteSpace(countyAttribution.Text) || string.IsNullOrWhiteSpace(countyLicense.Text)
+            || countyAuthorization.IsChecked != true)
+        {
+            error.Text = "County source identity, a five-digit GEOID, parcel ID and situs fields, attribution, license/disclaimer, and explicit authorized use are all required.";
+            return;
+        }
+
+        CountyParcelRegistryEntry entry = new()
+        {
+            Geoid = countyGeoid.Text.Trim(),
+            DisplayName = countyName.Text.Trim() + " — " + countyAttribution.Text.Trim(),
+            ServiceBaseUrl = countyMetadata.ServiceBaseUri.AbsoluteUri.TrimEnd('/'),
+            LayerIndex = layer.LayerIndex,
+            FieldMap = new CountyParcelFieldMap { ParcelId = parcelId, SitusAddress = situsAddress, LegalDescription = string.IsNullOrWhiteSpace(legalDescription) ? null : legalDescription },
+            LicenseDisclaimerText = countyLicense.Text.Trim(),
+        };
+
+        try
+        {
+            CountyParcelServiceMetadataValidator.ValidateRegistration(countyMetadata, entry);
+            string path = ResolveCountyRegistryPath();
+            CountyParcelRegistry.Write(path, new CountyParcelRegistryDocument
+            {
+                SchemaVersion = CountyParcelRegistry.CurrentSchemaVersion,
+                Counties = [entry],
+            });
+            _ = CountyParcelRegistry.Load(path);
+            countyRegistryPath.Text = path;
+            countyMetadataStatus.Text = "County registration saved locally. Save settings to use this registry in future runs.";
+            error.Text = string.Empty;
+        }
+        catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            error.Text = $"County registration could not be saved: {ex.Message}";
+        }
+    }
+
+    private string ResolveCountyRegistryPath()
+    {
+        if (!string.IsNullOrWhiteSpace(countyRegistryPath.Text)) return countyRegistryPath.Text.Trim();
+        string folder = Path.GetDirectoryName(draft.Path) ?? throw new InvalidOperationException("The per-user settings path has no parent folder.");
+        return Path.Combine(folder, "county-parcel-registry.json");
+    }
+
+    private static string? PreferField(IEnumerable<string> fields, params string[] fragments) => fields.FirstOrDefault(field => fragments.Any(fragment => field.Contains(fragment, StringComparison.OrdinalIgnoreCase)));
+
+    private static bool IsCountyGeoid(string value) => value.Length == 5 && value.All(char.IsAsciiDigit);
 
     private void ChangeExtensionFormat()
     {
