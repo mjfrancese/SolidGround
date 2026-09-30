@@ -2,6 +2,7 @@ using NetTopologySuite.Geometries;
 using NetTopologySuite.Index.Strtree;
 using NetTopologySuite.Operation.Union;
 using NetTopologySuite.Triangulate;
+using System.Collections.ObjectModel;
 using SolidGround.Core.Clipping;
 using SolidGround.Core.Geometry;
 using SolidGround.Core.Terrain;
@@ -94,7 +95,7 @@ public static class TerrainErrorAnalyzer
         Dictionary<CoordinateKey, Cell> cellsByCoordinate = BuildCells(grid, statuses, out SupportDomain support);
         if (support.ValidDomain.IsEmpty)
         {
-            return new TerrainErrorReport(0d, 0d, 0, 0, EmptyGaps(), reportUnit);
+            return new TerrainErrorReport(0d, 0d, 0, 0, Freeze(EmptyGaps()), reportUnit);
         }
 
         List<Coordinate> sites = new(retained.Length);
@@ -102,7 +103,10 @@ public static class TerrainErrorAnalyzer
         Dictionary<CoordinateKey, double> elevationsByCoordinate = [];
         foreach (TerrainSample sample in retained)
         {
-            CoordinateKey key = new(sample.Position.X, sample.Position.Y);
+            Coordinate normalized = requireExactElevation
+                ? new Coordinate(sample.Position.X, sample.Position.Y)
+                : NormalizeExternalVertex(new Coordinate(sample.Position.X, sample.Position.Y), support, grid);
+            CoordinateKey key = new(normalized.X, normalized.Y);
             if (!seen.Add(key))
             {
                 throw new ArgumentException("Retained samples must have unique horizontal coordinates.", nameof(retainedSamples));
@@ -110,7 +114,7 @@ public static class TerrainErrorAnalyzer
 
             bool validExactSample = cellsByCoordinate.TryGetValue(key, out Cell? cell) && cell.Status == GridCellStatus.Retained;
             if ((requireExactElevation && (!validExactSample || BitConverter.DoubleToInt64Bits(cell!.Elevation) != BitConverter.DoubleToInt64Bits(sample.Position.Elevation)))
-                || (!requireExactElevation && !support.ComponentDomains.Values.Any(domain => domain.Covers(support.ValidDomain.Factory.CreatePoint(new Coordinate(sample.Position.X, sample.Position.Y))))))
+                || (!requireExactElevation && !support.ComponentDomains.Values.Any(domain => domain.Covers(support.ValidDomain.Factory.CreatePoint(normalized)))))
             {
                 throw new ArgumentException(
                     requireExactElevation
@@ -118,7 +122,7 @@ public static class TerrainErrorAnalyzer
                         : "Every surface sample must lie within a valid reference-grid support footprint.", nameof(retainedSamples));
             }
 
-            sites.Add(new Coordinate(sample.Position.X, sample.Position.Y));
+            sites.Add(normalized);
             elevationsByCoordinate.Add(key, sample.Position.Elevation);
         }
 
@@ -175,7 +179,7 @@ public static class TerrainErrorAnalyzer
             compared == 0 ? 0d : Math.Sqrt(sumSquares / compared),
             compared,
             uncovered,
-            gaps,
+            Freeze(gaps),
             reportUnit);
     }
 
@@ -306,6 +310,26 @@ public static class TerrainErrorAnalyzer
         return triangles;
     }
 
+    private static Coordinate NormalizeExternalVertex(Coordinate input, SupportDomain support, ElevationGrid grid)
+    {
+        Point point = support.ValidDomain.Factory.CreatePoint(input);
+        if (support.ComponentDomains.Values.Any(domain => domain.Covers(point))) return input;
+        double epsilon = Math.Max(grid.CellSizeX, grid.CellSizeY) * 1e-9d;
+        List<(int Component, Coordinate Snapped)> candidates = [];
+        foreach ((int component, NtsGeometry domain) in support.ComponentDomains)
+        {
+            Envelope envelope = domain.EnvelopeInternal;
+            bool onOuterEdge = Math.Abs(input.X - envelope.MinX) <= epsilon || Math.Abs(input.X - envelope.MaxX) <= epsilon
+                || Math.Abs(input.Y - envelope.MinY) <= epsilon || Math.Abs(input.Y - envelope.MaxY) <= epsilon;
+            if (!onOuterEdge) continue;
+            Coordinate snapped = new(
+                Math.Abs(input.X - envelope.MinX) <= epsilon ? envelope.MinX : Math.Abs(input.X - envelope.MaxX) <= epsilon ? envelope.MaxX : input.X,
+                Math.Abs(input.Y - envelope.MinY) <= epsilon ? envelope.MinY : Math.Abs(input.Y - envelope.MaxY) <= epsilon ? envelope.MaxY : input.Y);
+            if (domain.Covers(domain.Factory.CreatePoint(snapped))) candidates.Add((component, snapped));
+        }
+        return candidates.Count == 1 ? candidates[0].Snapped : input;
+    }
+
     private static int? ResolveComponent(Coordinate coordinate, IReadOnlyDictionary<CoordinateKey, Cell> cells, SupportDomain support, bool requireExactElevation)
     {
         if (requireExactElevation && cells.TryGetValue(new CoordinateKey(coordinate.X, coordinate.Y), out Cell? exact))
@@ -353,10 +377,12 @@ public static class TerrainErrorAnalyzer
         }
         Dictionary<TerrainCoverageGapReason, int> gaps = EmptyGaps();
         gaps[reason] = valid;
-        return new TerrainErrorReport(0d, 0d, 0, valid, gaps, reportUnit);
+        return new TerrainErrorReport(0d, 0d, 0, valid, Freeze(gaps), reportUnit);
     }
 
     private static Dictionary<TerrainCoverageGapReason, int> EmptyGaps() => Enum.GetValues<TerrainCoverageGapReason>().ToDictionary(reason => reason, _ => 0);
+    private static ReadOnlyDictionary<TerrainCoverageGapReason, int> Freeze(Dictionary<TerrainCoverageGapReason, int> gaps) =>
+        new ReadOnlyDictionary<TerrainCoverageGapReason, int>(new Dictionary<TerrainCoverageGapReason, int>(gaps));
 
     private readonly record struct CoordinateKey(long X, long Y)
     {
