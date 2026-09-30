@@ -332,6 +332,24 @@ internal sealed class SettingsDialog : Window
             originX.Focus();
             return false;
         }
+
+        string? configuredLocalParcelPath = BlankAsNull(localParcelPath.Text);
+        string? configuredLocalParcelLabel = BlankAsNull(localParcelLabel.Text);
+        string? configuredLocalParcelLicense = BlankAsNull(localParcelLicense.Text);
+        if (configuredLocalParcelPath is not null && configuredLocalParcelLabel is null)
+        {
+            error.Text = "Local source label is required when a local parcel file is selected.";
+            localParcelLabel.Focus();
+            return false;
+        }
+
+        if (configuredLocalParcelPath is not null && configuredLocalParcelLicense is null)
+        {
+            error.Text = "Local license or disclaimer is required when a local parcel file is selected.";
+            localParcelLicense.Focus();
+            return false;
+        }
+
         ProcessInputSettings? process = mode == TerrainAcquisitionMode.Process
             ? (baseline.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with
             {
@@ -343,7 +361,7 @@ internal sealed class SettingsDialog : Window
         RevitAddressAndParcelSettings address = baseline.AddressAndParcel with
         {
             GeocoderProvider = (AddressGeocoderProvider)geocoderProvider.SelectedItem, NearbySearchRadiusMeters = nearby,
-            CountyRegistryPath = stagedCountyRegistryPath ?? BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = BlankAsNull(localParcelPath.Text), LocalParcelFileSourceLabel = BlankAsNull(localParcelLabel.Text), LocalParcelFileLicenseDisclaimerText = BlankAsNull(localParcelLicense.Text),
+            CountyRegistryPath = stagedCountyRegistryPath ?? BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = configuredLocalParcelPath, LocalParcelFileSourceLabel = configuredLocalParcelLabel, LocalParcelFileLicenseDisclaimerText = configuredLocalParcelLicense,
         };
         proposed = baseline with
         {
@@ -905,7 +923,7 @@ internal sealed class SettingsDialog : Window
         "countyServiceUrl" => "HTTPS ArcGIS service URL used to discover parcel layers and fields.",
         "countyLayer" => "Selects the parcel layer returned by the county ArcGIS service.",
         "countyParcelIdField" => "Maps the stable county parcel identifier field.",
-        "countySitusAddressField" => "Optionally maps the county situs-address field.",
+        "countySitusAddressField" => "Maps the county situs-address field.",
         "countyLegalDescriptionField" => "Optionally maps the county legal-description field.",
         "useCountySource" => "Stages this authorized county source and writes its per-user registry only when settings are saved.",
         "openTopographyKey" => "Session-only OpenTopography key. It is never written to settings.",
