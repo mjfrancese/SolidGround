@@ -87,7 +87,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         : string.Empty;
     public IReadOnlyList<ParcelProximityCandidate> ParcelCandidates => _flow.ParcelCandidates;
     public bool HasMultipleLocations => _flow.LocationRequiresConfirmation;
-    public bool CanSelectLocation => CurrentStep == SolidGroundDialogStep.Parcel && !_flow.LocationIsConfirmed;
+    public bool CanSelectLocation => CurrentStep == SolidGroundDialogStep.Parcel && _flow.LocationRequiresConfirmation;
     public bool ShowCoordinates => EntryMode == LocationEntryMode.Coordinates;
     public bool ShowOtherAreaOptions => EntryMode is LocationEntryMode.BoundingBox or LocationEntryMode.Radius or LocationEntryMode.LocalGeometry;
     public bool ShowAddress => EntryMode == LocationEntryMode.Address;
@@ -163,7 +163,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 
     partial void OnSelectedGeocodeCandidateChanged(AddressGeocodeCandidate? value)
     {
-        if (_synchronizingLocationSelection || !_flow.LocationIsConfirmed || _flow.SelectedLocation is not { } committed || Equals(value, committed))
+        if (_synchronizingLocationSelection || _flow.SelectedLocation is not { } committed || Equals(value, committed))
         {
             return;
         }

@@ -5,6 +5,7 @@ using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit.Tests;
 
+[Collection(SessionApiKeyOverrideTestGroup.Name)]
 public sealed class UiSettingsRuntimeTests
 {
     [Fact]

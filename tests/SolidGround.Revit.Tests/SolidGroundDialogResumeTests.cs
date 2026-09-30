@@ -13,6 +13,7 @@ using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit.Tests;
 
+[Collection(SessionApiKeyOverrideTestGroup.Name)]
 public sealed class SolidGroundDialogResumeTests
 {
     [Fact]
@@ -45,7 +46,7 @@ public sealed class SolidGroundDialogResumeTests
                 _ =>
                 {
                     factoryCalls++;
-                    return new SolidGroundDialogLookupServices(NullGeocoder.Instance, AddressGeocoderProvider.Census, configuredSource, 30d, 30, 0);
+                    return new SolidGroundDialogLookupServices(NullGeocoder.Instance, AddressGeocoderProvider.Census, configuredSource, 30d, 30, SessionApiKeyOverrides.Revision);
                 }));
 
             viewModel.EntryMode = LocationEntryMode.Coordinates;
@@ -167,7 +168,7 @@ public sealed class SolidGroundDialogResumeTests
                 initial,
                 null,
                 _ => changed,
-                _ => new SolidGroundDialogLookupServices(replacement, AddressGeocoderProvider.Geocodio, null, 30d, 30, 0)) with
+                _ => new SolidGroundDialogLookupServices(replacement, AddressGeocoderProvider.Geocodio, null, 30d, 30, SessionApiKeyOverrides.Revision)) with
             {
                 Geocoder = first,
             });
@@ -201,7 +202,7 @@ public sealed class SolidGroundDialogResumeTests
                 initial,
                 null,
                 _ => changed,
-                _ => new SolidGroundDialogLookupServices(replacement, AddressGeocoderProvider.Geocodio, null, 30d, 30, 0)) with
+                _ => new SolidGroundDialogLookupServices(replacement, AddressGeocoderProvider.Geocodio, null, 30d, 30, SessionApiKeyOverrides.Revision)) with
             {
                 Geocoder = original,
             });
@@ -256,6 +257,41 @@ public sealed class SolidGroundDialogResumeTests
             viewModel.BackCommand.Execute(null);
             Assert.Equal(SolidGroundDialogStep.Location, viewModel.CurrentStep);
             Assert.Null(viewModel.SelectedGeocodeCandidate);
+        });
+    }
+
+    [Fact]
+    public void AutomaticSingleLocationCannotBeDeselectedOrReplacedDuringOrAfterParcelLookup()
+    {
+        StaTestHost.Run(() =>
+        {
+            AddressGeocodeCandidate resolved = new(41.59d, -93.60d, "Synthetic automatic", "Synthetic automatic attribution");
+            AddressGeocodeCandidate other = new(41.60d, -93.61d, "Synthetic other", "Synthetic other attribution");
+            DelayedParcelSource source = new();
+            SolidGroundDialogViewModel viewModel = new(new SolidGroundDialogInputs(
+                new ImmediateGeocoder(resolved), AddressGeocoderProvider.Census, source,
+                [new NamedElevationCandidate(1, "Synthetic level", 0d)], [new NamedCandidate(2, "Synthetic toposolid")],
+                null, null, LengthUnit.UsSurveyFoot, 15_000, false, false,
+                new RevitIniToposolidThresholds.Thresholds(20_000, null), "synthetic-revit.ini", 30,
+                UiSettingsStore.CreateDefault().Request.AreaOfInterest, 30d, TerrainAcquisitionMode.Fetch,
+                Settings: UiSettingsStore.CreateDefault()));
+            viewModel.AddressText = "Synthetic automatic address";
+            viewModel.FindCommand.Execute(null);
+            Assert.Single(source.Pending);
+            Assert.False(viewModel.CanSelectLocation);
+
+            viewModel.SelectedGeocodeCandidate = null;
+            Assert.Equal(resolved, viewModel.SelectedGeocodeCandidate);
+            viewModel.SelectedGeocodeCandidate = other;
+            Assert.Equal(resolved, viewModel.SelectedGeocodeCandidate);
+
+            source.CompleteNext("automatic-parcel");
+            PumpUntil(() => viewModel.ParcelCandidates.Count == 1);
+            viewModel.SelectedGeocodeCandidate = null;
+            Assert.Equal(resolved, viewModel.SelectedGeocodeCandidate);
+            viewModel.SelectedGeocodeCandidate = other;
+            Assert.Equal(resolved, viewModel.SelectedGeocodeCandidate);
+            Assert.Equal(resolved, viewModel.ConfirmedLocation);
         });
     }
 
@@ -522,6 +558,7 @@ public sealed class SolidGroundDialogResumeTests
             settings.Request.AreaOfInterest,
             30d,
             settings.Request.Mode,
+            InitialCredentialRevision: SessionApiKeyOverrides.Revision,
             Settings: settings,
             EditSettings: edit,
             ReconfigureLookupServices: reconfigure);
