@@ -44,12 +44,9 @@ public sealed class SolidGroundApplication : IExternalApplication
     private const string SettingsToolTip = "Set SolidGround terrain, source, export, and advanced preferences without modifying this Revit document.";
 
     private const string ButtonLongDescription =
-        "Reads %ProgramData%\\SolidGround\\Revit\\settings.json to acquire USGS 1-meter bare-earth elevation " +
-        "(live from OpenTopography, or from a local AAIGrid .asc/.prj pair), clips it to the configured area " +
-        "of interest, simplifies it to the configured point budget, and creates one native Revit Toposolid " +
-        "inside a single transaction that is provably unchanged on any rejected path. The OPENTOPOGRAPHY_API_KEY " +
-        "environment variable's value is never read, displayed, or logged. SolidGround is a site-form tool, not " +
-        "a survey instrument, and never claims suitability for foundation-perimeter grading.";
+        "Enter an address or coordinates, confirm the parcel, and create native Revit terrain. " +
+        "Use Settings for elevation access, parcel sources, units, terrain extension, and export preferences. " +
+        "SolidGround is a site-form tool, not a survey instrument.";
 
     public Result OnStartup(UIControlledApplication application)
     {
@@ -133,7 +130,7 @@ public sealed class SolidGroundApplication : IExternalApplication
             typeof(SettingsCommand).FullName!)
         {
             ToolTip = SettingsToolTip,
-            LongDescription = "Opens SolidGround preferences and source setup. Settings save under the current user's LocalAppData folder and this command never opens a transaction or changes the active model.",
+            LongDescription = "Choose terrain preferences, configure an elevation or parcel source, and manage keys for this Revit session. Save settings to use these preferences on future runs.",
             Image = LoadIcon(SmallIconResourceName),
             LargeImage = LoadIcon(LargeIconResourceName),
         };
