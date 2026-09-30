@@ -1,4 +1,5 @@
 using System.Windows.Interop;
+using System.Windows;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using SolidGround.Core.Hosting;
@@ -75,7 +76,9 @@ internal static class SolidGroundDialogHost
             Settings: settings);
 
         SolidGroundDialogViewModel viewModel = new(inputs);
-        SolidGroundDialog dialog = new(viewModel);
+        // Revit theme access remains in the Revit-only host. The palette-injected dialog constructor is kept
+        // free of UIThemeManager so the local WPF test lane can render it without loading RevitAPIUI.
+        SolidGroundDialog dialog = new(viewModel, DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast));
         _ = new WindowInteropHelper(dialog) { Owner = commandData.Application.MainWindowHandle };
 
         AddInLog.Info("Showing the SolidGround interactive dialog.");

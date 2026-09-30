@@ -57,11 +57,19 @@ public sealed class RevitInteractiveDialogTests
     }
 
     [Fact]
-    public void DialogAllowsPaletteInjectionForLocalWpfTests()
+    public void PaletteInjectedDialogConstructorDoesNotReferenceRevitThemeApis()
     {
         string source = Read("SolidGroundDialog.cs");
-        Assert.Contains("DialogPalette? paletteOverride = null", source, StringComparison.Ordinal);
-        Assert.Contains("paletteOverride ?? DialogTheme.Resolve", source, StringComparison.Ordinal);
+        Assert.Contains("SolidGroundDialog(SolidGroundDialogViewModel viewModel, DialogPalette palette)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("UIThemeManager", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Autodesk.Revit", source, StringComparison.Ordinal);
+        Assert.Contains("DialogTheme.Resolve(UIThemeManager.CurrentTheme", Read("SolidGroundDialogHost.cs"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ViewModelProvidesAnInternalDiagnosticPropertyForBindingPathFailureCoverage()
+    {
+        Assert.Contains("internal string BindingPathErrorDiagnostic", Read("SolidGroundDialogViewModel.cs"), StringComparison.Ordinal);
     }
 
     private static string Read(string name) => File.ReadAllText(Path.Combine(Dialog, name));

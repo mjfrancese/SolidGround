@@ -6,7 +6,6 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Media;
-using Autodesk.Revit.UI;
 using SolidGround.Core.Sources;
 using ComboBox = System.Windows.Controls.ComboBox;
 using TextBox = System.Windows.Controls.TextBox;
@@ -25,7 +24,11 @@ internal sealed class SolidGroundDialog : Window
     private readonly Button _useParcelButton;
     private readonly Button _createButton;
 
-    internal SolidGroundDialog(SolidGroundDialogViewModel viewModel, DialogPalette? paletteOverride = null)
+    /// <summary>
+    /// Constructs from a caller-resolved palette. This constructor deliberately contains no Revit UI type
+    /// reference, allowing the local STA WPF tests to render it without loading RevitAPIUI.
+    /// </summary>
+    internal SolidGroundDialog(SolidGroundDialogViewModel viewModel, DialogPalette palette)
     {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         DataContext = viewModel;
@@ -37,8 +40,7 @@ internal sealed class SolidGroundDialog : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Language = System.Windows.Markup.XmlLanguage.GetLanguage(CultureInfo.CurrentCulture.IetfLanguageTag);
 
-        // The optional palette makes local WPF tests independent of UIThemeManager and a live Revit process.
-        DialogPalette palette = paletteOverride ?? DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
+        ArgumentNullException.ThrowIfNull(palette);
         Background = palette.Window;
         Foreground = palette.WindowText;
         BorderBrush = palette.ActiveBorder;

@@ -86,6 +86,10 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         ? "Pre-fetch estimate is shown after the terrain extent is planned; it does not check entitlement or request elevation."
         : "Local-input estimate is shown after the terrain extent is planned; it does not read the raster yet.";
 
+    // Deliberately internal and non-bound: #53's binding tests use it to prove they detect a real path
+    // accessibility error, while the dialog's actual Binding(nameof(...)) properties remain public.
+    internal string BindingPathErrorDiagnostic => ErrorText ?? string.Empty;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowAddress), nameof(ShowCoordinates), nameof(ShowOtherAreaOptions))]
     [NotifyCanExecuteChangedFor(nameof(FindCommand))]
