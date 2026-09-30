@@ -38,6 +38,23 @@ public sealed class TerrainErrorAnalyzerTests
     }
 
     [Fact]
+    public void IndependentlySuppliedSurfaceMayUseVerticesInsideValidCellFootprintsRatherThanGridCenters()
+    {
+        ElevationGrid grid = Grid(4, 4, (row, column) => (2d * column) + (3d * row) + 7d);
+        TerrainSample[] surface =
+        [
+            new(new Coordinate3D(0.1d, 0.1d, 5d)), new(new Coordinate3D(3.9d, 0.1d, 12.6d)),
+            new(new Coordinate3D(0.1d, 3.9d, 16.4d)), new(new Coordinate3D(3.9d, 3.9d, 24d)),
+        ];
+
+        TerrainErrorReport report = TerrainErrorAnalyzer.AnalyzeSurface(grid, surface, LengthUnit.Meter);
+
+        Assert.Equal(16, report.ComparedCellCount);
+        Assert.Equal(0, report.UncoveredCellCount);
+        Assert.Equal(0d, report.MaximumAbsoluteResidual, precision: 10);
+    }
+
+    [Fact]
     public void NoDataHoleIsReportedAsCoverageGapInsteadOfInterpolated()
     {
         ElevationGrid grid = Grid(5, 5, (row, column) => row == 2 && column == 2 ? null : 0d);
@@ -51,6 +68,51 @@ public sealed class TerrainErrorAnalyzerTests
         Assert.True(report.UncoveredCellCount > 0);
         Assert.True(report.UncoveredByReason[TerrainCoverageGapReason.OutsideRetainedDomain] > 0);
         Assert.Equal(0d, report.MaximumAbsoluteResidual);
+    }
+
+    [Fact]
+    public void DisconnectedValidIslandsNeverBecomeAnInterpolatedBridge()
+    {
+        ElevationGrid grid = Grid(3, 7, (_, column) => column == 3 ? null : 10d);
+        TerrainSample[] retained = [Sample(grid, 0, 0), Sample(grid, 2, 0), Sample(grid, 0, 6), Sample(grid, 2, 6)];
+
+        TerrainErrorReport report = TerrainErrorAnalyzer.Analyze(grid, retained, LengthUnit.Meter);
+
+        Assert.True(report.UncoveredCellCount > 0);
+        Assert.True(report.UncoveredByReason.Values.Sum() > 0);
+    }
+
+    [Fact]
+    public void ConstantElevationInjectionIsReportedAtEveryMeasuredCell()
+    {
+        ElevationGrid grid = Grid(4, 4, (_, _) => 10d);
+        TerrainSample[] surface =
+        [
+            new(new Coordinate3D(0.1, 0.1, 11d)), new(new Coordinate3D(3.9, 0.1, 11d)),
+            new(new Coordinate3D(0.1, 3.9, 11d)), new(new Coordinate3D(3.9, 3.9, 11d)),
+        ];
+
+        TerrainErrorReport report = TerrainErrorAnalyzer.AnalyzeSurface(grid, surface, LengthUnit.Meter);
+
+        Assert.Equal(16, report.ComparedCellCount);
+        Assert.Equal(1d, report.MaximumAbsoluteResidual);
+        Assert.Equal(1d, report.RootMeanSquareResidual);
+    }
+
+    [Fact]
+    public void RepeatedAnalysisIsDeterministic()
+    {
+        ElevationGrid grid = Grid(5, 5, (row, column) => row * row - column);
+        TerrainSample[] surface = [Sample(grid, 0, 0), Sample(grid, 0, 4), Sample(grid, 4, 0), Sample(grid, 4, 4)];
+
+        TerrainErrorReport first = TerrainErrorAnalyzer.Analyze(grid, surface, LengthUnit.Meter);
+        TerrainErrorReport second = TerrainErrorAnalyzer.Analyze(grid, surface, LengthUnit.Meter);
+
+        Assert.Equal(first.MaximumAbsoluteResidual, second.MaximumAbsoluteResidual);
+        Assert.Equal(first.RootMeanSquareResidual, second.RootMeanSquareResidual);
+        Assert.Equal(first.ComparedCellCount, second.ComparedCellCount);
+        Assert.Equal(first.UncoveredCellCount, second.UncoveredCellCount);
+        Assert.Equal(first.UncoveredByReason.OrderBy(pair => pair.Key), second.UncoveredByReason.OrderBy(pair => pair.Key));
     }
 
     private static ElevationGrid Grid(int rows, int columns, Func<int, int, double?> elevation)
@@ -73,6 +135,7 @@ public sealed class TerrainErrorAnalyzerTests
 
     private static TerrainSample[] Samples(ElevationGrid grid) =>
         [.. Enumerable.Range(0, grid.RowCount).SelectMany(row => Enumerable.Range(0, grid.ColumnCount)
+            .Where(column => grid.GetElevation(row, column) is not null)
             .Select(column => new TerrainSample(new Coordinate3D(grid.GetCellCenter(row, column).X, grid.GetCellCenter(row, column).Y, grid.GetElevation(row, column)!.Value))))];
 
     private static TerrainSample Sample(ElevationGrid grid, int row, int column)

@@ -48,6 +48,50 @@ public sealed class CliScoreCommandTests
         finally { Directory.Delete(directory.FullName, true); }
     }
 
+    [Fact]
+    public async Task CollinearExternalPointsProduceNoScoreInsteadOfAPerfectZero()
+    {
+        DirectoryInfo directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            string asc = Copy("example-site-synthetic.asc", directory.FullName);
+            string prj = Copy("example-site-synthetic.prj", directory.FullName);
+            string points = Path.Combine(directory.FullName, "collinear.csv");
+            File.WriteAllText(points, "x,y,z\n449674.5,4604563.5,183\n449675.5,4604563.5,183\n449676.5,4604563.5,183\n");
+
+            (int code, string stdout, string stderr) = await RunAsync([
+                "score", "--reference-asc", asc, "--reference-prj", prj, "--reference-vertical-datum", "NAVD88",
+                "--reference-vertical-unit", "meter", "--points", points, "--external-epsg", "EPSG:26915",
+                "--external-axis-order", "easting-northing", "--external-horizontal-unit", "meter", "--external-vertical-unit", "meter"]);
+
+            Assert.NotEqual(CliExitCodes.Success, code);
+            Assert.Contains("no-score", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("maximum absolute vertical residual 0", stdout, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(directory.FullName, true); }
+    }
+
+    [Fact]
+    public async Task DeclaredExternalVerticalDatumMismatchIsRejected()
+    {
+        DirectoryInfo directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            string asc = Copy("example-site-synthetic.asc", directory.FullName);
+            string prj = Copy("example-site-synthetic.prj", directory.FullName);
+            string points = Path.Combine(directory.FullName, "surface.csv");
+            File.WriteAllText(points, "x,y,z\n449674.5,4604563.5,183\n449676.5,4604563.5,183\n449674.5,4604565.5,183\n");
+
+            (int code, _, string stderr) = await RunAsync([
+                "score", "--reference-asc", asc, "--reference-prj", prj, "--reference-vertical-datum", "NAVD88", "--reference-vertical-unit", "meter",
+                "--points", points, "--external-epsg", "EPSG:26915", "--external-axis-order", "easting-northing", "--external-horizontal-unit", "meter", "--external-vertical-unit", "meter", "--external-vertical-datum", "OtherDatum"]);
+
+            Assert.Equal(CliExitCodes.Usage, code);
+            Assert.Contains("vertical datum", stderr, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(directory.FullName, true); }
+    }
+
     private static string Copy(string file, string directory)
     {
         string path = Path.Combine(directory, file);

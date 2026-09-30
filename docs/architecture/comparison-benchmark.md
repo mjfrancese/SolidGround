@@ -25,3 +25,21 @@ The seven comparison dimensions from the 2026-09-27 research remain: terrain det
 ## Watch list (started 2026-09-30)
 
 The owner may use GitHub **Watch → Releases** for Groundit, Mantle Place, BlenderGIS, and Heron. Archi Topography has no public repository, so it needs an owner-selected web-page change monitor. Mantle Place is also watched for its first Revit release. No repository automation, workflow trigger, or account action is created by this note.
+
+## 2026-09-27 research baseline (preserved)
+
+The original comparative research remains in [phase-4-comparative-research.md](phase-4-comparative-research.md). It evaluated implementation evidence, not a common exported surface, so it made no head-to-head numerical terrain-detail claim. Its seven-row scorecard is retained here as the historical entry before the 2026-09-30 numeric append.
+
+| Dimension | 2026-09-27 finding | Evidence |
+| --- | --- | --- |
+| Terrain detail | No common raster plus exported comparator surface existed; accuracy was not measured. | F07, F31 |
+| Safe data gaps | SolidGround's null NODATA contract was a differentiator. | F16, F30 |
+| Model safety | Transaction/rollback handling compared favorably to the evidenced adapters. | F34 |
+| Ease of use | Location/parcel review and settings were the active usability gaps. | F10, F24, F25 |
+| Beyond-terrain layers | OSM/context layers remained a licensing and quality question. | F11, F12, F39 |
+| Coverage | The USGS 1 m/OpenTopography boundary remained deliberate. | F13, F18 |
+| Automated tests | Offline Core tests were established; unattended Revit automation remained open. | F03, F28 |
+
+The 2026-09-30 entry adds a terrain-detail number only. Its seven-row update is: terrain detail measured for SolidGround; data gaps demonstrated by the reported 30 uncovered uniform cells; model safety, ease of use, beyond-terrain layers, and coverage unchanged from the cited baseline; and offline scorer coverage added without Revit automation.
+
+Direct watch targets and mechanism: GitHub **Watch → Releases** for [Groundit](https://github.com/lewismconte/groundit), [Mantle Place](https://github.com/mantleplace/mantleplace-dcc), [BlenderGIS](https://github.com/domlysz/BlenderGIS), and [Heron](https://github.com/blueherongis/Heron); an owner-selected page-change monitor for [Archi Topography](https://goto.archi/topography). Start date: 2026-09-30. Mantle Place is also watched for its first Revit release. This note creates no account action or repository automation.

@@ -58,9 +58,9 @@ public static class TerrainErrorAnalyzer
     }
 
     /// <summary>
-    /// Scores an independently supplied surface against a reference grid. Horizontal vertices still must be
-    /// exact valid reference-cell locations so the conservative footprint/component coverage policy remains
-    /// meaningful; their elevations intentionally need not equal the reference.
+    /// Scores an independently supplied surface against a reference grid. Vertices may occur anywhere within
+    /// a valid connected support footprint; the complete triangle must still be covered by that single
+    /// component, so an arbitrary external mesh cannot bridge a hole, concavity, or disconnected island.
     /// </summary>
     public static TerrainErrorReport AnalyzeSurface(ElevationGrid referenceGrid, IEnumerable<TerrainSample> surfaceSamples, LengthUnit reportUnit)
     {
@@ -91,8 +91,8 @@ public static class TerrainErrorAnalyzer
             throw new ArgumentException("Retained samples cannot contain null values.", nameof(retainedSamples));
         }
 
-        Dictionary<CoordinateKey, Cell> cellsByCoordinate = BuildCells(grid, statuses, out List<Polygon> validFootprints);
-        if (validFootprints.Count == 0)
+        Dictionary<CoordinateKey, Cell> cellsByCoordinate = BuildCells(grid, statuses, out SupportDomain support);
+        if (support.ValidDomain.IsEmpty)
         {
             return new TerrainErrorReport(0d, 0d, 0, 0, EmptyGaps(), reportUnit);
         }
@@ -108,13 +108,14 @@ public static class TerrainErrorAnalyzer
                 throw new ArgumentException("Retained samples must have unique horizontal coordinates.", nameof(retainedSamples));
             }
 
-            if (!cellsByCoordinate.TryGetValue(key, out Cell? cell) || cell.Status != GridCellStatus.Retained
-                || (requireExactElevation && BitConverter.DoubleToInt64Bits(cell.Elevation) != BitConverter.DoubleToInt64Bits(sample.Position.Elevation)))
+            bool validExactSample = cellsByCoordinate.TryGetValue(key, out Cell? cell) && cell.Status == GridCellStatus.Retained;
+            if ((requireExactElevation && (!validExactSample || BitConverter.DoubleToInt64Bits(cell!.Elevation) != BitConverter.DoubleToInt64Bits(sample.Position.Elevation)))
+                || (!requireExactElevation && !support.ComponentDomains.Values.Any(domain => domain.Covers(support.ValidDomain.Factory.CreatePoint(new Coordinate(sample.Position.X, sample.Position.Y))))))
             {
                 throw new ArgumentException(
                     requireExactElevation
                         ? "Every retained sample must be an exact, valid sample from the full-resolution clipped grid."
-                        : "Every surface sample must use a valid reference-grid cell location.", nameof(retainedSamples));
+                        : "Every surface sample must lie within a valid reference-grid support footprint.", nameof(retainedSamples));
             }
 
             sites.Add(new Coordinate(sample.Position.X, sample.Position.Y));
@@ -126,8 +127,7 @@ public static class TerrainErrorAnalyzer
             return AllValidCellsUncovered(grid, statuses, reportUnit, TerrainCoverageGapReason.NoEligibleTriangle);
         }
 
-        NtsGeometry validDomain = UnaryUnionOp.Union(validFootprints);
-        List<Triangle> triangles = BuildTriangles(sites, elevationsByCoordinate, cellsByCoordinate, validDomain);
+        List<Triangle> triangles = BuildTriangles(sites, elevationsByCoordinate, cellsByCoordinate, support, requireExactElevation);
         STRtree<Triangle> triangleIndex = new();
         foreach (Triangle triangle in triangles)
         {
@@ -150,7 +150,7 @@ public static class TerrainErrorAnalyzer
                 }
 
                 Coordinate2D center = grid.GetCellCenter(row, column);
-                Point point = validDomain.Factory.CreatePoint(new Coordinate(center.X, center.Y));
+                Point point = support.ValidDomain.Factory.CreatePoint(new Coordinate(center.X, center.Y));
                 List<Triangle> candidates = triangleIndex.Query(point.EnvelopeInternal).OrderBy(t => t.Id).ToList();
                 Triangle? triangle = candidates.FirstOrDefault(candidate => candidate.Eligible && candidate.Geometry.Covers(point));
                 if (triangle is null)
@@ -179,9 +179,10 @@ public static class TerrainErrorAnalyzer
             reportUnit);
     }
 
-    private static Dictionary<CoordinateKey, Cell> BuildCells(ElevationGrid grid, GridCellStatus[,] statuses, out List<Polygon> validFootprints)
+    private static Dictionary<CoordinateKey, Cell> BuildCells(ElevationGrid grid, GridCellStatus[,] statuses, out SupportDomain support)
     {
-        validFootprints = [];
+        List<Polygon> validFootprints = [];
+        Dictionary<int, List<Polygon>> footprintsByComponent = [];
         Dictionary<CoordinateKey, Cell> cells = [];
         int component = 0;
         int[,] components = new int[grid.RowCount, grid.ColumnCount];
@@ -203,14 +204,27 @@ public static class TerrainErrorAnalyzer
             {
                 Coordinate2D center = grid.GetCellCenter(row, column);
                 double elevation = grid.GetElevation(row, column) ?? 0d;
-                Cell cell = new(statuses[row, column], elevation, components[row, column]);
-                cells.Add(new CoordinateKey(center.X, center.Y), cell);
-                if (cell.Status == GridCellStatus.Retained)
+                Polygon? footprint = null;
+                if (statuses[row, column] == GridCellStatus.Retained)
                 {
-                    validFootprints.Add(CellFootprint(factory, center, grid.CellSizeX, grid.CellSizeY));
+                    footprint = CellFootprint(factory, center, grid.CellSizeX, grid.CellSizeY);
+                    validFootprints.Add(footprint);
+                    if (!footprintsByComponent.TryGetValue(components[row, column], out List<Polygon>? componentFootprints))
+                    {
+                        componentFootprints = [];
+                        footprintsByComponent.Add(components[row, column], componentFootprints);
+                    }
+                    componentFootprints.Add(footprint);
                 }
+                Cell cell = new(statuses[row, column], elevation, components[row, column], footprint);
+                cells.Add(new CoordinateKey(center.X, center.Y), cell);
             }
         }
+        NtsGeometry validDomain = validFootprints.Count == 0 ? factory.CreatePolygon() : UnaryUnionOp.Union(validFootprints);
+        Dictionary<int, NtsGeometry> componentDomains = footprintsByComponent.ToDictionary(
+            pair => pair.Key,
+            pair => (NtsGeometry)UnaryUnionOp.Union(pair.Value));
+        support = new SupportDomain(validDomain, componentDomains);
         return cells;
     }
 
@@ -252,11 +266,16 @@ public static class TerrainErrorAnalyzer
         ]);
     }
 
-    private static List<Triangle> BuildTriangles(IReadOnlyList<Coordinate> sites, IReadOnlyDictionary<CoordinateKey, double> elevations, IReadOnlyDictionary<CoordinateKey, Cell> cells, NtsGeometry validDomain)
+    private static List<Triangle> BuildTriangles(
+        IReadOnlyList<Coordinate> sites,
+        IReadOnlyDictionary<CoordinateKey, double> elevations,
+        IReadOnlyDictionary<CoordinateKey, Cell> cells,
+        SupportDomain support,
+        bool requireExactElevation)
     {
         DelaunayTriangulationBuilder builder = new();
-        builder.SetSites(validDomain.Factory.CreateMultiPointFromCoords([.. sites]));
-        NtsGeometry trianglesGeometry = builder.GetTriangles(validDomain.Factory);
+        builder.SetSites(support.ValidDomain.Factory.CreateMultiPointFromCoords([.. sites]));
+        NtsGeometry trianglesGeometry = builder.GetTriangles(support.ValidDomain.Factory);
         List<Triangle> triangles = [];
         for (int index = 0; index < trianglesGeometry.NumGeometries; index++)
         {
@@ -269,13 +288,11 @@ public static class TerrainErrorAnalyzer
             Coordinate a = coordinates[0];
             Coordinate b = coordinates[1];
             Coordinate c = coordinates[2];
-            bool foundFirst = cells.TryGetValue(new CoordinateKey(a.X, a.Y), out Cell? first);
-            bool foundSecond = cells.TryGetValue(new CoordinateKey(b.X, b.Y), out Cell? second);
-            bool foundThird = cells.TryGetValue(new CoordinateKey(c.X, c.Y), out Cell? third);
-            bool sameComponent = foundFirst && foundSecond && foundThird
-                && first is not null && second is not null && third is not null
-                && first.Component != 0 && first.Component == second.Component && second.Component == third.Component;
-            bool eligible = sameComponent && validDomain.Covers(polygon);
+            int? firstComponent = ResolveComponent(a, cells, support, requireExactElevation);
+            int? secondComponent = ResolveComponent(b, cells, support, requireExactElevation);
+            int? thirdComponent = ResolveComponent(c, cells, support, requireExactElevation);
+            bool sameComponent = firstComponent is int component && secondComponent == component && thirdComponent == component;
+            bool eligible = sameComponent && support.ComponentDomains[firstComponent!.Value].Covers(polygon);
             double Elevation(Coordinate coordinate) => elevations[new CoordinateKey(coordinate.X, coordinate.Y)];
             triangles.Add(new Triangle(
                 index,
@@ -287,6 +304,17 @@ public static class TerrainErrorAnalyzer
                 sameComponent));
         }
         return triangles;
+    }
+
+    private static int? ResolveComponent(Coordinate coordinate, IReadOnlyDictionary<CoordinateKey, Cell> cells, SupportDomain support, bool requireExactElevation)
+    {
+        if (requireExactElevation && cells.TryGetValue(new CoordinateKey(coordinate.X, coordinate.Y), out Cell? exact))
+        {
+            return exact.Component;
+        }
+        Point point = support.ValidDomain.Factory.CreatePoint(coordinate);
+        int[] components = [.. support.ComponentDomains.Where(pair => pair.Value.Covers(point)).Select(pair => pair.Key).OrderBy(component => component)];
+        return components.Length == 1 ? components[0] : null;
     }
 
     private static double BarycentricElevation(Triangle triangle, double x, double y)
@@ -335,7 +363,8 @@ public static class TerrainErrorAnalyzer
         public CoordinateKey(double x, double y) : this(BitConverter.DoubleToInt64Bits(x), BitConverter.DoubleToInt64Bits(y)) { }
     }
 
-    private sealed record Cell(GridCellStatus Status, double Elevation, int Component);
+    private sealed record SupportDomain(NtsGeometry ValidDomain, IReadOnlyDictionary<int, NtsGeometry> ComponentDomains);
+    private sealed record Cell(GridCellStatus Status, double Elevation, int Component, Polygon? Footprint);
     private sealed record Vertex(double X, double Y, double Elevation);
     private sealed record Triangle(int Id, Polygon Geometry, Vertex A, Vertex B, Vertex C, bool Eligible, bool SameComponent);
 }

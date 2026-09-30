@@ -62,6 +62,13 @@ internal static class ScoreCommand
         cancellationToken.ThrowIfCancellationRequested();
 
         TerrainErrorReport report = TerrainErrorAnalyzer.AnalyzeSurface(reference, surface, reportUnit);
+        if (report.ComparedCellCount == 0)
+        {
+            host.StandardError.WriteLine(
+                "error (processing): no-score: the supplied surface covers no measurable reference cells; " +
+                "check for collinear, out-of-domain, or ineligible triangles.");
+            return Task.FromResult(CliExitCodes.Processing);
+        }
         host.StandardOutput.WriteLine($"score: maximum absolute vertical residual {report.MaximumAbsoluteResidual.ToString("R", CultureInfo.InvariantCulture)} {UnitText(report.Unit)}.");
         host.StandardOutput.WriteLine($"score: RMS vertical residual {report.RootMeanSquareResidual.ToString("R", CultureInfo.InvariantCulture)} {UnitText(report.Unit)}.");
         host.StandardOutput.WriteLine($"score: compared {report.ComparedCellCount.ToString(CultureInfo.InvariantCulture)} reference cell(s); uncovered {report.UncoveredCellCount.ToString(CultureInfo.InvariantCulture)}.");
