@@ -16,6 +16,7 @@ using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Terrain;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
+using SolidGround.Core.Workflow;
 using SolidGround.Revit.Diagnostics;
 using SolidGround.Revit.Dialog;
 using SolidGround.Revit.Elements;
@@ -56,6 +57,7 @@ internal delegate void ToposolidCreatedHook(
 public sealed class CreateToposolidCommand : IExternalCommand
 {
     private const string DialogTitle = "SolidGround";
+    private static readonly Uri OpenTopographyReachabilityEndpoint = new("https://portal.opentopography.org/apidocs/openapi.json");
 
     /// <summary>Mirrors <c>SolidGround.Cli.Rasters.RasterSetIo.SourceFileExtension</c>'s value: this project cannot reference the CLI assembly (AGENTS.md architecture rule), so the one literal is duplicated here instead.</summary>
     private const string DefaultSourceJsonExtension = ".source.json";
@@ -153,7 +155,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 "second(s) while SolidGround requests OpenTopography.");
         }
 
-        (ElevationGrid Grid, TerrainProcessingOutcome Outcome) acquisition;
+        AcquisitionResult acquisition;
         try
         {
             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(context.Settings.Request.NetworkTimeoutSeconds));
@@ -235,6 +237,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
         {
             ShowSingleCancelledProblem("SolidGround could not safely inspect existing terrain provenance.", ex.Message);
             return Result.Cancelled;
+        }
+
+        if (acquisition.Projection is { } projection)
+        {
+            AddInLog.Info($"Authoritative grid CRS '{acquisition.Outcome.Payload.Provenance.LocalFrame.ProjectedHorizontalReference.CoordinateReferenceSystem}': convergence={projection.GridConvergenceRadians:R} rad ({(projection.GridConvergenceRadians * 180d / Math.PI):R} deg), pointScale={projection.PointScaleFactor:R}.");
         }
 
         if (acquisition.Outcome.TerrainExtentPlan?.Warnings is { Count: > 0 } warnings && !AcknowledgeTerrainWarnings(warnings))
@@ -331,7 +338,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // ==== Stage 5: Transaction (the only stage that mutates Document) ==================================
         return RunTransaction(
             context, acquisition.Outcome, profiles, points, expected, revitUnit, constantZInternal, toleranceInternal,
-            exportDocumentFileName, exportPointsFileName, propertyLineProfiles, terrainIdentity);
+            exportDocumentFileName, exportPointsFileName, propertyLineProfiles, terrainIdentity, acquisition.Projection);
     }
 
     // -------------------------------------------------------------------------------------------------------
@@ -474,7 +481,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // issue, on the UseSettingsFile path (owner decision 1's refinement -- see this method's own doc
         // comment above and docs/architecture/revit-interactive-dialog.md's "AOI and provenance").
         AreaOfInterest? aoi;
-        if (dialogResult.AoiSource == DialogAoiSource.FindParcel)
+        if (dialogResult.Aoi is not null)
         {
             aoi = dialogResult.Aoi;
         }
@@ -678,7 +685,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
     // Stage 2
     // -------------------------------------------------------------------------------------------------------
 
-    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunPipelineAsync(
+    private sealed record AcquisitionResult(ElevationGrid Grid, TerrainProcessingOutcome Outcome, ProjectionCharacteristicsMeasurement? Projection);
+
+    private static async Task<AcquisitionResult> RunPipelineAsync(
         TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
         AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
@@ -687,7 +696,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
             : await RunProcessPipelineAsync(request, aoi, addressParcel, terrainExtensionMeters, minimumLegalEdgeLength, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunFetchPipelineAsync(
+    private static async Task<AcquisitionResult> RunFetchPipelineAsync(
         TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
         AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
@@ -697,6 +706,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
         (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(fetchAoi);
 
         using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
+        string? reachabilityProblem = await ReachabilityProbe.ProbeAsync(httpClient, OpenTopographyReachabilityEndpoint, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+        if (reachabilityProblem is not null)
+        {
+            throw new ReachabilityProbeException($"The keyless OpenTopography reachability check failed before terrain fetch: {reachabilityProblem} Check network access and try again.");
+        }
         OpenTopographyUsgs1mSource source = new(httpClient, SessionApiKeyOverrides.OpenTopographyProvider());
 
         OpenTopographyUsgs1mAcquisition acquisition;
@@ -752,10 +766,10 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel, parcelExtent)
             .ConfigureAwait(false);
 
-        return (grid, outcome);
+        return new AcquisitionResult(grid, outcome, ProjectionCharacteristics.Measure(transform, outcome.Payload.Provenance.LocalFrame));
     }
 
-    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunProcessPipelineAsync(
+    private static async Task<AcquisitionResult> RunProcessPipelineAsync(
         TerrainRequestSettings request, AreaOfInterest aoi, AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
         ProcessInputSettings process = request.Process!;
@@ -818,7 +832,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel, parcelExtent)
             .ConfigureAwait(false);
 
-        return (grid, outcome);
+        return new AcquisitionResult(grid, outcome, ProjectionCharacteristics.Measure(transform, outcome.Payload.Provenance.LocalFrame));
     }
 
     private static CollectionPeriod? ParseCollectionPeriod(ProcessInputSettings process)
@@ -863,12 +877,13 @@ public sealed class CreateToposolidCommand : IExternalCommand
     }
 
     private static bool IsAcquisitionFailure(Exception ex) =>
-        ex is OpenTopographyException or FormatException or IOException or OperationCanceledException or InvalidOperationException;
+        ex is OpenTopographyException or FormatException or IOException or OperationCanceledException or InvalidOperationException or ReachabilityProbeException;
 
     private static string AcquisitionFailureHeadline(Exception ex, int networkTimeoutSeconds) => ex switch
     {
         OperationCanceledException =>
             $"The request did not complete within {networkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} seconds.",
+        ReachabilityProbeException => "SolidGround could not reach OpenTopography before terrain fetch.",
         IOException => "Could not read a configured file.",
         _ => "SolidGround could not acquire terrain data.",
     };
@@ -878,6 +893,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
         OperationCanceledException => "The acquisition timed out. Increase 'networkTimeoutSeconds' in settings.json, or check network connectivity, and try again.",
         _ => ex.Message,
     };
+
+    private sealed class ReachabilityProbeException(string message) : InvalidOperationException(message);
 
     // -------------------------------------------------------------------------------------------------------
     // Stage 5 / 6
@@ -895,7 +912,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string exportDocumentFileName,
         string exportPointsFileName,
         IList<CurveLoop>? propertyLineProfiles,
-        TerrainIdentity terrainIdentity)
+        TerrainIdentity terrainIdentity,
+        ProjectionCharacteristicsMeasurement? projection)
     {
         Document document = context.Document;
         ToposolidCreationFailureLog failureLog = new();
@@ -1097,7 +1115,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // while reporting success (writing the placement record, the orphan check, showing the dialog) must
         // never re-derive Result from TransactionStatus.RolledBack/HasEnded() -- the model change is already
         // durable. ReportSuccess is itself defensive (never lets a reporting failure escape) for the same reason.
-        return ReportSuccess(context, draft!, toposolid!);
+        return ReportSuccess(context, draft!, toposolid!, projection);
     }
 
     private static PlacementRecordDraft BuildPlacementDraft(
@@ -1236,7 +1254,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
     /// derive a Cancelled/Failed result for a run that actually succeeded (error catalogue row 22's
     /// principle, generalized to every post-commit step, not only the placement-record write).
     /// </summary>
-    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid)
+    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid, ProjectionCharacteristicsMeasurement? projection)
     {
         long elementId = toposolid.Id.Value;
 
@@ -1300,6 +1318,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 $"ToposolidType: {context.ToposolidType.Name}",
                 $"Points retained: {draft.PointCounts.Retained.ToString(CultureInfo.InvariantCulture)} of {draft.PointCounts.Original.ToString(CultureInfo.InvariantCulture)} (budget {draft.PointCounts.Budget.ToString(CultureInfo.InvariantCulture)})",
                 propertyLineStatement,
+                projection is { } characteristics
+                    ? $"Authoritative grid: convergence {characteristics.GridConvergenceRadians:R} rad ({(characteristics.GridConvergenceRadians * 180d / Math.PI):R} deg); point scale {characteristics.PointScaleFactor:R}."
+                    : "Authoritative grid projection characteristics were unavailable (see log).",
                 $"Export bundle: {Path.Combine(context.Settings.Request.Output.Directory, draft.ExportDocument)}",
                 placementPath is not null ? $"Placement record: {placementPath}" : "Placement record: could not be written (see log).",
                 $"Log directory: {AddInLog.LogDirectory ?? "(unavailable)"}",

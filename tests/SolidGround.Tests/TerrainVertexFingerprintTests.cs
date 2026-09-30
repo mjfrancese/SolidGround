@@ -16,4 +16,14 @@ public sealed class TerrainVertexFingerprintTests
         Assert.Equal(first, reordered);
         Assert.NotEqual(first, edited);
     }
+
+    [Fact]
+    public void IncludesOrderedNativeProfileTopology()
+    {
+        Coordinate3D[] vertices = [new(0d, 0d, 0d), new(1d, 0d, 0d)];
+        string first = TerrainVertexFingerprint.Compute(vertices, ["loop:0;curve:0;line:0,0|1,0", "loop:0;curve:1;line:1,0|0,0"]);
+        string changedConnectivity = TerrainVertexFingerprint.Compute(vertices, ["loop:0;curve:0;line:0,0|1,0", "loop:1;curve:0;line:1,0|0,0"]);
+
+        Assert.NotEqual(first, changedConnectivity);
+    }
 }

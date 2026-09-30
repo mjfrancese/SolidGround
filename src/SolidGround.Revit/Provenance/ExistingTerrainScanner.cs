@@ -13,6 +13,10 @@ internal static class ExistingTerrainScanner
     {
         ArgumentNullException.ThrowIfNull(document);
         Schema? v2 = Schema.Lookup(ExtensibleStorageProvenanceSchemaV2.SchemaGuid);
+        if (v2 is not null)
+        {
+            ProvenanceSchemaAdapterV2.RequireSchema(v2);
+        }
         Schema? v1 = Schema.Lookup(ExtensibleStorageProvenanceSchema.SchemaGuid);
         List<ExistingTerrainRecord> v2Records = [];
         List<string> legacy = [];

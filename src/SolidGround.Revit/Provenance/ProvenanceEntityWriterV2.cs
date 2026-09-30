@@ -157,7 +157,25 @@ internal static class ProvenanceEntityWriterV2
             XYZ point = editor.SlabShapeVertices.get_Item(index).Position;
             vertices.Add(new Coordinate3D(point.X, point.Y, point.Z));
         }
-        return TerrainVertexFingerprint.Compute(vertices);
+        Element? sketchElement = toposolid.Document.GetElement(toposolid.SketchId);
+        if (sketchElement is not Sketch sketch)
+        {
+            throw new ProvenanceAttachmentException("SolidGround cannot fingerprint the created toposolid because its native Sketch/Profile is unavailable.");
+        }
+        List<string> profile = [];
+        int loopIndex = 0;
+        foreach (CurveArray loop in sketch.Profile)
+        {
+            int curveIndex = 0;
+            foreach (Curve curve in loop)
+            {
+                IList<XYZ> tessellation = curve.Tessellate();
+                profile.Add($"loop:{loopIndex};curve:{curveIndex};type:{curve.GetType().FullName};points:" + string.Join("|", tessellation.Select(point => string.Create(CultureInfo.InvariantCulture, $"{point.X:R},{point.Y:R},{point.Z:R}"))));
+                curveIndex++;
+            }
+            loopIndex++;
+        }
+        return TerrainVertexFingerprint.Compute(vertices, profile);
     }
 
     private static string ToPropertyName(string fieldName) => char.ToUpperInvariant(fieldName[0]) + fieldName[1..];

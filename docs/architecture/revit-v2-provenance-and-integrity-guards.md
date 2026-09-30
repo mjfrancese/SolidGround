@@ -14,6 +14,8 @@ contains these exact members used by this implementation:
   `P:Autodesk.Revit.DB.SlabShapeVertexArray.Item(System.Int32)`;
 - `M:Autodesk.Revit.DB.FilteredElementCollector.#ctor(Autodesk.Revit.DB.Document)`;
 - `P:Autodesk.Revit.DB.Document.CreationGUID` and `P:Autodesk.Revit.DB.Element.UniqueId`;
+- `P:Autodesk.Revit.DB.Toposolid.SketchId`, `P:Autodesk.Revit.DB.Sketch.Profile`, and
+  `M:Autodesk.Revit.DB.Curve.Tessellate()` (installed XML lines 38729, 216244, and 275910);
 - `M:Autodesk.Revit.DB.ExtensibleStorage.SchemaBuilder.SetReadAccessLevel(Autodesk.Revit.DB.ExtensibleStorage.AccessLevel)`,
   `.SetWriteAccessLevel(...)`, and `.AddSimpleField(System.String,System.Type)`.
 
@@ -36,7 +38,7 @@ failure because no per-vertex proof can then be produced. Any failed check retur
 
 V2 is `SolidGround_Provenance_Toposolid_V2`, GUID
 `a1ca95f5-2bf4-4b9b-a7f1-2b8b4f0fcd3a`, version `2`, with `AccessLevel.Public` read and
-`AccessLevel.Vendor` write. It has 63 fields, below Revit's 256-field ceiling:
+`AccessLevel.Vendor` write. It has 64 fields, below Revit's 256-field ceiling:
 
 - all 36 v1 fields, including build identity and reversible local frame;
 - the 17 address/parcel and source-attribution fields specified in
@@ -65,6 +67,10 @@ throws a named scan exception and is never skipped. V1 entities require explicit
 For v2, no match creates, one fully equal same-history match reuses, and any changed content, point/frame,
 document creation GUID, unique id, or more than one matching stem refuses. Save As retains history only if the
 creation GUID, current unique id, and all signatures still agree.
+
+V2 additionally stores a post-verification native fingerprint. It combines the order-independent slab-shape
+vertex set with ordered `Sketch.Profile` curve topology and bound-curve tessellations. A later read-only scan
+recomputes it and fails closed if the sketch is unavailable or terrain/profile connectivity was edited.
 
 ## Pending manual evidence
 

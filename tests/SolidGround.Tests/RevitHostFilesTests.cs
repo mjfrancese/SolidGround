@@ -893,12 +893,12 @@ public sealed class RevitHostFilesTests
     public void CreateToposolidCommandDerivesTheAoiFromSettingsOnlyWhenTheDialogChoseTheSettingsFile()
     {
         // Owner decision 1's refinement (docs/architecture/revit-interactive-dialog.md's "AOI and provenance"):
-        // both AOI paths remain available. The FindParcel branch must use dialogResult.Aoi directly; the
+        // both AOI paths remain available. Any explicit dialog AOI (parcel or the Other path) must be used directly; the
         // settings-derived path (AoiSettingsFactory.Build, unchanged from before this issue) must still exist,
-        // gated behind the opposite branch of the identical DialogAoiSource.FindParcel check.
+        // settings-derived path remains the null-AOI branch.
         string source = ReadCreateToposolidCommandSource();
 
-        int gateIndex = RequireIndex(source, "if (dialogResult.AoiSource == DialogAoiSource.FindParcel)");
+        int gateIndex = RequireIndex(source, "if (dialogResult.Aoi is not null)");
         const int MaxFollowingDistance = 200;
         string findParcelBranch = source[gateIndex..Math.Min(source.Length, gateIndex + MaxFollowingDistance)];
         Assert.Contains("aoi = dialogResult.Aoi;", findParcelBranch, StringComparison.Ordinal);
