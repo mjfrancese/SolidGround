@@ -17,6 +17,14 @@ Date: 2026-09-30. Scope: #60, #36, #38, and all twelve Phase 4A children #43–#
 
 The public reference has 12,099 valid samples, so the default 15,000 budget retains all of them. The reduced-budget results are measured against that raster, not certified survey accuracy or a general simplifier error bound. No comparable external-tool export was supplied.
 
+## Automated verification and review
+
+Final source checks on 2026-09-30 used the installed Revit 2027 SDK, never the CI-only reference-package condition. Locked solution restore and Release build passed with zero warnings/errors. Core tests passed 1,723/1,730: six live-service cases and the separate captured-reference opt-in case were skipped by default. The captured-reference case was also explicitly run against the recorded hashes and reproduced its measurements without HTTP.
+
+The separate local Windows WPF project restored in locked mode and built with zero warnings/errors. Its full lane passed 38/39 with one explicit all-transparent reference-render skip. Tests exercise actual binding roots, notifications, accessible peers, malformed/future recovery, cancel/conflict byte preservation, process/origin edits, local-source terms, source resumption, and stale asynchronous completions. Tests sharing the process-static session credential store are serialized and take the real credential revision in their fake service snapshots.
+
+Independent implementation review cleared the Core/command contracts, Settings D1–D4 contracts, and final guided-flow corrections. The final guided-flow review target was `0f38a58`; subsequent evidence edits do not change production behavior. The baseline-to-review diff passes `git diff --check`. The existing trusted-main-only CI workflow and its runner/security guards are unchanged; no pull-request CI result is implied by the local checks.
+
 ## Acceptance still required
 
 The [runtime checklist](revit-60-runtime-checklist.md) binds a manual Revit 2027 session to signed DLL hashes, MVIDs, informational versions, and the source commit. Native transaction/Undo, vertex pass/rollback, duplicate/copy/edit detection, v2 save/reopen, property-line invariance, actual CRS readout, accessibility, themes/scaling, and completion actions remain unverified for this implementation until that session is recorded.
