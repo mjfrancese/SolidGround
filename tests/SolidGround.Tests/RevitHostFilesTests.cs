@@ -985,13 +985,13 @@ public sealed class RevitHostFilesTests
     public void CreateToposolidCommandNeverWritesBackToTheSettingsFile()
     {
         // docs/architecture/revit-interactive-dialog.md's "Settings interaction: prefill, not override": the
-        // operator's dialog choices override the settings file's values for the run about to happen only --
-        // CreateToposolidCommand.cs must never call any RevitSettingsIo member beyond the two it already used
-        // before this issue (EnsureTemplateExists only ever creates an absent file; TryLoad never writes).
+        // operator's dialog choices override the settings file's values for the run about to happen only. The
+        // only exception is the explicit corrupt-settings recovery editor, whose Save action is operator
+        // initiated before the workflow resumes.
         string source = ReadCreateToposolidCommandSource();
 
-        Assert.Contains("RevitSettingsIo.LoadForUi", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("RevitSettingsIo.Save", source, StringComparison.Ordinal);
+        HashSet<string> calledMembers = [.. Regex.Matches(source, @"RevitSettingsIo\.(\w+)").Select(match => match.Groups[1].Value)];
+        Assert.Equal(new HashSet<string> { "LoadForUi", "Edit" }, calledMembers);
     }
 
     [Fact]

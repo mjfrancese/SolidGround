@@ -89,6 +89,10 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // docs/architecture/revit-toposolid-creation.md's "Command flow" and
         // docs/architecture/revit-interactive-dialog.md's "Result-code mapping".
         LoadResult loaded = LoadDocumentAndSettings(commandData);
+        if (loaded.Cancelled)
+        {
+            return Result.Cancelled;
+        }
         if (loaded.Document is null || loaded.Settings is null || loaded.Problems.Count > 0)
         {
             ShowProblemList("SolidGround Preflight found a problem.", "Nothing changed. Correct every problem below and run this command again.", loaded.Problems);
@@ -124,7 +128,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // dialog's own Point Budget step only enforces PointBudget > 0
         // (docs/architecture/revit-interactive-dialog.md's "Settings interaction: prefill, not override"), so a
         // dialog-supplied override could otherwise bypass the 1-50000 bound TerrainRequestSettings.Validate()
-        // already enforces for every settings-file-sourced value (RevitSettingsIo.TryLoad's own call, above, at
+        // already enforces for every settings-file-sourced value (the Stage 0 settings reader above, at
         // Stage 0). Reusing that exact rule here -- rather than duplicating a second literal bound into the
         // dialog/WPF layer -- keeps this a single source of truth and restores the invariant that every
         // TerrainRequestSettings reaching Stage 2 satisfies Validate(), regardless of which of the two paths
@@ -370,11 +374,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string SettingsPath,
         List<string> Problems,
         double ShortCurveToleranceInternal,
-        double VertexToleranceInternal);
+        double VertexToleranceInternal,
+        bool Cancelled = false);
 
     /// <summary>
     /// Read-only by construction: the document-null/family-document check, <see cref="RevitSettingsLocator.Resolve"/>,
-    /// <see cref="RevitSettingsIo.EnsureTemplateExists"/>/<see cref="RevitSettingsIo.TryLoad"/>, and the
+    /// settings-reader service, and the
     /// read-once geometry-tolerance read (<see cref="LogAndReadGeometryTolerances"/>) -- moved here, hoisted
     /// earlier than <see cref="RunDocumentPreflight"/>, so <c>ExecuteCore</c>'s Stage 0.5 interactive dialog can
     /// read the loaded settings and <see cref="LoadResult.VertexToleranceInternal"/> before Preflight formally
@@ -406,18 +411,28 @@ public sealed class CreateToposolidCommand : IExternalCommand
         }
 
         string settingsPath = RevitSettingsLocator.Resolve();
-        RevitSettings settings;
-        try { settings = RevitSettingsIo.LoadForUi(owner: null); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
-        {
-            problems.Add(ex.Message);
-            return new LoadResult(null, null, settingsPath, problems, 0, 0);
-        }
-
         if (document is null)
         {
-            // The document problem above already explains why nothing further can run.
-            return new LoadResult(null, settings, settingsPath, problems, 0, 0);
+            return new LoadResult(null, null, settingsPath, problems, 0, 0);
+        }
+        RevitSettings? settings;
+        try
+        {
+            settings = RevitSettingsIo.LoadForUi(owner: null);
+        }
+        catch (UiSettingsRepairRequiredException)
+        {
+            DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, System.Windows.SystemParameters.HighContrast);
+            settings = RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current: null, palette);
+            if (settings is null)
+            {
+                return new LoadResult(null, null, settingsPath, problems, 0, 0, Cancelled: true);
+            }
+        }
+
+        if (settings is null)
+        {
+            return new LoadResult(null, null, settingsPath, problems, 0, 0, Cancelled: true);
         }
 
         (double shortCurveToleranceInternal, double vertexToleranceInternal) = LogAndReadGeometryTolerances(commandData);
