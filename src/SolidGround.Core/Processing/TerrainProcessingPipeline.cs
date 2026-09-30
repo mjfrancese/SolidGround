@@ -23,7 +23,8 @@ namespace SolidGround.Core.Processing;
 public sealed record TerrainProcessingOutcome(
     TerrainExportPayload Payload,
     GridClipResult? ClipResult,
-    SimplificationDiagnostics? SimplificationDiagnostics);
+    SimplificationDiagnostics? SimplificationDiagnostics,
+    TerrainExtentPlan? TerrainExtentPlan = null);
 
 /// <summary>
 /// Clips (optionally), snaps a local origin, simplifies, and assembles a self-describing export payload from
@@ -57,7 +58,8 @@ public static class TerrainProcessingPipeline
         int pointBudget,
         double coverageFloorFraction,
         CancellationToken cancellationToken,
-        AddressParcelProvenance? addressParcel = null)
+        AddressParcelProvenance? addressParcel = null,
+        ParcelExtentGeometry? parcelExtentGeometry = null)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(wgs84ToGridTransform);
@@ -66,26 +68,41 @@ public static class TerrainProcessingPipeline
         ArgumentNullException.ThrowIfNull(sourceMetadata);
         ArgumentNullException.ThrowIfNull(origin);
 
-        // Step 1: clip region (optional). No AOI means no clip -- the candidate grid is the source grid
-        // itself and there is no GridClipResult to report clip statistics from.
+        // The opt-in Revit parcel path owns its legal/terrain separation. Existing callers, including every
+        // CLI path, still take the untouched AOI branch below.
+        TerrainExtentPlan? terrainExtentPlan = null;
         GridClipResult? clipResult = null;
         ElevationGrid candidateGrid = grid;
-        if (aoi is not null)
+        Coordinate3D originPoint;
+        LocalCoordinateFrame localFrame;
+        if (parcelExtentGeometry is not null)
         {
-            ClipRegion clipRegion = ClipRegionFactory.Build(aoi, wgs84ToGridTransform);
-            clipResult = GridClipper.Clip(grid, clipRegion);
+            originPoint = LocalOriginFactory.ComputeOrigin(
+                origin, parcelExtentGeometry.LegalParcelRegion, grid.HorizontalReference, verticalReference);
+            localFrame = new LocalCoordinateFrame(originPoint, grid.HorizontalReference, verticalReference, outputUnit);
+            terrainExtentPlan = TerrainExtentPlanner.Resolve(grid, parcelExtentGeometry, localFrame);
+            clipResult = terrainExtentPlan.TerrainClipResult;
             candidateGrid = clipResult.Grid;
+        }
+        else
+        {
+            // Step 1: clip region (optional). No AOI means no clip -- the candidate grid is the source grid
+            // itself and there is no GridClipResult to report clip statistics from.
+            if (aoi is not null)
+            {
+                ClipRegion clipRegion = ClipRegionFactory.Build(aoi, wgs84ToGridTransform);
+                clipResult = GridClipper.Clip(grid, clipRegion);
+                candidateGrid = clipResult.Grid;
+            }
+
+            // Step 3: local origin.
+            originPoint = LocalOriginFactory.ComputeOrigin(origin, candidateGrid, grid.HorizontalReference, verticalReference);
+            localFrame = new LocalCoordinateFrame(originPoint, grid.HorizontalReference, verticalReference, outputUnit);
         }
 
         // Step 2 (run only) is performed by the caller, before this method is ever invoked: see RunCommand's
         // own transform-versus-grid reference check, documented in docs/architecture/cli-workflow.md's "AOI
         // and clip derivation" section.
-
-        // Step 3: local origin.
-        Coordinate3D originPoint = LocalOriginFactory.ComputeOrigin(origin, candidateGrid, grid.HorizontalReference, verticalReference);
-
-        // Step 4: local frame.
-        LocalCoordinateFrame localFrame = new(originPoint, grid.HorizontalReference, verticalReference, outputUnit);
 
         // Step 5: simplify.
         GridTerrainSimplifier simplifier = new(coverageFloorFraction);
@@ -97,6 +114,6 @@ public static class TerrainProcessingPipeline
             sourceMetadata, wgs84ToGridTransform.Definition, verticalReference, referenceOrigins, localFrame, candidateGrid, simplification,
             addressParcel);
 
-        return new TerrainProcessingOutcome(payload, clipResult, simplification.Diagnostics);
+        return new TerrainProcessingOutcome(payload, clipResult, simplification.Diagnostics, terrainExtentPlan);
     }
 }

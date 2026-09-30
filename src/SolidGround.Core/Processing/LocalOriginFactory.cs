@@ -16,6 +16,26 @@ namespace SolidGround.Core.Processing;
 /// </summary>
 public static class LocalOriginFactory
 {
+    /// <summary>
+    /// Computes the southwest or centroid origin from an unbuffered legal parcel envelope. This is used only
+    /// by the opted-in parcel workflow so the legal PropertyLine frame cannot move when terrain context grows.
+    /// Explicit origins remain exactly explicit.
+    /// </summary>
+    public static Coordinate3D ComputeOrigin(
+        LocalOriginRequest selection,
+        PolygonalRegion legalParcelRegion,
+        HorizontalReference projectedReference,
+        VerticalReference verticalReference)
+    {
+        ArgumentNullException.ThrowIfNull(legalParcelRegion);
+        if (legalParcelRegion.HorizontalReference != projectedReference)
+        {
+            throw new ArgumentException("The legal parcel region's horizontal reference must equal the projected reference.", nameof(legalParcelRegion));
+        }
+
+        return ComputeOrigin(selection, legalParcelRegion.Envelope, projectedReference, verticalReference);
+    }
+
     public static Coordinate3D ComputeOrigin(
         LocalOriginRequest selection,
         ElevationGrid clippedGrid,
@@ -27,17 +47,29 @@ public static class LocalOriginFactory
         ArgumentNullException.ThrowIfNull(projectedReference);
         ArgumentNullException.ThrowIfNull(verticalReference);
 
+        return ComputeOrigin(selection, clippedGrid.GetCornerEnvelope(), projectedReference, verticalReference);
+    }
+
+    private static Coordinate3D ComputeOrigin(
+        LocalOriginRequest selection,
+        PlanarEnvelope envelope,
+        HorizontalReference projectedReference,
+        VerticalReference verticalReference)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(envelope);
+        ArgumentNullException.ThrowIfNull(projectedReference);
+        ArgumentNullException.ThrowIfNull(verticalReference);
+
         switch (selection.Kind)
         {
             case LocalOriginKind.Southwest:
             {
-                PlanarEnvelope envelope = clippedGrid.GetCornerEnvelope();
                 return LocalOriginSnapping.SnapToWholeSourceUnit(new Coordinate3D(envelope.MinX, envelope.MinY, 0d), projectedReference, verticalReference);
             }
 
             case LocalOriginKind.Centroid:
             {
-                PlanarEnvelope envelope = clippedGrid.GetCornerEnvelope();
                 return LocalOriginSnapping.SnapToWholeSourceUnit(
                     new Coordinate3D((envelope.MinX + envelope.MaxX) / 2d, (envelope.MinY + envelope.MaxY) / 2d, 0d), projectedReference, verticalReference);
             }

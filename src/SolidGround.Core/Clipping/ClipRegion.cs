@@ -61,7 +61,7 @@ public sealed class ClipRegion
         {
             // LinearDistance itself only rejects a negative value, so zero must be rejected here. Without
             // this check, a zero radius reaches Point.Buffer(0) — the exact "validify" operation GridClipper's
-            // own BuildEffectiveRegion doc comment special-cases and avoids, since NTS documents it as a
+            // own ResolveEffectiveRegion doc comment special-cases and avoids, since NTS documents it as a
             // topology validity fix, not a no-op. It happens to leave an empty polygon here, which
             // PolygonalRegion.FromGeometry then rejects with a generic "geometry is empty" message that does
             // not name the actual problem, unlike Wgs84RadiusAoi's constructor for the same mistake.

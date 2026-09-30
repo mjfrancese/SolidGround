@@ -28,7 +28,7 @@ namespace SolidGround.Tests;
 /// <see cref="IHorizontalCoordinateTransform.Inverse"/>, or a geometric NTS buffer operation: it uses only
 /// <see cref="HorizontalTransformationDefinition"/>'s own text (never a transformed coordinate) and a
 /// zero-buffer <see cref="ClipRegion"/>, which GridClipper's own effective-region builder skips the NTS
-/// buffer call for entirely (confirmed directly against GridClipper.BuildEffectiveRegion: it returns
+/// buffer call for entirely (confirmed directly against GridClipper.ResolveEffectiveRegion: it returns
 /// ClipRegion.Region unchanged whenever ClipRegion.Buffer.Value == 0d). So the golden bytes depend only on
 /// IEEE add/multiply/divide/compare, managed number formatting, and SHA-256, never on a transcendental
 /// function whose last bit could differ between the Windows workstation and the Linux self-hosted CI
