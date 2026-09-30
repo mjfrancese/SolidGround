@@ -1,10 +1,12 @@
 using System.Globalization;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using Microsoft.Win32;
+using SolidGround.Core.Configuration;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
@@ -14,12 +16,19 @@ using SolidGround.Revit.Dialog;
 
 namespace SolidGround.Revit.Settings;
 
+/// <summary>Explicit choices that change the in-memory settings draft.</summary>
+internal enum SettingsRecoveryAction
+{
+    RestoreDefaults,
+    ReapplyDraft,
+}
+
 /// <summary>Small modal editor for persistent operator preferences. It never receives a Revit document.</summary>
 internal sealed class SettingsDialog : Window
 {
     private readonly Dictionary<string, FrameworkElement> automationElements = new(StringComparer.Ordinal);
-    private readonly RevitSettings current;
-    private readonly UiSettingsDraft draft;
+    private RevitSettings current;
+    private UiSettingsDraft draft;
     private readonly TextBox pointBudget;
     private readonly TextBox extension;
     private readonly TextBox exportDirectory;
@@ -55,14 +64,21 @@ internal sealed class SettingsDialog : Window
     private readonly PasswordBox esriKey;
     private readonly TextBlock sessionKeyStatus;
     private readonly TextBlock error;
+    private readonly Button saveCountyRegistration;
+    private readonly Func<SettingsRecoveryAction, bool>? confirmRecovery;
     private DistanceDisplayFormat extensionFormat;
     private CountyParcelServiceMetadata? countyMetadata;
     private static readonly HttpClient CountyMetadataHttpClient = new();
+    private static readonly TimeSpan CountyMetadataDeadline = TimeSpan.FromSeconds(15);
+    private CancellationTokenSource? countyMetadataFetchCancellation;
+    private int countyMetadataRevision;
+    private bool suppressCountyServiceUrlInvalidation;
 
-    private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette)
+    private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null)
     {
         this.draft = draft;
         this.current = current;
+        this.confirmRecovery = confirmRecovery;
         Owner = owner;
         Title = "SolidGround settings";
         Width = 720;
@@ -106,6 +122,7 @@ internal sealed class SettingsDialog : Window
         countyName = Text(string.Empty);
         countyGeoid = Text(current.AddressAndParcel.CountyGeoidOverride ?? string.Empty);
         countyServiceUrl = Text(string.Empty);
+        countyServiceUrl.TextChanged += (_, _) => InvalidateCountyMetadataForChangedUrl();
         countyAttribution = Text(string.Empty, true);
         countyLicense = Text(string.Empty, true);
         countyLayer = new ComboBox { MinWidth = 360, DisplayMemberPath = nameof(CountyParcelServiceLayerMetadata.DisplayName) };
@@ -116,7 +133,7 @@ internal sealed class SettingsDialog : Window
         countyMetadataStatus = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = colors.GrayText };
         Button fetchCountyMetadata = new() { Content = "Fetch service metadata", Margin = new Thickness(0, 4, 6, 4) };
         fetchCountyMetadata.Click += async (_, _) => await FetchCountyMetadataAsync();
-        Button saveCountyRegistration = new() { Content = "Save county registration", Margin = new Thickness(0, 4, 6, 4) };
+        saveCountyRegistration = new Button { Content = "Save county registration", Margin = new Thickness(0, 4, 6, 4), IsEnabled = false };
         saveCountyRegistration.Click += (_, _) => SaveCountyRegistration();
         geocoderProvider = Choice(Enum.GetValues<AddressGeocoderProvider>(), current.AddressAndParcel.GeocoderProvider);
         openTopographyKey = new PasswordBox { MinWidth = 360 };
@@ -139,7 +156,7 @@ internal sealed class SettingsDialog : Window
             Label("County source identity"), countyName, Label("County GEOID (five digits)"), countyGeoid,
             Label("ArcGIS FeatureServer or MapServer URL"), countyServiceUrl, fetchCountyMetadata, countyMetadataStatus,
             Label("Parcel layer"), countyLayer, Label("Parcel ID field"), countyParcelIdField,
-            Label("Situs address field"), countySitusAddressField, Label("Legal-description field (optional)"), countyLegalDescriptionField,
+            Label("Situs address field"), countySitusAddressField, Label("Legal-description field"), countyLegalDescriptionField,
             Label("County attribution (shown with parcel results)"), countyAttribution,
             Label("County license/disclaimer (shown verbatim with parcel results)"), countyLicense,
             countyAuthorization, saveCountyRegistration,
@@ -171,12 +188,19 @@ internal sealed class SettingsDialog : Window
         Grid.SetRow(error, 2);
         shell.Children.Add(error);
         StackPanel footer = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        Button restoreDefaults = new() { Content = "Restore defaults", MinWidth = 108, Margin = new Thickness(6) };
+        restoreDefaults.Click += (_, _) => RestoreDefaults();
+        Button reloadSavedSettings = new() { Content = "Reload saved", MinWidth = 104, Margin = new Thickness(6) };
+        reloadSavedSettings.Click += (_, _) => ReloadSavedSettings();
+        Button reapplyDraft = new() { Content = "Reapply draft", MinWidth = 104, Margin = new Thickness(6) };
+        reapplyDraft.Click += (_, _) => ReapplyDraft();
         Button cancel = new() { Content = "Cancel", MinWidth = 100, Margin = new Thickness(6) };
         cancel.Click += (_, _) => { DialogResult = false; Close(); };
         Button save = new() { Content = "Save settings", MinWidth = 120, Margin = new Thickness(6), IsDefault = true };
         save.Style = (Style)Resources[DialogControlStyles.PrimaryButtonStyleKey];
         save.Click += (_, _) => Save();
-        footer.Children.Add(cancel); footer.Children.Add(save);
+        Register("restoreDefaults", restoreDefaults); Register("reloadSavedSettings", reloadSavedSettings); Register("reapplyDraft", reapplyDraft);
+        footer.Children.Add(restoreDefaults); footer.Children.Add(reloadSavedSettings); footer.Children.Add(reapplyDraft); footer.Children.Add(cancel); footer.Children.Add(save);
         Grid.SetRow(footer, 3); shell.Children.Add(footer);
         Content = shell;
     }
@@ -184,7 +208,7 @@ internal sealed class SettingsDialog : Window
     internal RevitSettings? Result { get; private set; }
 
     /// <summary>Constructs the actual editor without showing it, for the Windows-only rendered-control lane.</summary>
-    internal static SettingsDialog CreateForTesting(UiSettingsDraft draft, RevitSettings current, DialogPalette palette) => new(null, draft, current, palette);
+    internal static SettingsDialog CreateForTesting(UiSettingsDraft draft, RevitSettings current, DialogPalette palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null) => new(null, draft, current, palette, confirmRecovery);
 
     /// <summary>Named live controls used by the local WPF binding/accessibility tests.</summary>
     internal IReadOnlyDictionary<string, FrameworkElement> AutomationElements => automationElements;
@@ -208,47 +232,60 @@ internal sealed class SettingsDialog : Window
 
     private void Save()
     {
+        if (!TryBuildSettings(current, out RevitSettings? proposed)) return;
+        Persist(proposed);
+    }
+
+    private bool TryBuildSettings(RevitSettings baseline, [NotNullWhen(true)] out RevitSettings? proposed)
+    {
+        proposed = null;
         if (!int.TryParse(pointBudget.Text, NumberStyles.None, CultureInfo.InvariantCulture, out int budget) || budget <= 0)
         {
-            error.Text = "Maximum terrain points must be a positive whole number."; pointBudget.Focus(); return;
+            error.Text = "Maximum terrain points must be a positive whole number."; pointBudget.Focus(); return false;
         }
         double extensionMeters;
         try { extensionMeters = DistanceDisplayConverter.ParseMeters(extension.Text, (DistanceDisplayFormat)displayFormat.SelectedItem); }
         catch (FormatException)
         {
-            error.Text = "Terrain extension must be a finite nonnegative value in the selected display format."; extension.Focus(); return;
+            error.Text = "Terrain extension must be a finite nonnegative value in the selected display format."; extension.Focus(); return false;
         }
         TerrainAcquisitionMode mode = (TerrainAcquisitionMode)acquisitionMode.SelectedItem;
         if (!int.TryParse(timeout.Text, NumberStyles.None, CultureInfo.InvariantCulture, out int timeoutSeconds) || timeoutSeconds <= 0)
         {
-            error.Text = "Network timeout must be a positive whole number of seconds."; timeout.Focus(); return;
+            error.Text = "Network timeout must be a positive whole number of seconds."; timeout.Focus(); return false;
         }
         if (!double.TryParse(coverageFloor.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double coverage) || !double.IsFinite(coverage) || coverage is < 0d or > 1d)
         {
-            error.Text = "Sampler coverage fraction must be between 0 and 1."; coverageFloor.Focus(); return;
+            error.Text = "Sampler coverage fraction must be between 0 and 1."; coverageFloor.Focus(); return false;
         }
         double? nearby = null;
         if (!string.IsNullOrWhiteSpace(nearbyRadius.Text) && (!double.TryParse(nearbyRadius.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsedNearby) || !double.IsFinite(parsedNearby) || parsedNearby <= 0d))
         {
-            error.Text = "Nearby parcel search distance must be a positive number of metres or blank."; nearbyRadius.Focus(); return;
+            error.Text = "Nearby parcel search distance must be a positive number of metres or blank."; nearbyRadius.Focus(); return false;
         }
         else if (!string.IsNullOrWhiteSpace(nearbyRadius.Text)) nearby = double.Parse(nearbyRadius.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
         ProcessInputSettings? process = mode == TerrainAcquisitionMode.Process
-            ? (current.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with { Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text) }
+            ? (baseline.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with { Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text) }
             : null;
-        RevitAddressAndParcelSettings address = current.AddressAndParcel with
+        RevitAddressAndParcelSettings address = baseline.AddressAndParcel with
         {
             GeocoderProvider = (AddressGeocoderProvider)geocoderProvider.SelectedItem, NearbySearchRadiusMeters = nearby,
             CountyRegistryPath = BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = BlankAsNull(localParcelPath.Text), LocalParcelFileSourceLabel = BlankAsNull(localParcelLabel.Text), LocalParcelFileLicenseDisclaimerText = BlankAsNull(localParcelLicense.Text),
         };
-        RevitSettings proposed = current with
+        proposed = baseline with
         {
-            Request = current.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, NetworkTimeoutSeconds = timeoutSeconds, Simplification = current.Request.Simplification with { PointBudget = budget, CoverageFloorFraction = coverage, Method = (SimplificationMethod)simplificationMethod.SelectedItem }, Output = current.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
+            Request = baseline.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, NetworkTimeoutSeconds = timeoutSeconds, Simplification = baseline.Request.Simplification with { PointBudget = budget, CoverageFloorFraction = coverage, Method = (SimplificationMethod)simplificationMethod.SelectedItem }, Output = baseline.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
             AddressAndParcel = address, TerrainExtensionMeters = extensionMeters, DistanceDisplayFormat = (DistanceDisplayFormat)displayFormat.SelectedItem,
         };
+        return true;
+    }
+
+    private void Persist(RevitSettings proposed)
+    {
         try
         {
-            UiSettingsStore.Save(draft, proposed);
+            draft = UiSettingsStore.Save(draft, proposed);
+            current = proposed;
             if (!string.IsNullOrWhiteSpace(openTopographyKey.Password))
             {
                 SessionApiKeyOverrides.UseOpenTopography(openTopographyKey.Password);
@@ -260,8 +297,50 @@ internal sealed class SettingsDialog : Window
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
         {
-            error.Text = ex.Message;
+            error.Text = ex is SettingsFileConflictException
+                ? ex.Message + " Use Reload saved to discard this draft, or Reapply draft to save these controls over the latest file."
+                : ex.Message;
         }
+    }
+
+    private void RestoreDefaults()
+    {
+        if (!ConfirmRecovery(SettingsRecoveryAction.RestoreDefaults)) return;
+        RevitSettings defaults = UiSettingsStore.CreateDefault();
+        current = defaults;
+        draft = draft with { Settings = defaults };
+        ApplySettings(defaults);
+        error.Text = "Defaults are staged in this dialog only. Choose Save settings to write them.";
+    }
+
+    private void ReloadSavedSettings()
+    {
+        if (!UiSettingsStore.TryLoad(draft.Path, out UiSettingsDraft? loaded, out string? loadError))
+        {
+            error.Text = loadError ?? "Saved settings could not be reloaded.";
+            return;
+        }
+
+        draft = loaded!;
+        current = RevitSettingsIo.RebaseInputPaths(draft.Settings, draft.Path);
+        ApplySettings(current);
+        error.Text = "Saved settings reloaded. Unsaved changes in this dialog were discarded.";
+    }
+
+    private void ReapplyDraft()
+    {
+        if (!ConfirmRecovery(SettingsRecoveryAction.ReapplyDraft)) return;
+        if (!UiSettingsStore.TryLoad(draft.Path, out UiSettingsDraft? loaded, out string? loadError))
+        {
+            error.Text = loadError ?? "Saved settings could not be reloaded for reapply.";
+            return;
+        }
+
+        RevitSettings latest = RevitSettingsIo.RebaseInputPaths(loaded!.Settings, loaded.Path);
+        if (!TryBuildSettings(latest, out RevitSettings? proposed)) return;
+        draft = loaded;
+        current = latest;
+        Persist(proposed);
     }
 
     private static TabItem Page(string header, UIElement content) => new() { Header = header, Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } };
@@ -299,6 +378,49 @@ internal sealed class SettingsDialog : Window
     }
     private static string? BlankAsNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private bool ConfirmRecovery(SettingsRecoveryAction action)
+    {
+        if (confirmRecovery is not null) return confirmRecovery(action);
+        string prompt = action == SettingsRecoveryAction.RestoreDefaults
+            ? "Replace every settings control with SolidGround defaults? Nothing is written until you choose Save settings."
+            : "Reapply the current controls over the latest saved settings? This explicitly replaces saved values represented by this dialog.";
+        return MessageBox.Show(this, prompt, "SolidGround settings", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+    }
+
+    private void ApplySettings(RevitSettings settings)
+    {
+        pointBudget.Text = settings.Request.Simplification.PointBudget.ToString(CultureInfo.InvariantCulture);
+        extensionFormat = settings.DistanceDisplayFormat;
+        displayFormat.SelectedItem = extensionFormat;
+        extension.Text = DistanceDisplayConverter.FormatMeters(settings.TerrainExtensionMeters, extensionFormat);
+        outputUnit.SelectedItem = settings.Request.OutputUnit;
+        acquisitionMode.SelectedItem = settings.Request.Mode;
+        ascPath.Text = settings.Request.Process?.Asc ?? string.Empty;
+        prjPath.Text = settings.Request.Process?.Prj ?? string.Empty;
+        sidecarPath.Text = settings.Request.Process?.SourceJson ?? string.Empty;
+        localParcelPath.Text = settings.AddressAndParcel.LocalParcelFilePath ?? string.Empty;
+        localParcelLabel.Text = settings.AddressAndParcel.LocalParcelFileSourceLabel ?? string.Empty;
+        localParcelLicense.Text = settings.AddressAndParcel.LocalParcelFileLicenseDisclaimerText ?? string.Empty;
+        countyRegistryPath.Text = settings.AddressAndParcel.CountyRegistryPath ?? string.Empty;
+        countyAuthorization.IsChecked = settings.AddressAndParcel.CountyServiceAuthorizedUseAcknowledged;
+        countyGeoid.Text = settings.AddressAndParcel.CountyGeoidOverride ?? string.Empty;
+        geocoderProvider.SelectedItem = settings.AddressAndParcel.GeocoderProvider;
+        exportDirectory.Text = settings.Request.Output.Directory;
+        exportBaseName.Text = settings.Request.Output.BaseName;
+        timeout.Text = settings.Request.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
+        nearbyRadius.Text = settings.AddressAndParcel.NearbySearchRadiusMeters?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty;
+        coverageFloor.Text = settings.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture);
+        simplificationMethod.SelectedItem = settings.Request.Simplification.Method;
+
+        countyName.Text = string.Empty;
+        countyAttribution.Text = string.Empty;
+        countyLicense.Text = string.Empty;
+        suppressCountyServiceUrlInvalidation = true;
+        try { countyServiceUrl.Text = string.Empty; }
+        finally { suppressCountyServiceUrlInvalidation = false; }
+        InvalidateCountyMetadataForChangedUrl();
+    }
+
     private void ClampSettingsWorkArea()
     {
         Rect workArea = SystemParameters.WorkArea;
@@ -320,11 +442,12 @@ internal sealed class SettingsDialog : Window
     /// <summary>Lets the Windows-only rendered-control lane populate the same live selectors without a network request.</summary>
     internal void SetCountyMetadataForTesting(CountyParcelServiceMetadata metadata)
     {
-        countyMetadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
-        countyServiceUrl.Text = metadata.ServiceBaseUri.AbsoluteUri;
-        countyLayer.ItemsSource = metadata.Layers.OrderBy(layer => layer.LayerIndex).ToArray();
-        countyLayer.SelectedIndex = countyLayer.Items.Count == 0 ? -1 : 0;
-        countyMetadataStatus.Text = $"Loaded {metadata.Layers.Count.ToString(CultureInfo.InvariantCulture)} advertised layer(s).";
+        ArgumentNullException.ThrowIfNull(metadata);
+        InvalidateCountyMetadataForChangedUrl();
+        suppressCountyServiceUrlInvalidation = true;
+        try { countyServiceUrl.Text = metadata.ServiceBaseUri.AbsoluteUri; }
+        finally { suppressCountyServiceUrlInvalidation = false; }
+        ApplyCountyMetadata(metadata);
     }
 
     private async Task FetchCountyMetadataAsync()
@@ -339,16 +462,32 @@ internal sealed class SettingsDialog : Window
             return;
         }
 
+        countyMetadataFetchCancellation?.Cancel();
+        CancellationTokenSource requestCancellation = new();
+        requestCancellation.CancelAfter(CountyMetadataDeadline);
+        countyMetadataFetchCancellation = requestCancellation;
+        int requestRevision = ++countyMetadataRevision;
+        saveCountyRegistration.IsEnabled = false;
         try
         {
             countyMetadataStatus.Text = "Retrieving county service metadata…";
             CountyParcelServiceMetadata metadata = await new CountyParcelServiceMetadataClient(CountyMetadataHttpClient)
-                .FetchAsync(serviceUri, CancellationToken.None);
-            SetCountyMetadataForTesting(metadata);
+                .FetchAsync(serviceUri, requestCancellation.Token);
+            if (requestCancellation.IsCancellationRequested || requestRevision != countyMetadataRevision) return;
+            ApplyCountyMetadata(metadata);
             error.Text = string.Empty;
         }
         catch (Exception ex) when (ex is HttpRequestException or FormatException or JsonException or TaskCanceledException)
         {
+            if (requestRevision != countyMetadataRevision) return;
+            if (requestCancellation.IsCancellationRequested)
+            {
+                countyMetadata = null;
+                saveCountyRegistration.IsEnabled = false;
+                countyMetadataStatus.Text = "County metadata retrieval timed out. Check the service and try again.";
+                error.Text = "County metadata fetch exceeded its 15-second deadline.";
+                return;
+            }
             countyMetadata = null;
             countyLayer.ItemsSource = null;
             countyParcelIdField.ItemsSource = null;
@@ -357,6 +496,34 @@ internal sealed class SettingsDialog : Window
             countyMetadataStatus.Text = "Could not retrieve usable parcel-layer metadata.";
             error.Text = $"County metadata fetch failed: {ex.Message}";
         }
+        finally
+        {
+            if (ReferenceEquals(countyMetadataFetchCancellation, requestCancellation)) countyMetadataFetchCancellation = null;
+            requestCancellation.Dispose();
+        }
+    }
+
+    private void InvalidateCountyMetadataForChangedUrl()
+    {
+        if (suppressCountyServiceUrlInvalidation) return;
+        countyMetadataFetchCancellation?.Cancel();
+        ++countyMetadataRevision;
+        countyMetadata = null;
+        countyLayer.ItemsSource = null;
+        countyParcelIdField.ItemsSource = null;
+        countySitusAddressField.ItemsSource = null;
+        countyLegalDescriptionField.ItemsSource = null;
+        saveCountyRegistration.IsEnabled = false;
+        countyMetadataStatus.Text = "County service URL changed. Fetch metadata again before saving its registration.";
+    }
+
+    private void ApplyCountyMetadata(CountyParcelServiceMetadata metadata)
+    {
+        countyMetadata = metadata;
+        countyLayer.ItemsSource = metadata.Layers.OrderBy(layer => layer.LayerIndex).ToArray();
+        countyLayer.SelectedIndex = countyLayer.Items.Count == 0 ? -1 : 0;
+        saveCountyRegistration.IsEnabled = countyLayer.SelectedIndex >= 0;
+        countyMetadataStatus.Text = $"Loaded {metadata.Layers.Count.ToString(CultureInfo.InvariantCulture)} advertised layer(s).";
     }
 
     private void PopulateCountyFieldChoices()
@@ -391,7 +558,14 @@ internal sealed class SettingsDialog : Window
             || string.IsNullOrWhiteSpace(countyAttribution.Text) || string.IsNullOrWhiteSpace(countyLicense.Text)
             || countyAuthorization.IsChecked != true)
         {
-            error.Text = "County source identity, a five-digit GEOID, parcel ID and situs fields, attribution, license/disclaimer, and explicit authorized use are all required.";
+            error.Text = "County source identity, a five-digit GEOID, parcel ID and situs-address fields, attribution, license/disclaimer, and explicit authorized use are required. Legal description is optional.";
+            return;
+        }
+
+        if (!Uri.TryCreate(countyServiceUrl.Text.Trim(), UriKind.Absolute, out Uri? serviceUri)
+            || Uri.Compare(serviceUri, countyMetadata.ServiceBaseUri, UriComponents.HttpRequestUrl, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) != 0)
+        {
+            error.Text = "Fetch metadata again after changing the county service URL.";
             return;
         }
 
