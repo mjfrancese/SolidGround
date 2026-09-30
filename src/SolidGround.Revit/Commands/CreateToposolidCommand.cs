@@ -700,10 +700,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
         TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
         AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
-        AreaOfInterest fetchAoi = aoi is ParcelGeometryAoi parcel
-            ? new ParcelGeometryAoi(parcel.Format, parcel.Geometry, parcel.HorizontalReference, LinearDistance.Meters(terrainExtensionMeters))
-            : aoi;
-        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(fetchAoi);
+        // Source CRS metadata is unavailable until acquisition. For a legal parcel, union the terrain-only
+        // projected buffers across every verified NAD83 UTM candidate; this conservative request encloses the
+        // actual post-metadata terrain region without ever buffering the legal property-line geometry.
+        Wgs84BoundingBoxAoi fetchEnvelope = aoi is ParcelGeometryAoi parcel
+            ? ParcelFetchEnvelopePlanner.Build(parcel, LinearDistance.Meters(terrainExtensionMeters))
+            : ClipRegionFactory.BuildFetchEnvelope(aoi).Envelope;
 
         using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
         string? reachabilityProblem = await ReachabilityProbe.ProbeAsync(httpClient, OpenTopographyReachabilityEndpoint, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
