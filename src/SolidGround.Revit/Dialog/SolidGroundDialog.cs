@@ -180,6 +180,7 @@ internal sealed class SolidGroundDialog : Window
         ListBox locations = new() { DisplayMemberPath = nameof(AddressGeocodeCandidate.MatchedAddress), MinHeight = 70, Margin = new Thickness(0, 8, 0, 8) };
         locations.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.GeocodeCandidates)));
         locations.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedGeocodeCandidate)) { Mode = BindingMode.TwoWay });
+        locations.SetBinding(IsEnabledProperty, new Binding(nameof(SolidGroundDialogViewModel.CanSelectLocation)));
         AutomationProperties.SetName(locations, "Location candidates");
         panel.Children.Add(locations);
 
