@@ -25,6 +25,9 @@ internal sealed class SolidGroundDialog : Window
     private readonly Button _useLocationButton;
     private readonly Button _useParcelButton;
     private readonly Button _createButton;
+
+    /// <summary>Actual panel and shell roots used only by the local WPF binding lane.</summary>
+    internal IEnumerable<FrameworkElement> BindingRootsForTesting => _panels.Values.Append((FrameworkElement)Content);
     private readonly List<Grid> _parcelLayouts = [];
 
     /// <summary>

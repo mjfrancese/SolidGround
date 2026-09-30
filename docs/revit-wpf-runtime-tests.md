@@ -6,13 +6,13 @@ Install Revit 2027 locally, then run from the repository root:
 
 ```powershell
 dotnet restore tests\SolidGround.Revit.Tests\SolidGround.Revit.Tests.csproj --locked-mode
-dotnet test tests\SolidGround.Revit.Tests\SolidGround.Revit.Tests.csproj --configuration Release --no-restore
+dotnet test --project tests\SolidGround.Revit.Tests\SolidGround.Revit.Tests.csproj --configuration Release --no-restore
 ```
 
 The project defaults `RevitInstallDir` to `C:\Program Files\Autodesk\Revit 2027`. Override it only for another local Revit 2027 installation:
 
 ```powershell
-dotnet test tests\SolidGround.Revit.Tests\SolidGround.Revit.Tests.csproj --configuration Release --no-restore -p:RevitInstallDir='D:\Autodesk\Revit 2027'
+dotnet test --project tests\SolidGround.Revit.Tests\SolidGround.Revit.Tests.csproj --configuration Release --no-restore -p:RevitInstallDir='D:\Autodesk\Revit 2027'
 ```
 
 The installed SDK assemblies are copied only into ignored test build output. Do not commit them.

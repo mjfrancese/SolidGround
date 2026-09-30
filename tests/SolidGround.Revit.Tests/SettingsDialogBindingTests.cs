@@ -91,13 +91,15 @@ public sealed class SettingsDialogBindingTests
             [
                 "pointBudget", "terrainExtension", "outputUnit", "distanceDisplayFormat",
                 "acquisitionMode", "rasterPath", "projectionPath", "sourceSidecarPath",
+                "processSourceName", "processDataset", "processVerticalDatum", "processVerticalUnit", "processGeoid", "processCollectionStart", "processCollectionEnd", "processQualityLevel",
                 "localParcelPath", "localParcelLabel", "localParcelLicense", "countyRegistryPath", "countyAuthorization", "geocoderProvider",
                 "countyName", "countyGeoid", "countyServiceUrl", "countyAttribution", "countyLicense",
                 "countyLayer", "countyParcelIdField", "countySitusAddressField", "countyLegalDescriptionField",
                 "useCountySource",
                 "openTopographyKey", "geocodioKey", "esriKey", "exportDirectory", "exportBaseName",
                 "networkTimeout", "nearbyRadius", "coverageFloor", "simplificationMethod",
-                "restoreDefaults", "reloadSavedSettings", "reapplyDraft",
+                "originKind", "originX", "originY", "originZ",
+                "restoreDefaults", "reloadSavedSettings", "reapplyDraft", "startNewSettings",
             ];
             Assert.Equal(expectedNames.OrderBy(name => name), dialog.AutomationElements.Keys.OrderBy(name => name));
 
