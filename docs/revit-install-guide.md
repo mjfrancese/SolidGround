@@ -283,7 +283,8 @@ written to these logs.
 
 Download and extract the new release zip, then run its own `install.cmd`/`Install-SolidGround.ps1` the same
 way as a first install — it deploys the new version alongside the previous two, atomically switches the live
-manifest over to it, and prunes older versions automatically. Your `settings.json` and logs under
+manifest over to it, and prunes older versions automatically. Per-user preferences and county registries under
+`%LocalAppData%\SolidGround\Revit\`, legacy settings, and logs under
 `%ProgramData%\SolidGround\Revit\` are untouched by an upgrade. If the new build is signed by the same
 certificate you have already trusted, you may still see the security prompt once for the new build's own
 bytes (see "Troubleshooting" above) — this is expected, not a sign that the trust import failed.
@@ -302,9 +303,10 @@ From the extracted zip's `install\` folder (or a repository checkout's `scripts\
 .\Uninstall-SolidGround.ps1
 ```
 
-This removes the SolidGround manifest and every retained versioned deployment folder. By default it leaves
-your `settings.json` and logs in place under `%ProgramData%\SolidGround\Revit\` (pass
-`-RemoveSettingsAndLogs` to remove those too), and it never touches the certificate-trust registry value
+This removes the SolidGround manifest and every retained versioned deployment folder. By default it preserves
+per-user preferences and county registries under `%LocalAppData%\SolidGround\Revit\`, along with legacy
+settings and logs under `%ProgramData%\SolidGround\Revit\`. The current `-RemoveSettingsAndLogs` option
+removes the legacy ProgramData settings and logs; it preserves per-user preferences. The uninstaller never touches the certificate-trust registry value
 Revit itself maintains — removing trust is a separate, manual step (see
 [`docs/architecture/revit-release-packaging-and-signing.md`](architecture/revit-release-packaging-and-signing.md)'s
 "Trust-import procedure per workstation" if you also want to remove that). It refuses to run while Revit 2027
