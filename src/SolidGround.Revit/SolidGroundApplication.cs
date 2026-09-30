@@ -3,6 +3,7 @@ using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.UI;
 using SolidGround.Revit.Commands;
 using SolidGround.Revit.Diagnostics;
+using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit;
 
@@ -33,11 +34,14 @@ public sealed class SolidGroundApplication : IExternalApplication
     private const string TabName = "SolidGround";
     private const string PanelName = "SolidGround";
     private const string CommandName = "CreateToposolidCommand";
+    private const string SettingsCommandName = "SettingsCommand";
     private const string SmallIconResourceName = "SolidGround.Revit.Resources.SolidGround.16.png";
     private const string LargeIconResourceName = "SolidGround.Revit.Resources.SolidGround.32.png";
 
     private const string ButtonToolTip =
-        "Create a native Revit toposolid from a settings-file-configured area of interest, using either a live OpenTopography fetch or a local raster.";
+        "Find a parcel and create a native Revit toposolid using live USGS elevation or a local raster.";
+
+    private const string SettingsToolTip = "Set SolidGround terrain, source, export, and advanced preferences without modifying this Revit document.";
 
     private const string ButtonLongDescription =
         "Reads %ProgramData%\\SolidGround\\Revit\\settings.json to acquire USGS 1-meter bare-earth elevation " +
@@ -68,6 +72,7 @@ public sealed class SolidGroundApplication : IExternalApplication
 
     public Result OnShutdown(UIControlledApplication application)
     {
+        SessionApiKeyOverrides.ClearAll();
         AddInLog.Shutdown();
         return Result.Succeeded;
     }
@@ -121,6 +126,18 @@ public sealed class SolidGroundApplication : IExternalApplication
         };
 
         panel.AddItem(buttonData);
+        PushButtonData settingsButton = new(
+            SettingsCommandName,
+            "Settings",
+            assemblyPath,
+            typeof(SettingsCommand).FullName!)
+        {
+            ToolTip = SettingsToolTip,
+            LongDescription = "Opens SolidGround preferences and source setup. Settings save under the current user's LocalAppData folder and this command never opens a transaction or changes the active model.",
+            Image = LoadIcon(SmallIconResourceName),
+            LargeImage = LoadIcon(LargeIconResourceName),
+        };
+        panel.AddItem(settingsButton);
     }
 
     /// <summary>

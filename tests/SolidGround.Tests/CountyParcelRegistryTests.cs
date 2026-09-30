@@ -203,7 +203,6 @@ public sealed class CountyParcelRegistryTests
             File.Delete(path);
         }
     }
-
     [Fact]
     public void RejectsADuplicateGeoid()
     {

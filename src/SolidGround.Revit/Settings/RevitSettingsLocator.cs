@@ -1,16 +1,22 @@
 namespace SolidGround.Revit.Settings;
 
 /// <summary>
-/// Resolves the one machine-wide settings file path: <c>%ProgramData%\SolidGround\Revit\settings.json</c>,
-/// built from <see cref="Environment.SpecialFolder.CommonApplicationData"/>, matching <c>AddInLog</c>'s own
-/// resolution pattern (AGENTS.md "Revit add-in conventions" section 5). Never hardcodes the path.
+/// Resolves the editable per-user settings snapshot. The prior machine-wide path remains available only as a
+/// read-only legacy import source; settings authored by the add-in never require elevation.
 /// </summary>
 internal static class RevitSettingsLocator
 {
     internal const string FileName = "settings.json";
 
-    /// <summary>Resolves the settings file's full path. Does not check whether it exists.</summary>
+    /// <summary>Resolves the editable per-user settings file's full path. Does not check whether it exists.</summary>
     internal static string Resolve() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SolidGround",
+        "Revit",
+        FileName);
+
+    /// <summary>Resolves the read-only pre-Issue-60 import source. Never write to this location.</summary>
+    internal static string ResolveLegacyImport() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "SolidGround",
         "Revit",

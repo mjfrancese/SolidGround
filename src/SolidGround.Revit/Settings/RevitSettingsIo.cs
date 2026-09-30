@@ -4,8 +4,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Windows;
 using SolidGround.Core.Processing;
+using SolidGround.Core.Configuration;
 using SolidGround.Core.Sources;
+using SolidGround.Revit.Dialog;
 using SolidGround.Revit.Diagnostics;
 
 namespace SolidGround.Revit.Settings;
@@ -24,6 +27,103 @@ namespace SolidGround.Revit.Settings;
 /// </remarks>
 internal static class RevitSettingsIo
 {
+    /// <summary>
+    /// Loads the effective per-user UI settings without creating or rewriting a file. A missing document is a
+    /// valid first-use state and returns the guided-fetch defaults; the read-only ProgramData document remains
+    /// available for an explicit legacy import rather than blocking the property dialog.
+    /// </summary>
+    internal static RevitSettings LoadForUi(Window? owner)
+    {
+        string path = RevitSettingsLocator.Resolve();
+        string legacyPath = RevitSettingsLocator.ResolveLegacyImport();
+        RevitSettings? legacy = null;
+        string? legacyError = null;
+        if (!File.Exists(path) && File.Exists(legacyPath) && TryLoad(legacyPath, out legacy, out legacyError))
+        {
+            MessageBoxResult choice = owner is null
+                ? MessageBox.Show("A previous SolidGround settings file is available. Review and import its values for this session? The legacy file will remain unchanged.", "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information)
+                : MessageBox.Show(owner, "A previous SolidGround settings file is available. Review and import its values for this session? The legacy file will remain unchanged.", "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information);
+            if (choice == MessageBoxResult.Yes)
+            {
+                AddInLog.Info("Operator chose a read-only legacy settings import draft.");
+                return ImportLegacy(legacy!, legacyPath);
+            }
+            if (choice == MessageBoxResult.No)
+            {
+                AddInLog.Info("Operator chose Start new settings instead of legacy import.");
+                return UiSettingsStore.CreateDefault();
+            }
+            AddInLog.Info("Operator cancelled legacy import; returning a nonpersistent first-use draft.");
+            return UiSettingsStore.CreateDefault();
+        }
+        if (UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
+        {
+            return RebaseInputPaths(draft!.Settings, path);
+        }
+
+        AddInLog.Warning(error ?? "Could not load per-user settings; using a repairable default draft.");
+        if (File.Exists(legacyPath) && TryLoad(legacyPath, out legacy, out legacyError))
+        {
+            return ImportLegacy(legacy!, legacyPath);
+        }
+        if (File.Exists(legacyPath)) AddInLog.Warning(legacyError ?? "The legacy settings document could not be imported.");
+        return UiSettingsStore.CreateDefault();
+    }
+
+    /// <summary>Opens the shared Settings editor without accessing or modifying a Revit document.</summary>
+    internal static RevitSettings? Edit(Window? owner, RevitSettings current, DialogPalette? palette = null)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        string path = RevitSettingsLocator.Resolve();
+        if (!UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
+        {
+            AddInLog.Warning(error ?? "Could not load per-user settings for editing.");
+            // Preserve a repairable in-memory draft. Save still uses the current target token, so corrupt bytes
+            // are never replaced implicitly: the operator must explicitly choose a clean draft in this editor.
+            draft = new UiSettingsDraft(current, SolidGround.Core.Configuration.AtomicSettingsFile.Read(path).Version, path);
+        }
+
+        return SettingsDialog.ShowModal(owner, draft!, current, palette);
+    }
+
+    /// <summary>Turns persisted relative file references into absolute paths using the document that supplied them.</summary>
+    internal static RevitSettings RebaseInputPaths(RevitSettings settings, string settingsDocumentPath)
+    {
+        string Resolve(string? value) => string.IsNullOrWhiteSpace(value) ? value ?? string.Empty : SettingsPathResolver.Resolve(settingsDocumentPath, value);
+        ProcessInputSettings? process = settings.Request.Process is { } input
+            ? input with { Asc = Resolve(input.Asc), Prj = string.IsNullOrWhiteSpace(input.Prj) ? null : Resolve(input.Prj), SourceJson = string.IsNullOrWhiteSpace(input.SourceJson) ? null : Resolve(input.SourceJson) }
+            : null;
+        AoiSettings aoi = settings.Request.AreaOfInterest;
+        ParcelAoiSettings? parcel = aoi.Parcel is { } configuredParcel
+            ? configuredParcel with { Path = Resolve(configuredParcel.Path) }
+            : null;
+        TerrainRequestSettings request = settings.Request with
+        {
+            Process = process,
+            AreaOfInterest = aoi with { Parcel = parcel },
+            Output = settings.Request.Output with { Directory = Resolve(settings.Request.Output.Directory) },
+        };
+        RevitAddressAndParcelSettings address = settings.AddressAndParcel with
+        {
+            CountyRegistryPath = string.IsNullOrWhiteSpace(settings.AddressAndParcel.CountyRegistryPath) ? null : Resolve(settings.AddressAndParcel.CountyRegistryPath),
+            LocalParcelFilePath = string.IsNullOrWhiteSpace(settings.AddressAndParcel.LocalParcelFilePath) ? null : Resolve(settings.AddressAndParcel.LocalParcelFilePath),
+        };
+        return settings with { Request = request, AddressAndParcel = address };
+    }
+
+    private static RevitSettings ImportLegacy(RevitSettings legacy, string legacyPath)
+    {
+        RevitSettings rebased = RebaseInputPaths(legacy, legacyPath);
+        double extension = rebased.Request.AreaOfInterest.Parcel?.BufferMeters ?? 0d;
+        AoiSettings aoi = rebased.Request.AreaOfInterest;
+        ParcelAoiSettings? parcel = aoi.Parcel is { } original ? original with { BufferMeters = 0d } : null;
+        return rebased with
+        {
+            Request = rebased.Request with { AreaOfInterest = aoi with { Parcel = parcel } },
+            TerrainExtensionMeters = extension,
+            SharedCoordinates = new RevitSharedCoordinatesSettings(false),
+        };
+    }
     /// <summary>How long <see cref="EnsureTemplateExists"/> waits to acquire the cross-process settings lock before reporting a lock problem (orchestrator decision (c)).</summary>
     private static readonly TimeSpan MutexTimeout = TimeSpan.FromSeconds(5);
 
