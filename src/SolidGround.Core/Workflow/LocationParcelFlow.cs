@@ -144,11 +144,13 @@ public sealed class LocationParcelFlow
         Stage = LocationParcelStage.Review;
     }
 
-    /// <summary>Returns to Location, retaining completed location candidates while invalidating parcel work.</summary>
+    /// <summary>Returns to Location, retaining candidates while releasing the committed selection and invalidating parcel work.</summary>
     public void ReturnToLocation()
     {
         checked { _sourceRevision++; }
         ClearParcels();
+        SelectedLocation = null;
+        _locationIsConfirmed = false;
         Stage = LocationParcelStage.Location;
     }
 

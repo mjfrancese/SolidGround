@@ -186,6 +186,155 @@ public sealed class SolidGroundDialogResumeTests
     }
 
     [Fact]
+    public void ChangingTheAddressBeforeProviderSettingsChangeDoesNotRestoreOrQueryTheOldAddress()
+    {
+        StaTestHost.Run(() =>
+        {
+            RevitSettings initial = UiSettingsStore.CreateDefault();
+            RevitSettings changed = initial with
+            {
+                AddressAndParcel = initial.AddressAndParcel with { GeocoderProvider = AddressGeocoderProvider.Geocodio },
+            };
+            DelayedGeocoder original = new();
+            DelayedGeocoder replacement = new();
+            SolidGroundDialogViewModel viewModel = new(CreateInputs(
+                initial,
+                null,
+                _ => changed,
+                _ => new SolidGroundDialogLookupServices(replacement, AddressGeocoderProvider.Geocodio, null, 30d, 30, 0)) with
+            {
+                Geocoder = original,
+            });
+            viewModel.AddressText = "Synthetic found A";
+            viewModel.FindCommand.Execute(null);
+            original.CompleteNext("Synthetic found A");
+            PumpUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
+
+            viewModel.AddressText = "Synthetic edited B";
+            viewModel.EditSettingsCommand.Execute(null);
+
+            Assert.Equal("Synthetic edited B", viewModel.AddressText);
+            Assert.Empty(replacement.Pending);
+            Assert.Equal(SolidGroundDialogStep.Location, viewModel.CurrentStep);
+        });
+    }
+
+    [Fact]
+    public void CommittedAmbiguousLocationStaysSynchronizedWithParcelLookupAndProvenanceUntilBack()
+    {
+        StaTestHost.Run(() =>
+        {
+            AddressGeocodeCandidate first = new(41.59d, -93.60d, "Synthetic first", "Synthetic first attribution");
+            AddressGeocodeCandidate second = new(41.60d, -93.61d, "Synthetic second", "Synthetic second attribution");
+            SolidGroundDialogViewModel viewModel = new(new SolidGroundDialogInputs(
+                new ImmediateGeocoder(first, second), AddressGeocoderProvider.Census, new ImmediateParcelSource(),
+                [new NamedElevationCandidate(1, "Synthetic level", 0d)], [new NamedCandidate(2, "Synthetic toposolid")],
+                null, null, LengthUnit.UsSurveyFoot, 15_000, false, false,
+                new RevitIniToposolidThresholds.Thresholds(20_000, null), "synthetic-revit.ini", 30,
+                UiSettingsStore.CreateDefault().Request.AreaOfInterest, 30d, TerrainAcquisitionMode.Fetch,
+                Settings: UiSettingsStore.CreateDefault()));
+            viewModel.AddressText = "Synthetic ambiguous address";
+            viewModel.FindCommand.Execute(null);
+            PumpUntil(() => viewModel.GeocodeCandidates.Count == 2);
+            Assert.True(viewModel.CanSelectLocation);
+
+            viewModel.SelectedGeocodeCandidate = first;
+            viewModel.UseLocationCommand.Execute(null);
+            PumpUntil(() => viewModel.ParcelCandidates.Count == 1);
+            Assert.False(viewModel.CanSelectLocation);
+
+            viewModel.SelectedGeocodeCandidate = second;
+            Assert.Equal(first, viewModel.SelectedGeocodeCandidate);
+            Assert.Equal(first, viewModel.ConfirmedLocation);
+
+            viewModel.SelectedParcelCandidate = Assert.Single(viewModel.ParcelCandidates);
+            viewModel.UseParcelCommand.Execute(null);
+            viewModel.CreateCommand.Execute(null);
+            Assert.Equal("Synthetic first attribution", viewModel.Result!.AddressParcel!.Geocode!.Attribution);
+
+            viewModel.BackCommand.Execute(null);
+            viewModel.BackCommand.Execute(null);
+            Assert.Equal(SolidGroundDialogStep.Location, viewModel.CurrentStep);
+            Assert.Null(viewModel.SelectedGeocodeCandidate);
+        });
+    }
+
+    [Fact]
+    public void CancelledSettingsEditWithSessionCredentialChangeRevokesCreateAndRejectsOldParcelCompletion()
+    {
+        StaTestHost.Run(() =>
+        {
+            SessionApiKeyOverrides.ClearAll();
+            try
+            {
+                RevitSettings settings = UiSettingsStore.CreateDefault();
+                SolidGroundDialogViewModel confirmed = new(CreateInputs(
+                    settings,
+                    new ImmediateParcelSource(),
+                    _ =>
+                    {
+                        SessionApiKeyOverrides.UseGeocodio("synthetic-session-key");
+                        return null;
+                    },
+                    _ => new SolidGroundDialogLookupServices(
+                        NullGeocoder.Instance, AddressGeocoderProvider.Census, new ImmediateParcelSource(), 30d, 30, SessionApiKeyOverrides.Revision)) with
+                {
+                    InitialCredentialRevision = SessionApiKeyOverrides.Revision,
+                });
+                confirmed.EntryMode = LocationEntryMode.Coordinates;
+                confirmed.LatitudeText = "41.59";
+                confirmed.LongitudeText = "-93.60";
+                confirmed.FindCommand.Execute(null);
+                PumpUntil(() => confirmed.ParcelCandidates.Count == 1);
+                confirmed.SelectedParcelCandidate = Assert.Single(confirmed.ParcelCandidates);
+                confirmed.UseParcelCommand.Execute(null);
+                Assert.Equal(SolidGroundDialogStep.Review, confirmed.CurrentStep);
+
+                confirmed.EditSettingsCommand.Execute(null);
+
+                Assert.Equal(SolidGroundDialogStep.Parcel, confirmed.CurrentStep);
+                Assert.Null(confirmed.SelectedParcelCandidate);
+                Assert.False(confirmed.CreateCommand.CanExecute(null));
+
+                DelayedParcelSource oldSource = new();
+                DelayedParcelSource replacementSource = new();
+                SolidGroundDialogViewModel pending = new(CreateInputs(
+                    settings,
+                    oldSource,
+                    _ =>
+                    {
+                        SessionApiKeyOverrides.ClearGeocodio();
+                        return null;
+                    },
+                    _ => new SolidGroundDialogLookupServices(
+                        NullGeocoder.Instance, AddressGeocoderProvider.Census, replacementSource, 30d, 30, SessionApiKeyOverrides.Revision)) with
+                {
+                    InitialCredentialRevision = SessionApiKeyOverrides.Revision,
+                });
+                pending.EntryMode = LocationEntryMode.Coordinates;
+                pending.LatitudeText = "41.59";
+                pending.LongitudeText = "-93.60";
+                pending.FindCommand.Execute(null);
+                Assert.Single(oldSource.Pending);
+
+                pending.EditSettingsCommand.Execute(null);
+                Assert.Single(replacementSource.Pending);
+                oldSource.CompleteNext("old-session-parcel");
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Assert.Empty(pending.ParcelCandidates);
+
+                replacementSource.CompleteNext("current-session-parcel");
+                PumpUntil(() => pending.ParcelCandidates.Count == 1);
+                Assert.Equal("current-session-parcel", Assert.Single(pending.ParcelCandidates).Candidate.ParcelId);
+            }
+            finally
+            {
+                SessionApiKeyOverrides.ClearAll();
+            }
+        });
+    }
+
+    [Fact]
     public void EmptyParcelLookupKeepsTheParcelStepAndExplainsHowToRecover()
     {
         StaTestHost.Run(() =>

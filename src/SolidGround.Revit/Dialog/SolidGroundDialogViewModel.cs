@@ -39,6 +39,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private bool _addressWasGeocoded;
     private string? _geocodedAddress;
     private bool _suppressRadiusInputInvalidation;
+    private bool _synchronizingLocationSelection;
 
     internal event EventHandler? CloseRequested;
 
@@ -86,6 +87,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         : string.Empty;
     public IReadOnlyList<ParcelProximityCandidate> ParcelCandidates => _flow.ParcelCandidates;
     public bool HasMultipleLocations => _flow.LocationRequiresConfirmation;
+    public bool CanSelectLocation => CurrentStep == SolidGroundDialogStep.Parcel && !_flow.LocationIsConfirmed;
     public bool ShowCoordinates => EntryMode == LocationEntryMode.Coordinates;
     public bool ShowOtherAreaOptions => EntryMode is LocationEntryMode.BoundingBox or LocationEntryMode.Radius or LocationEntryMode.LocalGeometry;
     public bool ShowAddress => EntryMode == LocationEntryMode.Address;
@@ -159,6 +161,24 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ContainmentLabel), nameof(HasMultipleLocations), nameof(ConfirmedLocation))]
     private AddressGeocodeCandidate? _selectedGeocodeCandidate;
 
+    partial void OnSelectedGeocodeCandidateChanged(AddressGeocodeCandidate? value)
+    {
+        if (_synchronizingLocationSelection || !_flow.LocationIsConfirmed || _flow.SelectedLocation is not { } committed || Equals(value, committed))
+        {
+            return;
+        }
+
+        _synchronizingLocationSelection = true;
+        try
+        {
+            SelectedGeocodeCandidate = committed;
+        }
+        finally
+        {
+            _synchronizingLocationSelection = false;
+        }
+    }
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(UseParcelCommand), nameof(CreateCommand))]
     [NotifyPropertyChangedFor(nameof(ContainmentLabel), nameof(SelectedParcelDetail), nameof(SelectedParcelSourceTerms))]
@@ -202,6 +222,8 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     {
         FindCancelCommand.Execute(null);
         InvalidateCurrentOperation();
+        _addressWasGeocoded = false;
+        _geocodedAddress = null;
         _explicitAreaOfInterest = null;
         _flow.ChangeInput();
         SelectedGeocodeCandidate = null;
@@ -384,6 +406,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         else if (CurrentStep == SolidGroundDialogStep.Parcel)
         {
             _flow.ReturnToLocation();
+            SelectedGeocodeCandidate = null;
         }
 
         NotifyFlowChanged();
@@ -409,6 +432,10 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         }
         if (edited is null)
         {
+            if (SessionApiKeyOverrides.Revision != _credentialRevision)
+            {
+                ReconfigureAfterSessionCredentialChange();
+            }
             return;
         }
 
@@ -449,7 +476,8 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             FindCancelCommand.Execute(null);
             InvalidateCurrentOperation();
             _flow.ChangeSource();
-            bool mustRegeocode = geocoderChanged && _addressWasGeocoded && !string.IsNullOrWhiteSpace(_geocodedAddress);
+            bool mustRegeocode = geocoderChanged && _addressWasGeocoded &&
+                !string.IsNullOrWhiteSpace(_geocodedAddress) && _flow.SelectedLocation is not null;
             if (mustRegeocode)
             {
                 EntryMode = LocationEntryMode.Address;
@@ -464,6 +492,47 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             {
                 _ = FindParcelsAsync(CancellationToken.None);
             }
+        }
+        NotifyFlowChanged();
+    }
+
+    private void ReconfigureAfterSessionCredentialChange()
+    {
+        RevitSettings settings = _effectiveSettings ?? _inputs.Settings!;
+        SolidGroundDialogLookupServices services;
+        try
+        {
+            services = _inputs.ReconfigureLookupServices?.Invoke(settings) ??
+                new SolidGroundDialogLookupServices(
+                    _geocoder, _geocoderProvider, _parcelSource, _nearbySearchRadiusMeters, _networkTimeoutSeconds,
+                    SessionApiKeyOverrides.Revision);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            FindCancelCommand.Execute(null);
+            InvalidateCurrentOperation();
+            _flow.ChangeSource();
+            SelectedParcelCandidate = null;
+            RefreshEstimate();
+            NotifyFlowChanged();
+            ErrorText = "A session credential changed, but updated lookup services could not be configured. Open Settings and correct the source before searching.";
+            return;
+        }
+
+        _geocoder = services.Geocoder;
+        _geocoderProvider = services.GeocoderProvider;
+        _parcelSource = services.ParcelSource;
+        _nearbySearchRadiusMeters = services.NearbySearchRadiusMeters;
+        _networkTimeoutSeconds = services.NetworkTimeoutSeconds;
+        _credentialRevision = SessionApiKeyOverrides.Revision;
+        FindCancelCommand.Execute(null);
+        InvalidateCurrentOperation();
+        _flow.ChangeSource();
+        SelectedParcelCandidate = null;
+        RefreshEstimate();
+        if (_flow.SelectedLocation is not null)
+        {
+            _ = FindParcelsAsync(CancellationToken.None);
         }
         NotifyFlowChanged();
     }
@@ -718,6 +787,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         OnPropertyChanged(nameof(LocationAttribution));
         OnPropertyChanged(nameof(ParcelCandidates));
         OnPropertyChanged(nameof(HasMultipleLocations));
+        OnPropertyChanged(nameof(CanSelectLocation));
         OnPropertyChanged(nameof(UsedNearbyTier));
         OnPropertyChanged(nameof(NearbyTierNoticeText));
         UseLocationCommand.NotifyCanExecuteChanged();
