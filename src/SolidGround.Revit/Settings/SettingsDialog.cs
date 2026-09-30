@@ -409,10 +409,17 @@ internal sealed class SettingsDialog : Window
         {
             CountyParcelServiceMetadataValidator.ValidateRegistration(countyMetadata, entry);
             string path = ResolveCountyRegistryPath();
+            IReadOnlyList<CountyParcelRegistryEntry> entries = File.Exists(path)
+                ? CountyParcelRegistry.Load(path).EntriesByGeoid.Values
+                    .Where(existing => !string.Equals(existing.Geoid, entry.Geoid, StringComparison.Ordinal))
+                    .Append(entry)
+                    .OrderBy(existing => existing.Geoid, StringComparer.Ordinal)
+                    .ToArray()
+                : [entry];
             CountyParcelRegistry.Write(path, new CountyParcelRegistryDocument
             {
                 SchemaVersion = CountyParcelRegistry.CurrentSchemaVersion,
-                Counties = [entry],
+                Counties = entries,
             });
             _ = CountyParcelRegistry.Load(path);
             countyRegistryPath.Text = path;
