@@ -44,6 +44,7 @@ internal sealed class SolidGroundDialog : Window
         Background = palette.Window;
         Foreground = palette.WindowText;
         BorderBrush = palette.ActiveBorder;
+        DialogControlStyles.Apply(this, palette);
 
         _panels = new()
         {
@@ -215,20 +216,20 @@ internal sealed class SolidGroundDialog : Window
 
     private static TextBox Input(string name, string path, DialogPalette palette)
     {
-        TextBox input = new() { Margin = new Thickness(0, 4, 8, 4), MinWidth = 170, Background = palette.ControlBackground, Foreground = palette.ControlText };
+        TextBox input = new() { Margin = new Thickness(0, 4, 8, 4), MinWidth = 170 };
         input.SetBinding(TextBox.TextProperty, new Binding(path) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
         AutomationProperties.SetName(input, name); return input;
     }
 
-    private static Button Primary(string label, string command, DialogPalette palette, string name)
+    private Button Primary(string label, string command, DialogPalette palette, string name)
     {
-        Button button = new() { Content = label, MinWidth = 132, Margin = new Thickness(8, 0, 0, 0), Background = palette.Highlight, Foreground = palette.ControlBackground };
+        Button button = new() { Content = label, MinWidth = 132, Margin = new Thickness(8, 0, 0, 0), Style = (Style)Resources[DialogControlStyles.PrimaryButtonStyleKey] };
         button.SetBinding(Button.CommandProperty, new Binding(command)); AutomationProperties.SetName(button, name); return button;
     }
 
     private static Button Secondary(string label, string command, DialogPalette palette, string name)
     {
-        Button button = new() { Content = label, Margin = new Thickness(0, 0, 8, 0), Background = palette.ControlBackground, Foreground = palette.ControlText };
+        Button button = new() { Content = label, Margin = new Thickness(0, 0, 8, 0) };
         button.SetBinding(Button.CommandProperty, new Binding(command)); AutomationProperties.SetName(button, name); return button;
     }
 
