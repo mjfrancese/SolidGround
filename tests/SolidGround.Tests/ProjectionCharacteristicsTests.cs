@@ -58,6 +58,53 @@ public sealed class ProjectionCharacteristicsTests
     }
 
     [Fact]
+    public void UsSurveyFootProjectedCoordinatesProduceTheSameDimensionlessScaleAndConvergenceAsMetres()
+    {
+        const double longitudeDegrees = -92d;
+        const double latitudeDegrees = 41.59d;
+        IHorizontalCoordinateTransform metres = CreateTransform("example-site-synthetic.prj");
+        IHorizontalCoordinateTransform usSurveyFeet = new UsSurveyFootTransform(metres);
+
+        ProjectionCharacteristicsMeasurement metreMeasurement = MeasureAt(metres, longitudeDegrees, latitudeDegrees);
+        ProjectionCharacteristicsMeasurement footMeasurement = MeasureAt(usSurveyFeet, longitudeDegrees, latitudeDegrees);
+
+        Assert.Equal(metreMeasurement.GridConvergenceRadians, footMeasurement.GridConvergenceRadians, 8);
+        Assert.Equal(metreMeasurement.PointScaleFactor, footMeasurement.PointScaleFactor, 8);
+    }
+
+    [Fact]
+    public void TranslatedProjectedOriginUsesTheFrameOriginToRecoverTheSameCharacteristics()
+    {
+        const double longitudeDegrees = -92d;
+        const double latitudeDegrees = 41.59d;
+        IHorizontalCoordinateTransform metres = CreateTransform("example-site-synthetic.prj");
+        IHorizontalCoordinateTransform translated = new TranslatedProjectedTransform(metres, 7_000_000d, -3_000_000d);
+
+        ProjectionCharacteristicsMeasurement metreMeasurement = MeasureAt(metres, longitudeDegrees, latitudeDegrees);
+        ProjectionCharacteristicsMeasurement translatedMeasurement = MeasureAt(translated, longitudeDegrees, latitudeDegrees);
+
+        Assert.Equal(metreMeasurement.Wgs84Point.X, translatedMeasurement.Wgs84Point.X, 7);
+        Assert.Equal(metreMeasurement.Wgs84Point.Y, translatedMeasurement.Wgs84Point.Y, 7);
+        Assert.Equal(metreMeasurement.GridConvergenceRadians, translatedMeasurement.GridConvergenceRadians, 8);
+        Assert.Equal(metreMeasurement.PointScaleFactor, translatedMeasurement.PointScaleFactor, 8);
+    }
+
+    [Fact]
+    public void StableNonConformalDerivativeIsRejectedRatherThanAveragedIntoAScale()
+    {
+        IHorizontalCoordinateTransform transform = new StableNonConformalTransform();
+        LocalCoordinateFrame localFrame = new(
+            new Coordinate3D(0d, 0d, 0d),
+            transform.Definition.TargetReference,
+            new VerticalReference("NAVD88", LengthUnit.Meter),
+            LengthUnit.Meter);
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => ProjectionCharacteristics.Measure(transform, localFrame));
+
+        Assert.Contains("conformal", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void UnstableFiniteDifferenceDerivativeIsRejected()
     {
         IHorizontalCoordinateTransform transform = new StepUnstableTransform();
@@ -133,6 +180,112 @@ public sealed class ProjectionCharacteristicsTests
         public Coordinate2D Forward(Coordinate2D source) => new(
             (source.X * MetersPerDegreeAtEquator) + (CubicCoefficient * source.X * source.X * source.X),
             source.Y * MetersPerDegreeAtEquator);
+
+        public Coordinate2D Inverse(Coordinate2D target) => target;
+    }
+
+    /// <summary>
+    /// Retains the public UTM projection mathematics while declaring its projected coordinates in the exact
+    /// U.S. survey foot. This exercises ProjectionCharacteristics' target-unit conversion rather than merely
+    /// comparing two metre CRS definitions.
+    /// </summary>
+    private sealed class UsSurveyFootTransform : IHorizontalCoordinateTransform
+    {
+        private readonly IHorizontalCoordinateTransform metres;
+
+        public UsSurveyFootTransform(IHorizontalCoordinateTransform metres)
+        {
+            this.metres = metres;
+            HorizontalReference target = new(
+                "NAD83 / UTM zone 15N (US survey foot test)",
+                metres.Definition.TargetReference.Datum,
+                HorizontalReferenceKind.Projected,
+                HorizontalUnit.Linear(LengthUnit.UsSurveyFoot),
+                HorizontalAxisOrder.EastingNorthing);
+            Definition = new HorizontalTransformationDefinition(
+                metres.Definition.SourceReference,
+                target,
+                metres.Definition.ForwardOperation,
+                metres.Definition.InverseOperation,
+                metres.Definition.EngineName,
+                metres.Definition.EngineVersion);
+        }
+
+        public HorizontalTransformationDefinition Definition { get; }
+
+        public Coordinate2D Forward(Coordinate2D source)
+        {
+            Coordinate2D projectedMetres = metres.Forward(source);
+            return new Coordinate2D(
+                LengthConverter.Convert(projectedMetres.X, LengthUnit.Meter, LengthUnit.UsSurveyFoot),
+                LengthConverter.Convert(projectedMetres.Y, LengthUnit.Meter, LengthUnit.UsSurveyFoot));
+        }
+
+        public Coordinate2D Inverse(Coordinate2D target) => metres.Inverse(new Coordinate2D(
+            LengthConverter.Convert(target.X, LengthUnit.UsSurveyFoot, LengthUnit.Meter),
+            LengthConverter.Convert(target.Y, LengthUnit.UsSurveyFoot, LengthUnit.Meter)));
+    }
+
+    private sealed class TranslatedProjectedTransform : IHorizontalCoordinateTransform
+    {
+        private readonly IHorizontalCoordinateTransform inner;
+        private readonly double eastingOffset;
+        private readonly double northingOffset;
+
+        public TranslatedProjectedTransform(IHorizontalCoordinateTransform inner, double eastingOffset, double northingOffset)
+        {
+            this.inner = inner;
+            this.eastingOffset = eastingOffset;
+            this.northingOffset = northingOffset;
+            HorizontalReference target = new(
+                "Synthetic translated UTM metres",
+                inner.Definition.TargetReference.Datum,
+                HorizontalReferenceKind.Projected,
+                HorizontalUnit.Linear(LengthUnit.Meter),
+                HorizontalAxisOrder.EastingNorthing);
+            Definition = new HorizontalTransformationDefinition(
+                inner.Definition.SourceReference,
+                target,
+                inner.Definition.ForwardOperation,
+                inner.Definition.InverseOperation,
+                inner.Definition.EngineName,
+                inner.Definition.EngineVersion);
+        }
+
+        public HorizontalTransformationDefinition Definition { get; }
+
+        public Coordinate2D Forward(Coordinate2D source)
+        {
+            Coordinate2D projected = inner.Forward(source);
+            return new Coordinate2D(projected.X + eastingOffset, projected.Y + northingOffset);
+        }
+
+        public Coordinate2D Inverse(Coordinate2D target) => inner.Inverse(new Coordinate2D(
+            target.X - eastingOffset,
+            target.Y - northingOffset));
+    }
+
+    private sealed class StableNonConformalTransform : IHorizontalCoordinateTransform
+    {
+        public StableNonConformalTransform()
+        {
+            HorizontalReference source = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
+            HorizontalReference target = new(
+                "Synthetic non-conformal projected metres", "Synthetic", HorizontalReferenceKind.Projected,
+                HorizontalUnit.Linear(LengthUnit.Meter), HorizontalAxisOrder.EastingNorthing);
+            Definition = new HorizontalTransformationDefinition(
+                source,
+                target,
+                new CoordinateOperationDefinition("test", "forward"),
+                new CoordinateOperationDefinition("test", "inverse"),
+                "test", "1");
+        }
+
+        public HorizontalTransformationDefinition Definition { get; }
+
+        public Coordinate2D Forward(Coordinate2D source) => new(
+            source.X * SolidGround.Core.Aois.Wgs84Ellipsoid.MetersPerDegreeLongitude(0d),
+            source.Y * SolidGround.Core.Aois.Wgs84Ellipsoid.MetersPerDegreeLatitude(0d) * 2d);
 
         public Coordinate2D Inverse(Coordinate2D target) => target;
     }
