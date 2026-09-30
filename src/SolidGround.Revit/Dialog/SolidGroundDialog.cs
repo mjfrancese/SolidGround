@@ -25,6 +25,7 @@ internal sealed class SolidGroundDialog : Window
     private readonly Button _useLocationButton;
     private readonly Button _useParcelButton;
     private readonly Button _createButton;
+    private readonly List<Grid> _parcelLayouts = [];
 
     /// <summary>
     /// Constructs from a caller-resolved palette. This constructor deliberately contains no Revit UI type
@@ -49,6 +50,7 @@ internal sealed class SolidGroundDialog : Window
         BorderBrush = palette.ActiveBorder;
         DialogControlStyles.Apply(this, palette);
         Loaded += (_, _) => ClampToWorkingArea();
+        SizeChanged += (_, _) => UpdateParcelLayouts();
 
         _panels = new()
         {
@@ -63,6 +65,7 @@ internal sealed class SolidGroundDialog : Window
         _createButton = Primary("Create toposolid", nameof(SolidGroundDialogViewModel.CreateCommand), palette, "Create toposolid");
 
         Content = BuildShell(palette);
+        UpdateParcelLayouts();
         viewModel.CloseRequested += OnCloseRequested;
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
         Closed += (_, _) =>
@@ -145,7 +148,7 @@ internal sealed class SolidGroundDialog : Window
         StackPanel radius = new() { Orientation = Orientation.Horizontal };
         radius.Children.Add(Field("Center latitude", Input("Center latitude", nameof(SolidGroundDialogViewModel.LatitudeText), palette), palette));
         radius.Children.Add(Field("Center longitude", Input("Center longitude", nameof(SolidGroundDialogViewModel.LongitudeText), palette), palette));
-        radius.Children.Add(Field("Radius in metres", Input("Radius in metres", nameof(SolidGroundDialogViewModel.RadiusMetersText), palette), palette));
+        radius.Children.Add(BoundField(nameof(SolidGroundDialogViewModel.RadiusLabel), Input("Radius", nameof(SolidGroundDialogViewModel.RadiusMetersText), palette), palette));
         radius.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.EntryMode)) { Converter = new EntryModeVisibilityConverter(LocationEntryMode.Radius) });
         other.Children.Add(radius);
         TextBox geometry = Input("Local GeoJSON or WKT", nameof(SolidGroundDialogViewModel.LocalGeometryText), palette);
@@ -177,21 +180,29 @@ internal sealed class SolidGroundDialog : Window
         AutomationProperties.SetName(locations, "Location candidates");
         panel.Children.Add(locations);
 
+        StackPanel parcelDetails = new();
+        parcelDetails.Children.Add(Text("Select a parcel", palette, FontWeights.SemiBold));
         ListBox parcels = new() { MinHeight = 130, Margin = new Thickness(0, 8, 0, 8), ItemTemplate = ParcelCandidateTemplate(palette) };
         parcels.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.ParcelCandidates)));
         parcels.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)) { Mode = BindingMode.TwoWay });
         AutomationProperties.SetName(parcels, "Parcel candidates");
-        panel.Children.Add(parcels);
+        parcelDetails.Children.Add(parcels);
         TextBlock containment = Text("", palette); containment.SetBinding(TextBlock.TextProperty, new Binding(nameof(SolidGroundDialogViewModel.ContainmentLabel)));
-        panel.Children.Add(containment);
-        panel.Children.Add(BoundText("SelectedParcelDetail", palette));
-        panel.Children.Add(BoundText("SelectedParcelSourceTerms", palette));
+        parcelDetails.Children.Add(containment);
+        parcelDetails.Children.Add(BoundText("SelectedParcelDetail", palette));
+        parcelDetails.Children.Add(BoundText("SelectedParcelSourceTerms", palette));
+        parcelDetails.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.LocationAttribution), palette));
         Button map = Secondary("Open selected coordinate in map", null, palette, "Open selected coordinate in the default browser");
         map.ToolTip = "Opens the selected coordinates in your default browser. No address is sent.";
         map.Click += (_, _) => OpenCoordinateMap();
-        panel.Children.Add(map);
-        panel.Children.Add(Text("Use this parcel confirms the displayed legal boundary. Nearby parcels are never selected automatically.", palette));
-        panel.Children.Add(new ParcelBoundaryPreview(palette) { Margin = new Thickness(0, 12, 0, 0), DataContext = _viewModel });
+        parcelDetails.Children.Add(map);
+        parcelDetails.Children.Add(Text("Use this parcel confirms the displayed legal boundary. Nearby parcels are never selected automatically.", palette));
+        ParcelBoundaryPreview preview = new(palette) { Margin = new Thickness(16, 12, 0, 0), DataContext = _viewModel };
+        Grid parcelContent = new() { Margin = new Thickness(0, 8, 0, 0) };
+        parcelContent.Children.Add(parcelDetails);
+        parcelContent.Children.Add(preview);
+        _parcelLayouts.Add(parcelContent);
+        panel.Children.Add(parcelContent);
         return panel;
     }
 
@@ -203,8 +214,13 @@ internal sealed class SolidGroundDialog : Window
         panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.ExtensionSummary), palette));
         panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.EstimateSummary), palette));
         panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.SourceSummary), palette));
+        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.LocationAttribution), palette));
         panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.ContainmentLabel), palette));
         panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.AccuracyDisclaimer), palette));
+        TextBlock budgetWarning = BoundText(nameof(SolidGroundDialogViewModel.NativePointBudgetWarning), palette);
+        budgetWarning.Foreground = palette.Error;
+        budgetWarning.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.NativePointBudgetWarning)) { Converter = TextPresenceVisibilityConverter.Instance });
+        panel.Children.Add(budgetWarning);
         Button portal = Secondary("Request OpenTopography access", null, palette, "Open OpenTopography access portal");
         portal.ToolTip = "Opens OpenTopography in your default browser to request or manage access. SolidGround does not send your settings.";
         portal.Click += (_, _) => OpenExternal("https://portal.opentopography.org/");
@@ -292,6 +308,16 @@ internal sealed class SolidGroundDialog : Window
         return field;
     }
 
+    private static StackPanel BoundField(string captionPath, Control control, DialogPalette palette)
+    {
+        StackPanel field = new() { Margin = new Thickness(0, 4, 8, 4) };
+        TextBlock caption = Text(string.Empty, palette);
+        caption.SetBinding(TextBlock.TextProperty, new Binding(captionPath));
+        field.Children.Add(caption);
+        field.Children.Add(control);
+        return field;
+    }
+
     private static Label Label(string caption, Control target, DialogPalette palette) => new() { Content = caption, Target = target, Foreground = palette.WindowText, Margin = new Thickness(0, 4, 0, 2) };
 
     private static DataTemplate ParcelCandidateTemplate(DialogPalette palette)
@@ -334,6 +360,32 @@ internal sealed class SolidGroundDialog : Window
         MinWidth = Math.Min(640d, MaxWidth);
         MinHeight = Math.Min(480d, MaxHeight);
         Width = Math.Min(Width, MaxWidth); Height = Math.Min(Height, MaxHeight);
+    }
+
+    private void UpdateParcelLayouts()
+    {
+        bool wide = ActualWidth >= 700d;
+        foreach (Grid layout in _parcelLayouts)
+        {
+            if (layout.Children.Count != 2) continue;
+            layout.ColumnDefinitions.Clear(); layout.RowDefinitions.Clear();
+            if (wide)
+            {
+                layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(55d, GridUnitType.Star) });
+                layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(45d, GridUnitType.Star) });
+                layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                Grid.SetRow(layout.Children[0], 0); Grid.SetColumn(layout.Children[0], 0);
+                Grid.SetRow(layout.Children[1], 0); Grid.SetColumn(layout.Children[1], 1);
+            }
+            else
+            {
+                layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1d, GridUnitType.Star) });
+                layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                Grid.SetRow(layout.Children[0], 0); Grid.SetColumn(layout.Children[0], 0);
+                Grid.SetRow(layout.Children[1], 1); Grid.SetColumn(layout.Children[1], 0);
+            }
+        }
     }
 
     private sealed class BooleanToVisibilityConverter : IValueConverter
