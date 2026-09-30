@@ -28,22 +28,34 @@ public sealed class SettingsCommand : IExternalCommand
         }
         catch (UiSettingsRepairRequiredException)
         {
-            return RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current: null, palette!) is null
-                ? Result.Cancelled
-                : Result.Succeeded;
+            try
+            {
+                return RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current: null, palette!) is null
+                    ? Result.Cancelled
+                    : Result.Succeeded;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+            {
+                return ShowOpenFailure(ref message, ex);
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
-            message = "SolidGround could not open Settings. See the SolidGround log for details.";
-            Diagnostics.AddInLog.Error("Could not open SolidGround Settings.", ex);
-            TaskDialog dialog = new("SolidGround Settings")
-            {
-                MainInstruction = "SolidGround could not open Settings.",
-                MainContent = message,
-                CommonButtons = TaskDialogCommonButtons.Close,
-            };
-            dialog.Show();
-            return Result.Failed;
+            return ShowOpenFailure(ref message, ex);
         }
+    }
+
+    private static Result ShowOpenFailure(ref string message, Exception ex)
+    {
+        message = "SolidGround could not open Settings. See the SolidGround log for details.";
+        Diagnostics.AddInLog.Error("Could not open SolidGround Settings.", ex);
+        TaskDialog dialog = new("SolidGround Settings")
+        {
+            MainInstruction = "SolidGround could not open Settings.",
+            MainContent = message,
+            CommonButtons = TaskDialogCommonButtons.Close,
+        };
+        dialog.Show();
+        return Result.Failed;
     }
 }
