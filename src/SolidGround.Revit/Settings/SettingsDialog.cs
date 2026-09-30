@@ -829,6 +829,7 @@ internal sealed class SettingsDialog : Window
         element.Name = name;
         AutomationProperties.SetAutomationId(element, name);
         AutomationProperties.SetName(element, AccessibleName(name));
+        AutomationProperties.SetHelpText(element, AccessibleHelpText(name));
         automationElements.Add(name, element);
     }
 
@@ -884,5 +885,45 @@ internal sealed class SettingsDialog : Window
         "reapplyDraft" => "Reapply draft",
         "startNewSettings" => "Start new settings",
         _ => throw new ArgumentOutOfRangeException(nameof(name), name, "Every rendered Settings control needs a human-readable accessible name."),
+    };
+
+    private static string AccessibleHelpText(string name) => name switch
+    {
+        "pointBudget" => "Sets the maximum number of terrain points retained for the Revit toposolid.",
+        "terrainExtension" => "Adds terrain outside the parcel boundary and retains its exact value in metres.",
+        "outputUnit" => "Sets the unit stored in terrain output and provenance.",
+        "distanceDisplayFormat" => "Changes how distances are displayed without changing their stored metre values.",
+        "acquisitionMode" => "Chooses whether elevation is fetched or supplied from a local raster.",
+        "rasterPath" => "Selects the local ASCII grid raster used in local-process mode.",
+        "projectionPath" => "Selects the projection sidecar for the local raster.",
+        "sourceSidecarPath" => "Selects optional source metadata for the local raster.",
+        "localParcelPath" => "Selects the GeoJSON or WKT parcel boundary file.",
+        "localParcelLabel" => "Identifies the source of the local parcel file in the operator view and provenance.",
+        "localParcelLicense" => "Shows the local parcel source license or disclaimer before use.",
+        "countyRegistryPath" => "Shows the per-user county registry created after settings are saved.",
+        "countyAuthorization" => "Must be acknowledged before an authorized county parcel service can be used.",
+        "countyServiceUrl" => "HTTPS ArcGIS service URL used to discover parcel layers and fields.",
+        "countyLayer" => "Selects the parcel layer returned by the county ArcGIS service.",
+        "countyParcelIdField" => "Maps the stable county parcel identifier field.",
+        "countySitusAddressField" => "Optionally maps the county situs-address field.",
+        "countyLegalDescriptionField" => "Optionally maps the county legal-description field.",
+        "useCountySource" => "Stages this authorized county source and writes its per-user registry only when settings are saved.",
+        "openTopographyKey" => "Session-only OpenTopography key. It is never written to settings.",
+        "geocodioKey" => "Session-only Geocodio key. It is never written to settings.",
+        "esriKey" => "Session-only Esri key. It is never written to settings.",
+        "exportDirectory" => "Selects the folder for exported terrain files.",
+        "exportBaseName" => "Sets the base name for exported terrain files.",
+        "networkTimeout" => "Sets the network request timeout in seconds.",
+        "nearbyRadius" => "Sets the distance searched when a geocoded point misses its parcel.",
+        "coverageFloor" => "Reserves this fraction of the point budget for broad terrain coverage.",
+        "originKind" => "Chooses how the reversible local coordinate origin is determined.",
+        "originX" => "Sets the explicit origin X coordinate in the source horizontal unit.",
+        "originY" => "Sets the explicit origin Y coordinate in the source horizontal unit.",
+        "originZ" => "Sets the explicit origin Z elevation in the source elevation unit.",
+        "restoreDefaults" => "Restores preference defaults in the draft while retaining registered sources and local paths.",
+        "reloadSavedSettings" => "Reloads the latest saved settings after a conflict and replaces the current draft.",
+        "reapplyDraft" => "Retries saving the current draft against the latest settings digest after confirmation.",
+        "startNewSettings" => "Explicitly permits replacing an unreadable settings file when this draft is saved.",
+        _ => AccessibleName(name),
     };
 }
