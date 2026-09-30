@@ -72,6 +72,14 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("internal string BindingPathErrorDiagnostic", Read("SolidGroundDialogViewModel.cs"), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void HostSuppliesARealSettingsEditorCallbackAndGatesUnacknowledgedCountyUse()
+    {
+        string host = Read("SolidGroundDialogHost.cs");
+        Assert.Contains("EditSettings: current => RevitSettingsIo.Edit(dialogOwner, current)", host, StringComparison.Ordinal);
+        Assert.Contains("CountyServiceAuthorizedUseAcknowledged", host, StringComparison.Ordinal);
+    }
+
     private static string Read(string name) => File.ReadAllText(Path.Combine(Dialog, name));
 
     private static string FindRoot()

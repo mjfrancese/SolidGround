@@ -55,6 +55,7 @@ internal static class SolidGroundDialogHost
         // #31 follow-up's nearby-parcel fallback tier).
         double nearbySearchRadiusMeters = settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters;
 
+        SolidGroundDialog? dialogOwner = null;
         SolidGroundDialogInputs inputs = new(
             geocoder,
             settings.AddressAndParcel.GeocoderProvider,
@@ -73,16 +74,17 @@ internal static class SolidGroundDialogHost
             settings.Request.AreaOfInterest,
             nearbySearchRadiusMeters,
             settings.Request.Mode,
-            Settings: settings);
+            Settings: settings,
+            EditSettings: current => RevitSettingsIo.Edit(dialogOwner, current));
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         // Revit theme access remains in the Revit-only host. The palette-injected dialog constructor is kept
         // free of UIThemeManager so the local WPF test lane can render it without loading RevitAPIUI.
-        SolidGroundDialog dialog = new(viewModel, DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast));
-        _ = new WindowInteropHelper(dialog) { Owner = commandData.Application.MainWindowHandle };
+        dialogOwner = new SolidGroundDialog(viewModel, DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast));
+        _ = new WindowInteropHelper(dialogOwner) { Owner = commandData.Application.MainWindowHandle };
 
         AddInLog.Info("Showing the SolidGround interactive dialog.");
-        dialog.ShowDialog();
+        dialogOwner.ShowDialog();
 
         return viewModel.Result;
     }
@@ -107,6 +109,10 @@ internal static class SolidGroundDialogHost
     {
         if (!string.IsNullOrWhiteSpace(settings.CountyRegistryPath))
         {
+            if (!settings.CountyServiceAuthorizedUseAcknowledged)
+            {
+                return new FailedParcelSource("County parcel service use has not been acknowledged. Open Settings, confirm you are authorized to use this service, and save before searching.");
+            }
             try
             {
                 CountyParcelRegistry registry = CountyParcelRegistry.Load(settings.CountyRegistryPath);
