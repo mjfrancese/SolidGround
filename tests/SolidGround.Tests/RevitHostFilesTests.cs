@@ -939,8 +939,8 @@ public sealed class RevitHostFilesTests
         // other Stage D wiring fact in this region, it previously had no dedicated test.
         string source = ReadCreateToposolidCommandSource();
 
-        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = dialogResult.EffectiveSettings ?? loaded.Settings with");
-        const int MaxFollowingDistance = 700; // also covers the fallback with-expression after EffectiveSettings.
+        int mergeIndex = RequireIndex(source, "RevitSettings settingsBase = dialogResult.EffectiveSettings ?? loaded.Settings;");
+        const int MaxFollowingDistance = 760; // covers the always-applied run-choice merge after settingsBase.
         string window = source[mergeIndex..Math.Min(source.Length, mergeIndex + MaxFollowingDistance)];
 
         Assert.Contains("OutputUnit = dialogResult.OutputUnit,", window, StringComparison.Ordinal);
@@ -948,6 +948,7 @@ public sealed class RevitHostFilesTests
         Assert.Contains(
             "SharedCoordinates = new RevitSharedCoordinatesSettings(dialogResult.WriteSharedCoordinatesIfAbsent)",
             window, StringComparison.Ordinal);
+        Assert.Contains("Request = settingsBase.Request with", window, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -966,7 +967,7 @@ public sealed class RevitHostFilesTests
         // path every other Preflight-shaped rejection already uses.
         string source = ReadCreateToposolidCommandSource();
 
-        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = dialogResult.EffectiveSettings ?? loaded.Settings with");
+        int mergeIndex = RequireIndex(source, "RevitSettings settingsBase = dialogResult.EffectiveSettings ?? loaded.Settings;");
         int validateIndex = RequireIndex(source, "effectiveSettings.Request.Validate()");
         int preflightCallIndex = RequireIndex(source, "RunDocumentPreflight(");
 
@@ -991,6 +992,19 @@ public sealed class RevitHostFilesTests
 
         Assert.Contains("RevitSettingsIo.LoadForUi", source, StringComparison.Ordinal);
         Assert.DoesNotContain("RevitSettingsIo.Save", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateToposolidCommandRedecidesV2AfterLegacyAcknowledgement()
+    {
+        string source = ReadCreateToposolidCommandSource();
+        int acknowledgement = RequireIndex(source, "AcknowledgeLegacyV1Terrain(decision.ElementIds)");
+        int redecision = RequireIndex(source, "ExistingTerrainDecision.AfterLegacyAcknowledgement(");
+        int createGate = RequireIndex(source, "if (decision.Kind != ExistingTerrainDecisionKind.Create)");
+
+        Assert.True(acknowledgement < redecision);
+        Assert.True(redecision < createGate);
+        Assert.Contains("TaskDialogResult.Cancel", source, StringComparison.Ordinal);
     }
 
     [Fact]

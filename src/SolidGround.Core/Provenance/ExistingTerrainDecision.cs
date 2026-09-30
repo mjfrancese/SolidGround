@@ -74,4 +74,15 @@ public sealed record ExistingTerrainDecision(
 
         return new(ExistingTerrainDecisionKind.Reuse, ids, "The existing terrain has matching identity, content, point/frame data, document history, and UniqueId.");
     }
+
+    /// <summary>
+    /// Re-evaluates only readable v2 records after the operator has acknowledged legacy v1 terrain for this
+    /// run. This deliberately does not convert a matching v2 record into Create: the normal Reuse/Refuse
+    /// decision remains authoritative after acknowledgement.
+    /// </summary>
+    public static ExistingTerrainDecision AfterLegacyAcknowledgement(
+        TerrainIdentity proposed,
+        string currentDocumentCreationGuid,
+        IEnumerable<ExistingTerrainRecord> existingV2) =>
+        Decide(proposed, currentDocumentCreationGuid, existingV2, []);
 }

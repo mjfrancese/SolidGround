@@ -46,6 +46,16 @@ public sealed class ExistingTerrainDecisionTests
     }
 
     [Fact]
+    public void LegacyAcknowledgementRedecidesV2MatchesAndNeverBypassesAConflict()
+    {
+        ExistingTerrainDecision allowed = ExistingTerrainDecision.AfterLegacyAcknowledgement(Proposed, "DOC", []);
+        ExistingTerrainDecision blocked = ExistingTerrainDecision.AfterLegacyAcknowledgement(Proposed, "DOC", [Record()]);
+
+        Assert.Equal(ExistingTerrainDecisionKind.Create, allowed.Kind);
+        Assert.Equal(ExistingTerrainDecisionKind.Reuse, blocked.Kind);
+    }
+
+    [Fact]
     public void MissingIdentityCreatesWithAnExplicitFallbackOutcome()
     {
         ExistingTerrainDecision decision = ExistingTerrainDecision.Decide(Proposed with { Kind = TerrainIdentityKind.BoundingBox }, "DOC", [], []);

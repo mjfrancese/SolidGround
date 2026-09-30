@@ -107,12 +107,13 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // override"). RevitSettings/TerrainRequestSettings/SimplificationSettings/RevitSharedCoordinatesSettings
         // are all already sealed records with init-only properties, so these `with` expressions are ordinary,
         // already-idiomatic C#.
-        RevitSettings effectiveSettings = dialogResult.EffectiveSettings ?? loaded.Settings with
+        RevitSettings settingsBase = dialogResult.EffectiveSettings ?? loaded.Settings;
+        RevitSettings effectiveSettings = settingsBase with
         {
-            Request = loaded.Settings.Request with
+            Request = settingsBase.Request with
             {
                 OutputUnit = dialogResult.OutputUnit,
-                Simplification = loaded.Settings.Request.Simplification with { PointBudget = dialogResult.PointBudget },
+                Simplification = settingsBase.Request.Simplification with { PointBudget = dialogResult.PointBudget },
             },
             SharedCoordinates = new RevitSharedCoordinatesSettings(dialogResult.WriteSharedCoordinatesIfAbsent),
         };
@@ -156,9 +157,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
         try
         {
             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(context.Settings.Request.NetworkTimeoutSeconds));
+            // Revit's UnitUtils is host API; convert this scalar before the Core/I/O Task.Run boundary.
+            LinearDistance minimumLegalEdgeLength = LinearDistance.Meters(
+                UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, UnitTypeId.Meters));
             acquisition = Task.Run(
                     () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, dialogResult.AddressParcel, context.Settings.TerrainExtensionMeters,
-                        LinearDistance.Meters(UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, UnitTypeId.Meters)), cts.Token),
+                        minimumLegalEdgeLength, cts.Token),
                     cts.Token)
                 .GetAwaiter().GetResult();
         }
@@ -239,6 +243,18 @@ public sealed class CreateToposolidCommand : IExternalCommand
         }
         ExistingTerrainDecision decision = ExistingTerrainDecision.Decide(
             terrainIdentity, context.Document.CreationGUID.ToString("D", CultureInfo.InvariantCulture), existing.V2, existing.LegacyV1);
+        if (decision.Kind == ExistingTerrainDecisionKind.RequiresLegacyAcknowledgement)
+        {
+            if (!AcknowledgeLegacyV1Terrain(decision.ElementIds))
+            {
+                return Result.Cancelled;
+            }
+
+            // A legacy acknowledgement only removes the legacy ambiguity for this one run. Re-decide v2
+            // records with an empty legacy list so a matching/copy/stale v2 record still refuses creation.
+            decision = ExistingTerrainDecision.AfterLegacyAcknowledgement(
+                terrainIdentity, context.Document.CreationGUID.ToString("D", CultureInfo.InvariantCulture), existing.V2);
+        }
         if (decision.Kind != ExistingTerrainDecisionKind.Create)
         {
             ShowProblemList("SolidGround refused to create duplicate or ambiguous terrain.", decision.Detail, decision.ElementIds);
@@ -449,7 +465,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
         if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && SessionApiKeyOverrides.OpenTopographyProvider().GetApiKey() is null)
         {
-            problems.Add("The OPENTOPOGRAPHY_API_KEY environment variable is not set (or is empty). Set it to a valid OpenTopography API key and restart Revit.");
+            problems.Add("Open Settings, select Sources, and enter or use the masked OpenTopography key for this run. USGS 1 m also requires myOpenTopo academic or enterprise entitlement.");
         }
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
@@ -1338,6 +1354,22 @@ public sealed class CreateToposolidCommand : IExternalCommand
         }));
         TaskDialogResult result = TaskDialog.Show(DialogTitle, text + Environment.NewLine + Environment.NewLine + "Continue this run?",
             TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.Cancel, TaskDialogResult.Cancel);
+        return result == TaskDialogResult.Yes;
+    }
+
+    private static bool AcknowledgeLegacyV1Terrain(IReadOnlyList<string> legacyElementIds)
+    {
+        string ids = string.Join(", ", legacyElementIds.Take(ProblemReportDialog.MaxInlineProblems));
+        string omitted = legacyElementIds.Count > ProblemReportDialog.MaxInlineProblems
+            ? $" (and {legacyElementIds.Count - ProblemReportDialog.MaxInlineProblems} more; see the log)"
+            : string.Empty;
+        TaskDialogResult result = TaskDialog.Show(
+            DialogTitle,
+            "Existing SolidGround v1 terrain cannot verify this run's identity or physical content. " +
+            $"Element(s): {ids}{omitted}. Creating another terrain may duplicate existing terrain. " +
+            "Acknowledge this risk for this run only?",
+            TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.Cancel,
+            TaskDialogResult.Cancel);
         return result == TaskDialogResult.Yes;
     }
 
