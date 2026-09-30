@@ -14,13 +14,21 @@ public sealed class SettingsCommand : IExternalCommand
 {
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
+        DialogPalette? palette = null;
         try
         {
             // UIThemeManager.CurrentTheme and UIApplication.MainWindowHandle were verified against the
             // installed Revit 2027 (27.0.10.13) API XML; see revit-usability-settings-and-workflow.md.
-            DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
-            RevitSettings current = RevitSettingsIo.LoadForUi(owner: null);
+            palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
+            RevitSettings? current = RevitSettingsIo.LoadForUi(owner: null);
+            if (current is null) return Result.Cancelled;
             return RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current, palette) is null
+                ? Result.Cancelled
+                : Result.Succeeded;
+        }
+        catch (UiSettingsRepairRequiredException)
+        {
+            return RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current: null, palette!) is null
                 ? Result.Cancelled
                 : Result.Succeeded;
         }

@@ -32,7 +32,7 @@ internal static class RevitSettingsIo
     /// valid first-use state and returns the guided-fetch defaults; the read-only ProgramData document remains
     /// available for an explicit legacy import rather than blocking the property dialog.
     /// </summary>
-    internal static RevitSettings LoadForUi(Window? owner)
+    internal static RevitSettings? LoadForUi(Window? owner)
     {
         string path = RevitSettingsLocator.Resolve();
         string legacyPath = RevitSettingsLocator.ResolveLegacyImport();
@@ -53,51 +53,49 @@ internal static class RevitSettingsIo
                 AddInLog.Info("Operator chose Start new settings instead of legacy import.");
                 return UiSettingsStore.CreateDefault();
             }
-            AddInLog.Info("Operator cancelled legacy import; returning a nonpersistent first-use draft.");
-            return UiSettingsStore.CreateDefault();
+            AddInLog.Info("Operator cancelled legacy import.");
+            return null;
         }
         if (UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
         {
             return RebaseInputPaths(draft!.Settings, path);
         }
 
-        AddInLog.Warning(error ?? "Could not load per-user settings; using a repairable default draft.");
-        if (File.Exists(legacyPath) && TryLoad(legacyPath, out legacy, out legacyError))
-        {
-            return ImportLegacy(legacy!, legacyPath);
-        }
-        if (File.Exists(legacyPath)) AddInLog.Warning(legacyError ?? "The legacy settings document could not be imported.");
-        return UiSettingsStore.CreateDefault();
+        string repairError = error ?? "Could not load per-user settings; explicit repair is required.";
+        AddInLog.Warning(repairError);
+        throw new UiSettingsRepairRequiredException(repairError);
     }
 
     /// <summary>Opens the shared Settings editor without accessing or modifying a Revit document.</summary>
-    internal static RevitSettings? Edit(Window? owner, RevitSettings current, DialogPalette? palette = null)
+    internal static RevitSettings? Edit(Window? owner, RevitSettings? current, DialogPalette? palette = null)
     {
-        ArgumentNullException.ThrowIfNull(current);
+        current ??= UiSettingsStore.CreateDefault();
         string path = RevitSettingsLocator.Resolve();
+        bool requiresExplicitStartNew = false;
         if (!UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
         {
             AddInLog.Warning(error ?? "Could not load per-user settings for editing.");
-            // Preserve a repairable in-memory draft. Save still uses the current target token, so corrupt bytes
-            // are never replaced implicitly: the operator must explicitly choose a clean draft in this editor.
             draft = new UiSettingsDraft(current, SolidGround.Core.Configuration.AtomicSettingsFile.Read(path).Version, path);
+            requiresExplicitStartNew = true;
         }
 
-        return SettingsDialog.ShowModal(owner, draft!, current, palette);
+        return SettingsDialog.ShowModal(owner, draft!, current, palette, requiresExplicitStartNew, error);
     }
 
     /// <summary>Opens the editor as an owned child of Revit's verified main-window handle.</summary>
-    internal static RevitSettings? Edit(IntPtr ownerHandle, RevitSettings current, DialogPalette palette)
+    internal static RevitSettings? Edit(IntPtr ownerHandle, RevitSettings? current, DialogPalette palette)
     {
-        ArgumentNullException.ThrowIfNull(current);
+        current ??= UiSettingsStore.CreateDefault();
         string path = RevitSettingsLocator.Resolve();
+        bool requiresExplicitStartNew = false;
         if (!UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
         {
             AddInLog.Warning(error ?? "Could not load per-user settings for editing.");
             draft = new UiSettingsDraft(current, SolidGround.Core.Configuration.AtomicSettingsFile.Read(path).Version, path);
+            requiresExplicitStartNew = true;
         }
 
-        return SettingsDialog.ShowModal(ownerHandle, draft!, current, palette);
+        return SettingsDialog.ShowModal(ownerHandle, draft!, current, palette, requiresExplicitStartNew, error);
     }
 
     /// <summary>Turns persisted relative file references into absolute paths using the document that supplied them.</summary>
@@ -481,3 +479,6 @@ internal static class RevitSettingsIo
         return "Global\\SolidGround.Revit.Settings." + Convert.ToHexString(hash);
     }
 }
+
+/// <summary>Signals the command to open the non-destructive explicit-repair editor for invalid persisted bytes.</summary>
+internal sealed class UiSettingsRepairRequiredException(string message) : Exception(message);

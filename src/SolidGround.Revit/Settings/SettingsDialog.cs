@@ -21,6 +21,7 @@ internal enum SettingsRecoveryAction
 {
     RestoreDefaults,
     ReapplyDraft,
+    StartNewSettings,
 }
 
 /// <summary>Small modal editor for persistent operator preferences. It never receives a Revit document.</summary>
@@ -76,12 +77,16 @@ internal sealed class SettingsDialog : Window
     private int countyMetadataRevision;
     private bool suppressCountyServiceUrlInvalidation;
     private bool isShownModally;
+    private bool savingBlockedUntilStartNew;
+    private readonly string? initialRecoveryError;
 
-    private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null)
+    private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null, bool savingBlockedUntilStartNew = false, string? initialRecoveryError = null)
     {
         this.draft = draft;
         this.current = current;
         this.confirmRecovery = confirmRecovery;
+        this.savingBlockedUntilStartNew = savingBlockedUntilStartNew;
+        this.initialRecoveryError = initialRecoveryError;
         Owner = owner;
         Title = "SolidGround settings";
         Width = 720;
@@ -198,37 +203,43 @@ internal sealed class SettingsDialog : Window
         reloadSavedSettings.Click += (_, _) => ReloadSavedSettings();
         Button reapplyDraft = new() { Content = "Reapply draft", MinWidth = 104, Margin = new Thickness(6) };
         reapplyDraft.Click += (_, _) => ReapplyDraft();
+        Button startNewSettings = new() { Content = "Start new settings", MinWidth = 132, Margin = new Thickness(6), Visibility = savingBlockedUntilStartNew ? Visibility.Visible : Visibility.Collapsed };
+        startNewSettings.Click += (_, _) => StartNewSettings();
         Button cancel = new() { Content = "Cancel", MinWidth = 100, Margin = new Thickness(6) };
         cancel.Click += (_, _) => CancelEditor();
         Button save = new() { Content = "Save settings", MinWidth = 120, Margin = new Thickness(6), IsDefault = true };
         save.Style = (Style)Resources[DialogControlStyles.PrimaryButtonStyleKey];
         save.Click += (_, _) => Save();
-        Register("restoreDefaults", restoreDefaults); Register("reloadSavedSettings", reloadSavedSettings); Register("reapplyDraft", reapplyDraft);
-        footer.Children.Add(restoreDefaults); footer.Children.Add(reloadSavedSettings); footer.Children.Add(reapplyDraft); footer.Children.Add(cancel); footer.Children.Add(save);
+        Register("restoreDefaults", restoreDefaults); Register("reloadSavedSettings", reloadSavedSettings); Register("reapplyDraft", reapplyDraft); Register("startNewSettings", startNewSettings);
+        footer.Children.Add(restoreDefaults); footer.Children.Add(reloadSavedSettings); footer.Children.Add(reapplyDraft); footer.Children.Add(startNewSettings); footer.Children.Add(cancel); footer.Children.Add(save);
         Grid.SetRow(footer, 3); shell.Children.Add(footer);
         Content = shell;
+        if (savingBlockedUntilStartNew)
+        {
+            error.Text = (initialRecoveryError ?? "Saved settings need repair.") + " The saved bytes are preserved. Choose Start new settings to stage replacement values, then Save settings to authorize a write.";
+        }
     }
 
     internal RevitSettings? Result { get; private set; }
 
     /// <summary>Constructs the actual editor without showing it, for the Windows-only rendered-control lane.</summary>
-    internal static SettingsDialog CreateForTesting(UiSettingsDraft draft, RevitSettings current, DialogPalette palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null) => new(null, draft, current, palette, confirmRecovery);
+    internal static SettingsDialog CreateForTesting(UiSettingsDraft draft, RevitSettings current, DialogPalette palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null, bool savingBlockedUntilStartNew = false, string? initialRecoveryError = null) => new(null, draft, current, palette, confirmRecovery, savingBlockedUntilStartNew, initialRecoveryError);
 
     /// <summary>Named live controls used by the local WPF binding/accessibility tests.</summary>
     internal IReadOnlyDictionary<string, FrameworkElement> AutomationElements => automationElements;
 
-    internal static RevitSettings? ShowModal(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette = null)
+    internal static RevitSettings? ShowModal(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette = null, bool savingBlockedUntilStartNew = false, string? initialRecoveryError = null)
     {
-        SettingsDialog dialog = new(owner, draft, current, palette);
+        SettingsDialog dialog = new(owner, draft, current, palette, savingBlockedUntilStartNew: savingBlockedUntilStartNew, initialRecoveryError: initialRecoveryError);
         dialog.isShownModally = true;
         try { return dialog.ShowDialog() == true ? dialog.Result : null; }
         finally { dialog.isShownModally = false; }
     }
 
     /// <summary>Shows the editor as an owned Revit child without constructing a WPF owner window.</summary>
-    internal static RevitSettings? ShowModal(IntPtr ownerHandle, UiSettingsDraft draft, RevitSettings current, DialogPalette palette)
+    internal static RevitSettings? ShowModal(IntPtr ownerHandle, UiSettingsDraft draft, RevitSettings current, DialogPalette palette, bool savingBlockedUntilStartNew = false, string? initialRecoveryError = null)
     {
-        SettingsDialog dialog = new(null, draft, current, palette);
+        SettingsDialog dialog = new(null, draft, current, palette, savingBlockedUntilStartNew: savingBlockedUntilStartNew, initialRecoveryError: initialRecoveryError);
         if (ownerHandle != IntPtr.Zero)
         {
             _ = new WindowInteropHelper(dialog) { Owner = ownerHandle };
@@ -290,6 +301,11 @@ internal sealed class SettingsDialog : Window
 
     private void Persist(RevitSettings proposed)
     {
+        if (savingBlockedUntilStartNew)
+        {
+            error.Text = "Saved settings need repair and remain untouched. Choose Start new settings, then Save settings to authorize replacement.";
+            return;
+        }
         bool stagedRegistryWritten = false;
         try
         {
@@ -364,6 +380,19 @@ internal sealed class SettingsDialog : Window
         Persist(proposed);
     }
 
+    private void StartNewSettings()
+    {
+        if (!savingBlockedUntilStartNew || !ConfirmRecovery(SettingsRecoveryAction.StartNewSettings)) return;
+        DiscardStagedCountyRegistry();
+        RevitSettings defaults = UiSettingsStore.CreateDefault();
+        SettingsFileVersion expectedVersion = AtomicSettingsFile.Read(draft.Path).Version;
+        current = defaults;
+        draft = new UiSettingsDraft(defaults, expectedVersion, draft.Path);
+        savingBlockedUntilStartNew = false;
+        ApplySettings(defaults);
+        error.Text = "New settings are staged. The previous bytes remain untouched until you choose Save settings.";
+    }
+
     private void CancelEditor()
     {
         DiscardStagedCountyRegistry();
@@ -412,9 +441,12 @@ internal sealed class SettingsDialog : Window
     private bool ConfirmRecovery(SettingsRecoveryAction action)
     {
         if (confirmRecovery is not null) return confirmRecovery(action);
-        string prompt = action == SettingsRecoveryAction.RestoreDefaults
-            ? "Replace every settings control with SolidGround defaults? Nothing is written until you choose Save settings."
-            : "Reapply the current controls over the latest saved settings? This explicitly replaces saved values represented by this dialog.";
+        string prompt = action switch
+        {
+            SettingsRecoveryAction.RestoreDefaults => "Replace every settings control with SolidGround defaults? Nothing is written until you choose Save settings.",
+            SettingsRecoveryAction.StartNewSettings => "Stage a new settings document? The unreadable saved bytes remain untouched until you choose Save settings.",
+            _ => "Reapply the current controls over the latest saved settings? This explicitly replaces saved values represented by this dialog.",
+        };
         return MessageBox.Show(this, prompt, "SolidGround settings", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
     }
 
