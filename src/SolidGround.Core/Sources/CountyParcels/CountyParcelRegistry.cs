@@ -89,6 +89,8 @@ public sealed class CountyParcelRegistry
         AllowTrailingCommas = true,
     };
 
+    private static readonly JsonSerializerOptions WriteJsonOptions = new(JsonOptions) { WriteIndented = true };
+
     // \A/\z (not ^/$): .NET's `$` also matches immediately before a single trailing '\n' even without
     // RegexOptions.Multiline, so "12345\n" would otherwise pass this pattern, get stored as a corrupted
     // dictionary key, and later fail an ordinary GEOID lookup with a misleading "unregistered" error instead
@@ -176,6 +178,30 @@ public sealed class CountyParcelRegistry
         }
 
         return new CountyParcelRegistry(path, entriesByGeoid);
+    }
+
+    /// <summary>
+    /// Writes a locally authored registry after exercising the identical strict validation as Load. This lets a
+    /// host collect an operator's authorized registration without requiring hand-edited JSON.
+    /// </summary>
+    public static void Write(string path, CountyParcelRegistryDocument document)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(document);
+        string directory = Path.GetDirectoryName(path) ?? throw new ArgumentException("The registry path must include a directory.", nameof(path));
+        Directory.CreateDirectory(directory);
+        string staged = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            string json = JsonSerializer.Serialize(document, WriteJsonOptions);
+            File.WriteAllText(staged, json + Environment.NewLine);
+            _ = Load(staged);
+            File.Move(staged, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(staged)) File.Delete(staged);
+        }
     }
 
     private static void ValidateEntry(CountyParcelRegistryEntry entry, int index, List<string> problems)

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using SolidGround.Core.Processing;
@@ -13,6 +14,7 @@ namespace SolidGround.Revit.Settings;
 /// <summary>Small modal editor for persistent operator preferences. It never receives a Revit document.</summary>
 internal sealed class SettingsDialog : Window
 {
+    private readonly Dictionary<string, FrameworkElement> automationElements = new(StringComparer.Ordinal);
     private readonly RevitSettings current;
     private readonly UiSettingsDraft draft;
     private readonly TextBox pointBudget;
@@ -113,6 +115,11 @@ internal sealed class SettingsDialog : Window
         coverageFloor = Text(current.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture));
         simplificationMethod = Choice(new[] { SimplificationMethod.CurvatureAware, SimplificationMethod.UniformSampler }, current.Request.Simplification.Method);
         pages.Items.Add(Page("Advanced", Panel(Label("Simplification method"), simplificationMethod, Label("Network timeout (seconds)"), timeout, Label("Nearby parcel search distance (metres; blank uses default)"), nearbyRadius, Label("Sampler coverage fraction (0 through 1)"), coverageFloor, new TextBlock { Text = "The local-origin policy and full process metadata are preserved unless changed by a dedicated source workflow.", TextWrapping = TextWrapping.Wrap })));
+        Register("pointBudget", pointBudget); Register("terrainExtension", extension); Register("outputUnit", outputUnit); Register("distanceDisplayFormat", displayFormat);
+        Register("acquisitionMode", acquisitionMode); Register("rasterPath", ascPath); Register("projectionPath", prjPath); Register("sourceSidecarPath", sidecarPath);
+        Register("localParcelPath", localParcelPath); Register("countyRegistryPath", countyRegistryPath); Register("geocoderProvider", geocoderProvider);
+        Register("openTopographyKey", openTopographyKey); Register("geocodioKey", geocodioKey); Register("esriKey", esriKey);
+        Register("exportDirectory", exportDirectory); Register("exportBaseName", exportBaseName); Register("networkTimeout", timeout); Register("nearbyRadius", nearbyRadius); Register("coverageFloor", coverageFloor); Register("simplificationMethod", simplificationMethod);
         shell.Children.Add(pages);
 
         error = new TextBlock { Foreground = colors.Error, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 6) };
@@ -129,6 +136,12 @@ internal sealed class SettingsDialog : Window
     }
 
     internal RevitSettings? Result { get; private set; }
+
+    /// <summary>Constructs the actual editor without showing it, for the Windows-only rendered-control lane.</summary>
+    internal static SettingsDialog CreateForTesting(UiSettingsDraft draft, RevitSettings current, DialogPalette palette) => new(null, draft, current, palette);
+
+    /// <summary>Named live controls used by the local WPF binding/accessibility tests.</summary>
+    internal IReadOnlyDictionary<string, FrameworkElement> AutomationElements => automationElements;
 
     internal static RevitSettings? ShowModal(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette = null)
     {
@@ -197,7 +210,11 @@ internal sealed class SettingsDialog : Window
     private static TabItem Page(string header, UIElement content) => new() { Header = header, Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } };
     private static StackPanel Panel(params UIElement[] children) { StackPanel panel = new() { Margin = new Thickness(12) }; foreach (UIElement child in children) panel.Children.Add(child); return panel; }
     private static TextBlock Label(string text) => new() { Text = text, Margin = new Thickness(0, 8, 0, 2) };
-    private static TextBox Text(string text, bool multiline = false) => new() { Text = text, MinWidth = 360, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, AcceptsReturn = multiline, MinHeight = multiline ? 64 : double.NaN };
+    private static TextBox Text(string text, bool multiline = false)
+    {
+        TextBox box = new() { Text = text, MinWidth = 360, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, AcceptsReturn = multiline, MinHeight = multiline ? 64 : double.NaN };
+        return box;
+    }
     private static ComboBox Choice<T>(IEnumerable<T> values, T selected) { ComboBox box = new() { ItemsSource = values.ToArray(), SelectedItem = selected, MinWidth = 240 }; return box; }
     private static StackPanel Horizontal(params UIElement[] children) { StackPanel panel = new() { Orientation = Orientation.Horizontal }; foreach (UIElement child in children) panel.Children.Add(child); return panel; }
     private static StackPanel FileField(TextBox box, string filter)
@@ -245,5 +262,12 @@ internal sealed class SettingsDialog : Window
             // Keep invalid text visible for correction; Save will focus it and report the field error.
             extensionFormat = next;
         }
+    }
+
+    private void Register(string name, FrameworkElement element)
+    {
+        element.Name = name;
+        AutomationProperties.SetAutomationId(element, name);
+        automationElements.Add(name, element);
     }
 }

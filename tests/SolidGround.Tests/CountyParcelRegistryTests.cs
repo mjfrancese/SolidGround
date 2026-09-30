@@ -65,6 +65,27 @@ public sealed class CountyParcelRegistryTests
     }
 
     [Fact]
+    public void WritePersistsARegistryTheStrictLoaderAccepts()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"solidground-registry-write-{Guid.NewGuid():N}.json");
+        try
+        {
+            CountyParcelRegistry.Write(path, new CountyParcelRegistryDocument
+            {
+                SchemaVersion = CountyParcelRegistry.CurrentSchemaVersion,
+                Counties = [new CountyParcelRegistryEntry
+                {
+                    Geoid = "99999", DisplayName = "Synthetic", ServiceBaseUrl = "https://parcels.example.invalid/FeatureServer", LayerIndex = 0,
+                    FieldMap = new CountyParcelFieldMap { ParcelId = "PARCEL", SitusAddress = "SITUS" }, LicenseDisclaimerText = "Synthetic disclaimer.",
+                }],
+            });
+
+            Assert.True(CountyParcelRegistry.Load(path).EntriesByGeoid.ContainsKey("99999"));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
     public void RejectsAnUnknownTopLevelProperty()
     {
         string json = ValidRegistryJson.Replace("\"schemaVersion\": 1,", "\"schemaVersion\": 1, \"unknownTopLevel\": true,");
