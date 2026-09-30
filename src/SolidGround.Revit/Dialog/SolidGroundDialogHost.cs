@@ -71,7 +71,8 @@ internal static class SolidGroundDialogHost
             settings.Request.NetworkTimeoutSeconds,
             settings.Request.AreaOfInterest,
             nearbySearchRadiusMeters,
-            settings.Request.Mode);
+            settings.Request.Mode,
+            Settings: settings);
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         SolidGroundDialog dialog = new(viewModel);

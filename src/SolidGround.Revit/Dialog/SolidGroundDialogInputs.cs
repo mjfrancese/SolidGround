@@ -2,19 +2,12 @@ using SolidGround.Core.Hosting;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Units;
+using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit.Dialog;
 
-/// <summary>
-/// Every input <see cref="SolidGroundDialogViewModel"/> needs at construction time, gathered by
-/// <see cref="SolidGroundDialogHost.ShowModal"/> (SolidGround Issue #31, PH3-4, Stage D: see
-/// docs/architecture/revit-interactive-dialog.md "Flow/state model"). Every field here is a plain Core type
-/// or primitive -- none is Revit-API-typed -- so the view-model itself never depends on <c>Document</c>,
-/// <c>Level</c>, <c>ToposolidType</c>, or any other Revit API type: whatever constructs this record is
-/// responsible for resolving those against a real, open <c>Document</c> first (mirroring how
-/// <c>LevelAndTypeResolver</c> already separates "project a Revit element into a Revit-free candidate" from
-/// "let a Core selector choose one").
-/// </summary>
+/// <summary>Immutable host-resolved dependencies and preferences for one guided dialog run.</summary>
+/// <remarks>All lookup work copies the relevant values into a revision ticket before awaiting I/O.</remarks>
 internal sealed record SolidGroundDialogInputs(
     IAddressGeocoder Geocoder,
     AddressGeocoderProvider GeocoderProvider,
@@ -32,4 +25,6 @@ internal sealed record SolidGroundDialogInputs(
     int NetworkTimeoutSeconds,
     AoiSettings ConfiguredAreaOfInterest,
     double NearbySearchRadiusMeters,
-    TerrainAcquisitionMode Mode);
+    TerrainAcquisitionMode Mode,
+    RevitSettings? Settings = null,
+    Func<RevitSettings, RevitSettings?>? EditSettings = null);
