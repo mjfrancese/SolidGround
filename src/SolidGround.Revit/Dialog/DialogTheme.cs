@@ -16,7 +16,21 @@ internal sealed record DialogPalette(
     Brush Highlight,
     Brush Error,
     Brush GrayText,
-    Brush ActiveBorder);
+    Brush ActiveBorder)
+{
+    /// <summary>Raised surfaces, such as hoverable cards and secondary buttons.</summary>
+    internal Brush SurfaceRaised { get; init; } = Brushes.Transparent;
+    internal Brush OnAccent { get; init; } = Brushes.White;
+    internal Brush Selection { get; init; } = Brushes.Transparent;
+    internal Brush OnSelection { get; init; } = Brushes.Black;
+    internal Brush OnErrorSurface { get; init; } = Brushes.Black;
+    internal Brush Focus { get; init; } = Brushes.Blue;
+    internal Brush DisabledText { get; init; } = Brushes.Gray;
+    internal Brush DisabledSurface { get; init; } = Brushes.LightGray;
+
+    /// <summary>True only when every role is backed by the Windows accessibility palette.</summary>
+    internal bool UsesSystemColors { get; init; }
+}
 
 /// <summary>
 /// Resolves which <see cref="DialogPalette"/> <see cref="SolidGroundDialog"/> paints itself with.
@@ -27,35 +41,44 @@ internal sealed record DialogPalette(
 internal static class DialogTheme
 {
     private static readonly DialogPalette LightPalette = new(
-        Window: new SolidColorBrush(Color.FromRgb(0xF3, 0xF3, 0xF3)),
-        WindowText: Brushes.Black,
-        ControlText: Brushes.Black,
+        Window: Brush(0xF8, 0xF9, 0xFA),
+        WindowText: Brush(0x1B, 0x1B, 0x1F),
+        ControlText: Brush(0x1B, 0x1B, 0x1F),
         ControlBackground: Brushes.White,
-        // #005A9E reads at roughly 6.4:1 against this palette's near-white Window/ControlBackground, clearing
-        // the WCAG AA 4.5:1 text threshold (review finding, major); the original #0078D4 measured only
-        // roughly 4.08:1 here and was never checked against that bar.
-        Highlight: new SolidColorBrush(Color.FromRgb(0x00, 0x5A, 0x9E)),
-        // Firebrick reads at roughly 6:1 against this palette's near-white Window/ControlBackground, well
-        // clear of the WCAG AA 4.5:1 text threshold (review finding, major).
-        Error: Brushes.Firebrick,
-        GrayText: new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60)),
-        ActiveBorder: new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB0)));
+        Highlight: Brush(0x0B, 0x57, 0xD0),
+        Error: Brush(0xB3, 0x26, 0x1E),
+        GrayText: Brush(0x4A, 0x4E, 0x54),
+        ActiveBorder: Brush(0x74, 0x77, 0x75))
+    {
+        SurfaceRaised = Brush(0xF1, 0xF3, 0xF4),
+        OnAccent = Brushes.White,
+        Selection = Brush(0xD3, 0xE3, 0xFD),
+        OnSelection = Brush(0x10, 0x2A, 0x43),
+        OnErrorSurface = Brush(0x5F, 0x11, 0x10),
+        Focus = Brush(0x00, 0x5F, 0xCC),
+        DisabledText = Brush(0x55, 0x59, 0x5D),
+        DisabledSurface = Brush(0xE2, 0xE5, 0xE8),
+    };
 
     private static readonly DialogPalette DarkPalette = new(
-        Window: new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x30)),
-        WindowText: Brushes.White,
-        ControlText: Brushes.White,
-        // A distinct, slightly darker-than-Window shade so a themed TextBox/ComboBox/ListBox surface remains
-        // visually separable from the surrounding Window background (review finding, blocker: Control.Background
-        // is not an inherited WPF dependency property, unlike Foreground, so it never picked up Window's own
-        // dark Background and every control rendered white-on-default-light before this fix).
-        ControlBackground: new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E)),
-        Highlight: new SolidColorBrush(Color.FromRgb(0x3B, 0x9C, 0xF2)),
-        // Firebrick's contrast against this palette's #2D2D30 Window is only ~2:1 (fails WCAG AA); this lighter
-        // red reads at roughly 4.9:1 instead (review finding, major).
-        Error: new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)),
-        GrayText: new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
-        ActiveBorder: new SolidColorBrush(Color.FromRgb(0x5A, 0x5A, 0x5A)));
+        Window: Brush(0x1B, 0x1B, 0x1F),
+        WindowText: Brush(0xF4, 0xF0, 0xF4),
+        ControlText: Brush(0xF4, 0xF0, 0xF4),
+        ControlBackground: Brush(0x24, 0x24, 0x28),
+        Highlight: Brush(0xA8, 0xC7, 0xFA),
+        Error: Brush(0xF2, 0xB8, 0xB5),
+        GrayText: Brush(0xC9, 0xC5, 0xCA),
+        ActiveBorder: Brush(0xA9, 0xA4, 0xAA))
+    {
+        SurfaceRaised = Brush(0x30, 0x30, 0x34),
+        OnAccent = Brush(0x00, 0x2B, 0x5C),
+        Selection = Brush(0x17, 0x4A, 0x7C),
+        OnSelection = Brushes.White,
+        OnErrorSurface = Brush(0xFF, 0xDA, 0xD6),
+        Focus = Brush(0xA8, 0xC7, 0xFA),
+        DisabledText = Brush(0xCB, 0xC7, 0xCC),
+        DisabledSurface = Brush(0x38, 0x38, 0x3D),
+    };
 
     /// <summary>
     /// Every brush comes from a <c>SystemColors.*Brush</c> member (review finding, corrected: not
@@ -75,7 +98,18 @@ internal static class DialogTheme
         // major).
         Error: SystemColors.WindowTextBrush,
         GrayText: SystemColors.GrayTextBrush,
-        ActiveBorder: SystemColors.ActiveBorderBrush);
+        ActiveBorder: SystemColors.ActiveBorderBrush)
+    {
+        SurfaceRaised = SystemColors.ControlBrush,
+        OnAccent = SystemColors.HighlightTextBrush,
+        Selection = SystemColors.HighlightBrush,
+        OnSelection = SystemColors.HighlightTextBrush,
+        OnErrorSurface = SystemColors.WindowTextBrush,
+        Focus = SystemColors.HighlightBrush,
+        DisabledText = SystemColors.GrayTextBrush,
+        DisabledSurface = SystemColors.ControlBrush,
+        UsesSystemColors = true,
+    };
 
     /// <summary>
     /// <paramref name="highContrast"/> wins over <paramref name="revitTheme"/>: Revit's own API carries no
@@ -91,5 +125,12 @@ internal static class DialogTheme
         }
 
         return revitTheme == UITheme.Dark ? DarkPalette : LightPalette;
+    }
+
+    private static SolidColorBrush Brush(byte red, byte green, byte blue)
+    {
+        SolidColorBrush brush = new(Color.FromRgb(red, green, blue));
+        brush.Freeze();
+        return brush;
     }
 }
