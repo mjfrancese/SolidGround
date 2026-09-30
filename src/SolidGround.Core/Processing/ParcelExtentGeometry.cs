@@ -124,10 +124,10 @@ internal static class TerrainExtentPlanner
         }
 
         PolygonalRegion terrainClipRegion = extent.TerrainClipRegion;
-        if (extent.TerrainMargin.Value > 0d && !IsCoveredByGridEnvelope(terrainClipRegion.Envelope, grid.GetCornerEnvelope()))
+        if (!IsCoveredByGridEnvelope(terrainClipRegion.Envelope, grid.GetCornerEnvelope()))
         {
             throw new ParcelExtentPlanningException(
-                "The requested terrain margin is not fully covered by the actual elevation-grid extent; acquire a larger source envelope before creation.");
+                "The requested terrain extent is not fully covered by the actual elevation-grid extent; acquire a larger source envelope before creation.");
         }
 
         GridClipResult legalClipResult = GridClipper.Clip(grid, ClipRegion.FromRegion(extent.LegalParcelRegion, LinearDistance.Zero));

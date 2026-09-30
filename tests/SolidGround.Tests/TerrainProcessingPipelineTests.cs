@@ -201,6 +201,22 @@ public sealed class TerrainProcessingPipelineTests
     }
 
     [Fact]
+    public async Task RunAsyncWithParcelExtentRejectsAPartiallyUncoveredLegalParcelAtZeroMargin()
+    {
+        Fixture fixture = LoadFixture();
+        // The east-side cell center remains valid, so the old guard (which applied only when the margin was
+        // positive) accepted this clipped legal parcel despite its western half lying beyond the source grid.
+        PolygonalRegion legalParcel = Region(fixture.ProjectedReference,
+            (449673.5d, 4604563d), (449674.5d, 4604563d), (449674.5d, 4604564d), (449673.5d, 4604564d));
+
+        ParcelExtentPlanningException error = await Assert.ThrowsAsync<ParcelExtentPlanningException>(() => RunPipelineAsync(
+            fixture, null, LocalSouthwestOrigin(), TestContext.Current.CancellationToken,
+            parcelExtentGeometry: new ParcelExtentGeometry(legalParcel, LinearDistance.Zero)));
+
+        Assert.Contains("not fully covered", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunAsyncWithParcelExtentRejectsWhenEveryLegalSampleIsNoData()
     {
         Fixture fixture = LoadFixture();
@@ -260,31 +276,55 @@ public sealed class TerrainProcessingPipelineTests
     }
 
     [Fact]
-    public async Task RunAsyncWithParcelExtentKeepsLegalFrameAndPlaneAcrossZeroOneThreeAndSixCellMarginsAtFullAndFixedBudgets()
+    public async Task RunAsyncWithParcelExtentKeepsLegalWorldCoordinatesAndPlaneAcrossOriginMarginAndBudgetMatrix()
     {
         Fixture fixture = BuildSyntheticEdgeFixture();
         PolygonalRegion legalParcel = Region(fixture.ProjectedReference,
             (8d, 8d), (12d, 8d), (12d, 12d), (8d, 12d));
-        Coordinate3D? expectedOrigin = null;
-        double? expectedPlaneZ = null;
+        Coordinate2D[] expectedLegalVertices =
+        [
+            new Coordinate2D(8d, 8d), new Coordinate2D(12d, 8d), new Coordinate2D(12d, 12d), new Coordinate2D(8d, 12d),
+        ];
+        (string Name, LocalOriginRequest Request, Coordinate3D ExpectedOrigin)[] origins =
+        [
+            ("southwest", new LocalOriginRequest(LocalOriginKind.Southwest, 0d, 0d, 0d), new Coordinate3D(8d, 8d, 0d)),
+            ("centroid", new LocalOriginRequest(LocalOriginKind.Centroid, 0d, 0d, 0d), new Coordinate3D(10d, 10d, 0d)),
+            ("explicit", new LocalOriginRequest(LocalOriginKind.Explicit, 8.25d, 8.75d, 150d), new Coordinate3D(8.25d, 8.75d, 150d)),
+        ];
 
-        foreach (double marginCells in new[] { 0d, 1d, 3d, 6d })
+        foreach ((string _, LocalOriginRequest origin, Coordinate3D expectedOrigin) in origins)
         {
-            foreach (int budget in new[] { 1000, 8 })
+            double? expectedLocalPlaneZ = null;
+            foreach (double marginCells in new[] { 0d, 1d, 3d, 6d })
             {
-                TerrainProcessingOutcome outcome = await RunPipelineAsync(
-                    fixture, null, LocalSouthwestOrigin(), TestContext.Current.CancellationToken,
-                    pointBudget: budget,
-                    parcelExtentGeometry: new ParcelExtentGeometry(legalParcel, LinearDistance.Meters(marginCells)));
-                TerrainExtentPlan plan = Assert.IsType<TerrainExtentPlan>(outcome.TerrainExtentPlan);
+                foreach (int budget in new[] { 1000, 8 })
+                {
+                    TerrainProcessingOutcome outcome = await RunPipelineAsync(
+                        fixture, null, origin, TestContext.Current.CancellationToken,
+                        pointBudget: budget,
+                        parcelExtentGeometry: new ParcelExtentGeometry(legalParcel, LinearDistance.Meters(marginCells)));
+                    TerrainExtentPlan plan = Assert.IsType<TerrainExtentPlan>(outcome.TerrainExtentPlan);
+                    LocalCoordinateFrame frame = outcome.Payload.Provenance.LocalFrame;
 
-                expectedOrigin ??= outcome.Payload.Provenance.LocalFrame.Origin;
-                expectedPlaneZ ??= plan.LegalPlaneZ;
-                Assert.Equal(expectedOrigin.Value, outcome.Payload.Provenance.LocalFrame.Origin);
-                Assert.Equal(expectedPlaneZ.Value, plan.LegalPlaneZ);
-                Assert.Equal(legalParcel.Envelope.MinX, outcome.Payload.Provenance.LocalFrame.Origin.X);
-                Assert.Equal(legalParcel.Envelope.MinY, outcome.Payload.Provenance.LocalFrame.Origin.Y);
-                Assert.True(outcome.Payload.Samples.Count <= budget);
+                    expectedLocalPlaneZ ??= 168d - expectedOrigin.Elevation;
+                    Assert.Equal(expectedOrigin, frame.Origin);
+                    Assert.Equal(expectedLocalPlaneZ.Value, plan.LegalPlaneZ);
+                    Assert.Equal(
+                        origin.Kind == LocalOriginKind.Explicit ? 18d : 168d,
+                        plan.LegalPlaneZ);
+                    Assert.True(outcome.Payload.Samples.Count <= budget);
+
+                    IReadOnlyList<LocalCoordinate2D> localVertices = Assert.Single(plan.LegalLocalBoundary.Polygons).Shell.Vertices;
+                    Assert.Equal(expectedLegalVertices.Length, localVertices.Count);
+                    for (int index = 0; index < localVertices.Count; index++)
+                    {
+                        Coordinate3D restored = frame.ToSource(new LocalCoordinate(
+                            localVertices[index].X, localVertices[index].Y, plan.LegalPlaneZ));
+                        Assert.Equal(expectedLegalVertices[index].X, restored.X, 9);
+                        Assert.Equal(expectedLegalVertices[index].Y, restored.Y, 9);
+                        Assert.Equal(168d, restored.Elevation, 9);
+                    }
+                }
             }
         }
     }
