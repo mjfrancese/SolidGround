@@ -18,8 +18,9 @@ public sealed record TerrainProvenance
     /// Version 3 (SolidGround Issue #33) added <see cref="AddressParcel"/>; see "Export document manifest,
     /// schema version 3". Version 4 (SolidGround Issue #35) added
     /// <see cref="ElevationSourceMetadata.Attribution"/>; see "Export document manifest, schema version 4".
+    /// Version 5 (SolidGround Issue #47) added collection-period availability and coverage-floor provenance.
     /// </summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public TerrainProvenance(
         int schemaVersion,
@@ -57,6 +58,16 @@ public sealed record TerrainProvenance
 
         ArgumentNullException.ThrowIfNull(localFrame);
         ArgumentNullException.ThrowIfNull(simplificationRequest);
+
+        if (schemaVersion == CurrentSchemaVersion && source.CollectionPeriodAvailability is null)
+        {
+            throw new ArgumentException("Current-schema provenance requires an explicit collection-period availability.", nameof(source));
+        }
+
+        if (schemaVersion == CurrentSchemaVersion && simplificationRequest.CoverageFloorFraction is null)
+        {
+            throw new ArgumentException("Current-schema provenance requires the actual coverage floor fraction.", nameof(simplificationRequest));
+        }
         if (retainedPointCount > simplificationRequest.PointBudget)
         {
             throw new ArgumentOutOfRangeException(

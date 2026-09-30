@@ -186,6 +186,13 @@ public static class TerrainExportBundleRenderer
             writer.WriteNullValue();
         }
 
+        if (source.CollectionPeriodAvailability is not { } collectionPeriodAvailability)
+        {
+            throw new TerrainExportException("Current exports require an explicit collection-period availability.");
+        }
+
+        writer.WriteString("collectionPeriodAvailability", collectionPeriodAvailability.ToString());
+
         if (source.QualityLevel is { } qualityLevel)
         {
             writer.WriteString("qualityLevel", qualityLevel);
@@ -311,6 +318,12 @@ public static class TerrainExportBundleRenderer
         writer.WriteStartObject();
         writer.WriteNumber("pointBudget", request.PointBudget);
         writer.WriteString("method", request.Method.ToString());
+        if (request.CoverageFloorFraction is not { } coverageFloorFraction)
+        {
+            throw new TerrainExportException("Current exports require the actual coverage floor fraction.");
+        }
+
+        writer.WriteNumber("coverageFloorFraction", coverageFloorFraction);
         writer.WriteEndObject();
     }
 

@@ -202,6 +202,61 @@ public sealed class TerrainExportBundleReaderTests
     }
 
     [Fact]
+    public void ReadProvenancePreservesUnknownCoverageAndCollectionPeriodAvailabilityForASchemaVersionFourDocument()
+    {
+        TerrainExportBundle current = TerrainExportBundleRenderer.Render(CreatePayload(), "reader-schema-four-legacy");
+        string documentText = Encoding.UTF8.GetString(current.DocumentBytes.Span);
+        using JsonDocument document = JsonDocument.Parse(current.DocumentBytes);
+
+        JsonElement source = document.RootElement.GetProperty("provenance").GetProperty("source");
+        JsonElement simplification = document.RootElement.GetProperty("provenance").GetProperty("simplification");
+        string legacyText = RemoveTrailingJsonProperty(documentText, simplification, "coverageFloorFraction");
+        legacyText = RemoveJsonProperty(legacyText, source, "collectionPeriodAvailability");
+        legacyText = ReplaceExactlyOnce(
+            legacyText,
+            $"\"schemaVersion\": {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}",
+            "\"schemaVersion\": 4");
+
+        TerrainProvenance provenance = TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(legacyText));
+
+        Assert.Equal(4, provenance.SchemaVersion);
+        Assert.Null(provenance.SimplificationRequest.CoverageFloorFraction);
+        Assert.Null(provenance.Source.CollectionPeriodAvailability);
+    }
+
+    [Fact]
+    public void ReadProvenanceRoundTripsANonDefaultCoverageFloorFractionBitForBit()
+    {
+        const double coverageFloorFraction = 0.3d;
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(
+            CreatePayload(coverageFloorFraction: coverageFloorFraction),
+            "reader-nondefault-coverage-floor");
+
+        TerrainProvenance provenance = TerrainExportBundleReader.ReadProvenance(bundle.DocumentBytes.Span);
+
+        Assert.Equal(
+            BitConverter.DoubleToInt64Bits(coverageFloorFraction),
+            BitConverter.DoubleToInt64Bits(provenance.SimplificationRequest.CoverageFloorFraction!.Value));
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAnUnknownCollectionPeriodAvailability()
+    {
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(CreatePayload(), "reader-unknown-collection-status");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+        string tamperedText = ReplaceExactlyOnce(
+            documentText,
+            "\"collectionPeriodAvailability\": \"NotReportedBySource\"",
+            "\"collectionPeriodAvailability\": \"InventedStatus\"");
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(
+            () => TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(tamperedText)));
+
+        Assert.Contains("collectionPeriodAvailability", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("InventedStatus", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReadProvenanceRejectsAnUnrecognizedSourceHorizontalReferenceOriginValue()
     {
         TerrainExportPayload payload = CreatePayload();
@@ -760,7 +815,8 @@ public sealed class TerrainExportBundleReaderTests
         ElevationRange? elevationRange = null,
         ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
         ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator,
-        AddressParcelProvenance? addressParcel = null)
+        AddressParcelProvenance? addressParcel = null,
+        double coverageFloorFraction = GridTerrainSimplifier.DefaultCoverageFloorFraction)
     {
         IReadOnlyList<LocalTerrainSample> effectiveSamples = samples ?? DefaultSamples(retainedPointCount);
         TerrainProvenance provenance = CreateProvenance(
@@ -777,7 +833,8 @@ public sealed class TerrainExportBundleReaderTests
             elevationRange,
             horizontalReferenceOrigin,
             verticalReferenceOrigin,
-            addressParcel);
+            addressParcel,
+            coverageFloorFraction);
 
         return new TerrainExportPayload(effectiveSamples, provenance);
     }
@@ -796,7 +853,8 @@ public sealed class TerrainExportBundleReaderTests
         ElevationRange? elevationRange,
         ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
         ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator,
-        AddressParcelProvenance? addressParcel = null)
+        AddressParcelProvenance? addressParcel = null,
+        double coverageFloorFraction = GridTerrainSimplifier.DefaultCoverageFloorFraction)
     {
         VerticalReference vertical = VerticalReference(verticalUnit, geoidModel);
         HorizontalReference projected = ProjectedReference(projectedUnit);
@@ -808,7 +866,7 @@ public sealed class TerrainExportBundleReaderTests
             horizontalReferenceOrigin,
             verticalReferenceOrigin,
             new LocalCoordinateFrame(origin ?? new Coordinate3D(10.5d, 20.25d, 30.125d), projected, vertical, outputUnit),
-            new SimplificationRequest(15000, SimplificationMethod.CurvatureAware),
+            new SimplificationRequest(15000, SimplificationMethod.CurvatureAware, coverageFloorFraction),
             originalPointCount,
             retainedPointCount,
             elevationRange ?? new ElevationRange(1.5d, 3.75d, verticalUnit),

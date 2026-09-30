@@ -61,14 +61,19 @@ public sealed class GridTerrainSimplifier : ITerrainSimplifier
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        return request.Method switch
+        // A request can originate outside this simplifier (for example a persisted legacy export), but the
+        // instance's validated constructor value is what the algorithm actually uses. Return that actual value
+        // with the result so exported provenance never reports a caller-supplied, unused fraction.
+        SimplificationRequest effectiveRequest = new(request.PointBudget, request.Method, coverageFloorFraction);
+
+        return effectiveRequest.Method switch
         {
             SimplificationMethod.TinError => throw new TerrainSimplificationException(
                 $"{nameof(SimplificationMethod.TinError)} is not implemented by {nameof(GridTerrainSimplifier)}. " +
                 $"Use {nameof(SimplificationMethod.CurvatureAware)} (the default, terrain-aware method) or " +
                 $"{nameof(SimplificationMethod.UniformSampler)} (a labeled comparison baseline) instead."),
-            SimplificationMethod.UniformSampler => new ValueTask<SimplificationResult>(SimplifyUniform(grid, request)),
-            _ => new ValueTask<SimplificationResult>(SimplifyCurvatureAware(grid, request, cancellationToken)),
+            SimplificationMethod.UniformSampler => new ValueTask<SimplificationResult>(SimplifyUniform(grid, effectiveRequest)),
+            _ => new ValueTask<SimplificationResult>(SimplifyCurvatureAware(grid, effectiveRequest, cancellationToken)),
         };
     }
 

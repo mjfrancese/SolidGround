@@ -2,11 +2,11 @@
 
 **Issue:** #47 (PH4-5, investigation half only)
 **Date:** 2026-09-30
-**Status:** Decision memo; no collection-date implementation is authorized by this note.
+**Status:** Decision memo and implemented provenance-status contract. No catalog request is authorized.
 
 ## Decision
 
-Do **not** add an automatic `/otCatalog` request to `OpenTopographyUsgs1mSource`, and do not populate `ElevationSourceMetadata.CollectionPeriod` from it. For a USGS 1 m `usgsdem` acquisition, the source-reported collection period remains explicitly unavailable. A later schema/provenance decision may make that unavailability more visible than today's nullable representation, but it must not invent a date or infer one from an HTTP `Date` header.
+Do **not** add an automatic `/otCatalog` request to `OpenTopographyUsgs1mSource`, and do not populate `ElevationSourceMetadata.CollectionPeriod` from it. For a USGS 1 m `usgsdem` acquisition, the source-reported collection period remains explicitly unavailable. Schema version 5 records that truthful outcome as `collectionPeriodAvailability: "NotReportedBySource"` while retaining a null `collectionPeriod`; it must not invent a date or infer one from an HTTP `Date` header.
 
 This is a safety decision, not a finding that OpenTopography has no date information. The catalog can expose project-level temporal coverage, but the current public contract does not bind one of those catalog projects to the pixels returned by a particular `usgsdem` raster request.
 
@@ -34,11 +34,11 @@ A read-only `otCatalog` request using only the OpenAPI specification's public ex
 
 ## Provenance guidance and follow-up
 
-For now, retain `collectionPeriod: null` / `HasCollectionPeriod: false` as the existing explicit optional-state representation. If the owner wants a more legible value, scope a separate schema-versioned change whose text means **"not reported by this source response"**; it must remain distinguishable from a known date range and from an operator assertion.
+Schema version 5 retains `collectionPeriod: null` / `HasCollectionPeriod: false` and adds the typed `NotReportedBySource` status. A non-null period must be `Reported`; a schema version 4 reader result intentionally leaves the status null because that historical manifest did not record it. This preserves unknown history without assigning it the current source's status.
 
 A future collection-date feature would need primary documentation or a source response that supplies a stable identifier linking the exact `usgsdem` raster to exactly one project (or a formally defined multi-project composition rule), plus a separately reviewed third-request/quota policy. Neither condition is established by the evidence above.
 
-The owner has not made that follow-on decision. This memo opens no implementation work and makes no source-code or schema change.
+The owner authorized this truthful status representation with Issue #47. A future catalog-based collection-date feature still needs a separate decision and the evidence above; this implementation adds no network call or date inference.
 
 ## Sources
 
