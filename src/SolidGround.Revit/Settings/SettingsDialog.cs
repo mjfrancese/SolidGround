@@ -68,11 +68,14 @@ internal sealed class SettingsDialog : Window
     private readonly Func<SettingsRecoveryAction, bool>? confirmRecovery;
     private DistanceDisplayFormat extensionFormat;
     private CountyParcelServiceMetadata? countyMetadata;
+    private CountyParcelRegistryDocument? stagedCountyRegistry;
+    private string? stagedCountyRegistryPath;
     private static readonly HttpClient CountyMetadataHttpClient = new();
     private static readonly TimeSpan CountyMetadataDeadline = TimeSpan.FromSeconds(15);
     private CancellationTokenSource? countyMetadataFetchCancellation;
     private int countyMetadataRevision;
     private bool suppressCountyServiceUrlInvalidation;
+    private bool isShownModally;
 
     private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette, Func<SettingsRecoveryAction, bool>? confirmRecovery = null)
     {
@@ -133,7 +136,7 @@ internal sealed class SettingsDialog : Window
         countyMetadataStatus = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = colors.GrayText };
         Button fetchCountyMetadata = new() { Content = "Fetch service metadata", Margin = new Thickness(0, 4, 6, 4) };
         fetchCountyMetadata.Click += async (_, _) => await FetchCountyMetadataAsync();
-        saveCountyRegistration = new Button { Content = "Save county registration", Margin = new Thickness(0, 4, 6, 4), IsEnabled = false };
+        saveCountyRegistration = new Button { Content = "Use this county source", Margin = new Thickness(0, 4, 6, 4), IsEnabled = false };
         saveCountyRegistration.Click += (_, _) => SaveCountyRegistration();
         geocoderProvider = Choice(Enum.GetValues<AddressGeocoderProvider>(), current.AddressAndParcel.GeocoderProvider);
         openTopographyKey = new PasswordBox { MinWidth = 360 };
@@ -180,6 +183,7 @@ internal sealed class SettingsDialog : Window
         Register("countyRegistryPath", countyRegistryPath); Register("countyAuthorization", countyAuthorization); Register("geocoderProvider", geocoderProvider);
         Register("countyName", countyName); Register("countyGeoid", countyGeoid); Register("countyServiceUrl", countyServiceUrl); Register("countyAttribution", countyAttribution); Register("countyLicense", countyLicense);
         Register("countyLayer", countyLayer); Register("countyParcelIdField", countyParcelIdField); Register("countySitusAddressField", countySitusAddressField); Register("countyLegalDescriptionField", countyLegalDescriptionField);
+        Register("useCountySource", saveCountyRegistration);
         Register("openTopographyKey", openTopographyKey); Register("geocodioKey", geocodioKey); Register("esriKey", esriKey);
         Register("exportDirectory", exportDirectory); Register("exportBaseName", exportBaseName); Register("networkTimeout", timeout); Register("nearbyRadius", nearbyRadius); Register("coverageFloor", coverageFloor); Register("simplificationMethod", simplificationMethod);
         shell.Children.Add(pages);
@@ -195,7 +199,7 @@ internal sealed class SettingsDialog : Window
         Button reapplyDraft = new() { Content = "Reapply draft", MinWidth = 104, Margin = new Thickness(6) };
         reapplyDraft.Click += (_, _) => ReapplyDraft();
         Button cancel = new() { Content = "Cancel", MinWidth = 100, Margin = new Thickness(6) };
-        cancel.Click += (_, _) => { DialogResult = false; Close(); };
+        cancel.Click += (_, _) => CancelEditor();
         Button save = new() { Content = "Save settings", MinWidth = 120, Margin = new Thickness(6), IsDefault = true };
         save.Style = (Style)Resources[DialogControlStyles.PrimaryButtonStyleKey];
         save.Click += (_, _) => Save();
@@ -216,7 +220,9 @@ internal sealed class SettingsDialog : Window
     internal static RevitSettings? ShowModal(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette = null)
     {
         SettingsDialog dialog = new(owner, draft, current, palette);
-        return dialog.ShowDialog() == true ? dialog.Result : null;
+        dialog.isShownModally = true;
+        try { return dialog.ShowDialog() == true ? dialog.Result : null; }
+        finally { dialog.isShownModally = false; }
     }
 
     /// <summary>Shows the editor as an owned Revit child without constructing a WPF owner window.</summary>
@@ -227,7 +233,9 @@ internal sealed class SettingsDialog : Window
         {
             _ = new WindowInteropHelper(dialog) { Owner = ownerHandle };
         }
-        return dialog.ShowDialog() == true ? dialog.Result : null;
+        dialog.isShownModally = true;
+        try { return dialog.ShowDialog() == true ? dialog.Result : null; }
+        finally { dialog.isShownModally = false; }
     }
 
     private void Save()
@@ -270,7 +278,7 @@ internal sealed class SettingsDialog : Window
         RevitAddressAndParcelSettings address = baseline.AddressAndParcel with
         {
             GeocoderProvider = (AddressGeocoderProvider)geocoderProvider.SelectedItem, NearbySearchRadiusMeters = nearby,
-            CountyRegistryPath = BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = BlankAsNull(localParcelPath.Text), LocalParcelFileSourceLabel = BlankAsNull(localParcelLabel.Text), LocalParcelFileLicenseDisclaimerText = BlankAsNull(localParcelLicense.Text),
+            CountyRegistryPath = stagedCountyRegistryPath ?? BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = BlankAsNull(localParcelPath.Text), LocalParcelFileSourceLabel = BlankAsNull(localParcelLabel.Text), LocalParcelFileLicenseDisclaimerText = BlankAsNull(localParcelLicense.Text),
         };
         proposed = baseline with
         {
@@ -282,10 +290,15 @@ internal sealed class SettingsDialog : Window
 
     private void Persist(RevitSettings proposed)
     {
+        bool stagedRegistryWritten = false;
         try
         {
+            UiSettingsStore.ValidateForSave(proposed);
+            stagedRegistryWritten = PublishStagedCountyRegistry();
             draft = UiSettingsStore.Save(draft, proposed);
             current = proposed;
+            stagedCountyRegistry = null;
+            stagedCountyRegistryPath = null;
             if (!string.IsNullOrWhiteSpace(openTopographyKey.Password))
             {
                 SessionApiKeyOverrides.UseOpenTopography(openTopographyKey.Password);
@@ -293,10 +306,16 @@ internal sealed class SettingsDialog : Window
             }
             if (!string.IsNullOrWhiteSpace(geocodioKey.Password)) SessionApiKeyOverrides.UseGeocodio(geocodioKey.Password);
             if (!string.IsNullOrWhiteSpace(esriKey.Password)) SessionApiKeyOverrides.UseEsri(esriKey.Password);
-            Result = proposed; DialogResult = true; Close();
+            Result = proposed;
+            if (isShownModally)
+            {
+                DialogResult = true;
+                Close();
+            }
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
         {
+            if (stagedRegistryWritten) DiscardStagedCountyRegistryFile();
             error.Text = ex is SettingsFileConflictException
                 ? ex.Message + " Use Reload saved to discard this draft, or Reapply draft to save these controls over the latest file."
                 : ex.Message;
@@ -307,6 +326,7 @@ internal sealed class SettingsDialog : Window
     {
         if (!ConfirmRecovery(SettingsRecoveryAction.RestoreDefaults)) return;
         RevitSettings defaults = UiSettingsStore.CreateDefault();
+        DiscardStagedCountyRegistry();
         current = defaults;
         draft = draft with { Settings = defaults };
         ApplySettings(defaults);
@@ -322,6 +342,7 @@ internal sealed class SettingsDialog : Window
         }
 
         draft = loaded!;
+        DiscardStagedCountyRegistry();
         current = RevitSettingsIo.RebaseInputPaths(draft.Settings, draft.Path);
         ApplySettings(current);
         error.Text = "Saved settings reloaded. Unsaved changes in this dialog were discarded.";
@@ -341,6 +362,16 @@ internal sealed class SettingsDialog : Window
         draft = loaded;
         current = latest;
         Persist(proposed);
+    }
+
+    private void CancelEditor()
+    {
+        DiscardStagedCountyRegistry();
+        if (isShownModally)
+        {
+            DialogResult = false;
+            Close();
+        }
     }
 
     private static TabItem Page(string header, UIElement content) => new() { Header = header, Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } };
@@ -582,22 +613,20 @@ internal sealed class SettingsDialog : Window
         try
         {
             CountyParcelServiceMetadataValidator.ValidateRegistration(countyMetadata, entry);
-            string path = ResolveCountyRegistryPath();
-            IReadOnlyList<CountyParcelRegistryEntry> entries = File.Exists(path)
-                ? CountyParcelRegistry.Load(path).EntriesByGeoid.Values
+            IReadOnlyList<CountyParcelRegistryEntry> existingEntries = stagedCountyRegistry?.Counties
+                ?? LoadExistingCountyRegistryEntries();
+            IReadOnlyList<CountyParcelRegistryEntry> entries = existingEntries
                     .Where(existing => !string.Equals(existing.Geoid, entry.Geoid, StringComparison.Ordinal))
                     .Append(entry)
                     .OrderBy(existing => existing.Geoid, StringComparer.Ordinal)
-                    .ToArray()
-                : [entry];
-            CountyParcelRegistry.Write(path, new CountyParcelRegistryDocument
+                    .ToArray();
+            stagedCountyRegistry = new CountyParcelRegistryDocument
             {
                 SchemaVersion = CountyParcelRegistry.CurrentSchemaVersion,
                 Counties = entries,
-            });
-            _ = CountyParcelRegistry.Load(path);
-            countyRegistryPath.Text = path;
-            countyMetadataStatus.Text = "County registration saved locally. Save settings to use this registry in future runs.";
+            };
+            stagedCountyRegistryPath ??= CreateOwnedCountyRegistryPath();
+            countyMetadataStatus.Text = "County source is staged. Save settings to publish and activate its new local registry.";
             error.Text = string.Empty;
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException or ArgumentException)
@@ -606,11 +635,46 @@ internal sealed class SettingsDialog : Window
         }
     }
 
-    private string ResolveCountyRegistryPath()
+    private CountyParcelRegistryEntry[] LoadExistingCountyRegistryEntries()
     {
-        if (!string.IsNullOrWhiteSpace(countyRegistryPath.Text)) return countyRegistryPath.Text.Trim();
+        if (string.IsNullOrWhiteSpace(countyRegistryPath.Text)) return [];
+        return CountyParcelRegistry.Load(countyRegistryPath.Text.Trim()).EntriesByGeoid.Values.ToArray();
+    }
+
+    private string CreateOwnedCountyRegistryPath()
+    {
         string folder = Path.GetDirectoryName(draft.Path) ?? throw new InvalidOperationException("The per-user settings path has no parent folder.");
-        return Path.Combine(folder, "county-parcel-registry.json");
+        return Path.Combine(folder, $"county-parcel-registry.{Guid.NewGuid():N}.json");
+    }
+
+    private bool PublishStagedCountyRegistry()
+    {
+        if (stagedCountyRegistry is null) return false;
+        if (string.IsNullOrWhiteSpace(stagedCountyRegistryPath)) throw new InvalidOperationException("The staged county registry has no owned output path.");
+        CountyParcelRegistry.Write(stagedCountyRegistryPath, stagedCountyRegistry);
+        _ = CountyParcelRegistry.Load(stagedCountyRegistryPath);
+        return true;
+    }
+
+    private void DiscardStagedCountyRegistry()
+    {
+        DiscardStagedCountyRegistryFile();
+        stagedCountyRegistry = null;
+        stagedCountyRegistryPath = null;
+    }
+
+    private void DiscardStagedCountyRegistryFile()
+    {
+        if (string.IsNullOrWhiteSpace(stagedCountyRegistryPath)) return;
+        string folder = Path.GetDirectoryName(draft.Path) ?? string.Empty;
+        string expectedPrefix = Path.Combine(Path.GetFullPath(folder), "county-parcel-registry.");
+        string candidate = Path.GetFullPath(stagedCountyRegistryPath);
+        if (!candidate.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase)
+            || !candidate.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        if (File.Exists(candidate)) File.Delete(candidate);
     }
 
     private static string? PreferField(IEnumerable<string> fields, params string[] fragments) => fields.FirstOrDefault(field => fragments.Any(fragment => field.Contains(fragment, StringComparison.OrdinalIgnoreCase)));

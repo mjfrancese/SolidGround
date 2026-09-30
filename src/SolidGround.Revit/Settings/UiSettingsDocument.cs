@@ -77,6 +77,13 @@ internal static class UiSettingsStore
         return new UiSettingsDraft(settings, version, draft.Path);
     }
 
+    /// <summary>Validates a proposed document before a companion staged file is published.</summary>
+    internal static void ValidateForSave(RevitSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        Validate(settings);
+    }
+
     internal static RevitSettings CreateDefault()
     {
         string exports = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SolidGround", "Exports");
