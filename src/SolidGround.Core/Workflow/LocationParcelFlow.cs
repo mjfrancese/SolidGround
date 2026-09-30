@@ -84,7 +84,7 @@ public sealed class LocationParcelFlow
         SelectedLocation = candidates.Count == 1 ? candidates[0] : null;
         _locationIsConfirmed = false;
         ClearParcels();
-        Stage = LocationParcelStage.Parcel;
+        Stage = candidates.Count == 0 ? LocationParcelStage.Location : LocationParcelStage.Parcel;
         return true;
     }
 
@@ -144,8 +144,13 @@ public sealed class LocationParcelFlow
         Stage = LocationParcelStage.Review;
     }
 
-    /// <summary>Returns to Location without discarding otherwise-valid lookup results.</summary>
-    public void ReturnToLocation() => Stage = LocationParcelStage.Location;
+    /// <summary>Returns to Location, retaining completed location candidates while invalidating parcel work.</summary>
+    public void ReturnToLocation()
+    {
+        checked { _sourceRevision++; }
+        ClearParcels();
+        Stage = LocationParcelStage.Location;
+    }
 
     /// <summary>True only while a host-owned asynchronous operation still matches this flow's input/source snapshot.</summary>
     public bool IsCurrent(LocationParcelLookupTicket ticket) =>

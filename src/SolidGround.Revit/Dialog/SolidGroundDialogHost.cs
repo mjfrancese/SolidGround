@@ -187,12 +187,18 @@ internal static class SolidGroundDialogHost
 
         if (!string.IsNullOrWhiteSpace(settings.LocalParcelFilePath))
         {
+            if (string.IsNullOrWhiteSpace(settings.LocalParcelFileSourceLabel) ||
+                string.IsNullOrWhiteSpace(settings.LocalParcelFileLicenseDisclaimerText))
+            {
+                return new FailedParcelSource(
+                    "The local parcel source requires its actual source label and license/disclaimer text. Open Settings, provide both values, and save before searching.");
+            }
+
             return new LocalParcelFileSource(new LocalParcelFileOptions
             {
                 Path = settings.LocalParcelFilePath,
-                SourceLabel = settings.LocalParcelFileSourceLabel ?? "Local parcel file",
-                LicenseDisclaimerText = settings.LocalParcelFileLicenseDisclaimerText
-                    ?? "No license/disclaimer text was configured for this local parcel file.",
+                SourceLabel = settings.LocalParcelFileSourceLabel,
+                LicenseDisclaimerText = settings.LocalParcelFileLicenseDisclaimerText,
             });
         }
 
@@ -200,9 +206,8 @@ internal static class SolidGroundDialogHost
     }
 
     /// <summary>
-    /// A deferred stand-in <see cref="IParcelBoundarySource"/>, returned only when
-    /// <see cref="CountyParcelRegistry.Load"/> fails inside <see cref="BuildParcelSource"/> (review finding,
-    /// major, fixed). Carries the captured failure message and raises it as an
+    /// A deferred stand-in <see cref="IParcelBoundarySource"/> for an invalid county registry or incomplete
+    /// local-file provenance. Carries the captured failure message and raises it as an
     /// <see cref="AutoGeoidCountyParcelSourceException"/> -- a <see cref="ParcelBoundarySourceException"/>
     /// subtype -- the first (and every) time <see cref="FindAsync"/> is actually called, so
     /// <see cref="SolidGroundDialogViewModel.FindParcel"/>'s existing, unchanged

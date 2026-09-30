@@ -50,6 +50,18 @@ public sealed class LocationParcelFlowTests
     }
 
     [Fact]
+    public void EmptyLocationResultKeepsTheOperatorAtTheFindStep()
+    {
+        LocationParcelFlow flow = new();
+
+        Assert.True(flow.TryApplyLocations(flow.BeginLocationLookup(), []));
+
+        Assert.Equal(LocationParcelStage.Location, flow.Stage);
+        Assert.Empty(flow.LocationCandidates);
+        Assert.Null(flow.SelectedLocation);
+    }
+
+    [Fact]
     public void ExplicitAreaCanAdvanceToReviewWithoutInventingAParcel()
     {
         LocationParcelFlow flow = new();

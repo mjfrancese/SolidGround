@@ -1,4 +1,6 @@
 using System.Windows.Threading;
+using System.Reflection;
+using System.Net.Http;
 using SolidGround.Core.Aois;
 using SolidGround.Core.Hosting;
 using SolidGround.Core.Metadata;
@@ -183,6 +185,172 @@ public sealed class SolidGroundDialogResumeTests
         });
     }
 
+    [Fact]
+    public void EmptyParcelLookupKeepsTheParcelStepAndExplainsHowToRecover()
+    {
+        StaTestHost.Run(() =>
+        {
+            SolidGroundDialogViewModel viewModel = new(CreateInputs(
+                UiSettingsStore.CreateDefault(), new EmptyParcelSource(), null, null));
+            viewModel.EntryMode = LocationEntryMode.Coordinates;
+            viewModel.LatitudeText = "41.59";
+            viewModel.LongitudeText = "-93.60";
+
+            viewModel.FindCommand.Execute(null);
+            PumpUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
+
+            Assert.Equal(SolidGroundDialogStep.Parcel, viewModel.CurrentStep);
+            Assert.Empty(viewModel.ParcelCandidates);
+            Assert.Contains("No parcel boundary was found", viewModel.ErrorText, StringComparison.Ordinal);
+            Assert.Contains("Settings", viewModel.ErrorText, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void BackInvalidatesAnInFlightParcelLookup()
+    {
+        StaTestHost.Run(() =>
+        {
+            DelayedParcelSource source = new();
+            SolidGroundDialogViewModel viewModel = new(CreateInputs(UiSettingsStore.CreateDefault(), source, null, null));
+            viewModel.EntryMode = LocationEntryMode.Coordinates;
+            viewModel.LatitudeText = "41.59";
+            viewModel.LongitudeText = "-93.60";
+            viewModel.FindCommand.Execute(null);
+            Assert.Single(source.Pending);
+
+            viewModel.BackCommand.Execute(null);
+            Assert.Equal(SolidGroundDialogStep.Location, viewModel.CurrentStep);
+
+            source.CompleteNext("late-parcel");
+            PumpUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
+            Assert.Equal(SolidGroundDialogStep.Location, viewModel.CurrentStep);
+            Assert.Empty(viewModel.ParcelCandidates);
+            Assert.False(viewModel.IsBusy);
+        });
+    }
+
+    [Fact]
+    public void FailedSettingsReconfigurationRevokesTheConfirmedParcelButKeepsTheLocationEditable()
+    {
+        StaTestHost.Run(() =>
+        {
+            RevitSettings initial = UiSettingsStore.CreateDefault();
+            RevitSettings saved = initial with
+            {
+                AddressAndParcel = initial.AddressAndParcel with { LocalParcelFilePath = "requires-a-new-source.geojson" },
+            };
+            SolidGroundDialogViewModel viewModel = new(CreateInputs(
+                initial,
+                new ImmediateParcelSource(),
+                _ => saved,
+                _ => throw new InvalidOperationException("Synthetic source configuration failure.")));
+            viewModel.EntryMode = LocationEntryMode.Coordinates;
+            viewModel.LatitudeText = "41.59";
+            viewModel.LongitudeText = "-93.60";
+            viewModel.FindCommand.Execute(null);
+            PumpUntil(() => viewModel.ParcelCandidates.Count == 1);
+            viewModel.SelectedParcelCandidate = Assert.Single(viewModel.ParcelCandidates);
+            viewModel.UseParcelCommand.Execute(null);
+            Assert.Equal(SolidGroundDialogStep.Review, viewModel.CurrentStep);
+
+            viewModel.EditSettingsCommand.Execute(null);
+
+            Assert.Equal(SolidGroundDialogStep.Parcel, viewModel.CurrentStep);
+            Assert.NotNull(viewModel.ConfirmedLocation);
+            Assert.Null(viewModel.SelectedParcelCandidate);
+            Assert.False(viewModel.CreateCommand.CanExecute(null));
+            Assert.Contains("Settings", viewModel.ErrorText, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void DisplayUnitChangePreservesTheCurrentExplicitAreaAndConfirmedParcel()
+    {
+        StaTestHost.Run(() =>
+        {
+            RevitSettings metres = UiSettingsStore.CreateDefault() with { DistanceDisplayFormat = DistanceDisplayFormat.Metres };
+            RevitSettings feet = metres with { DistanceDisplayFormat = DistanceDisplayFormat.UsSurveyFeet };
+            SolidGroundDialogViewModel explicitArea = new(CreateInputs(metres, null, _ => feet, null));
+            explicitArea.EntryMode = LocationEntryMode.Radius;
+            explicitArea.LatitudeText = "41.59";
+            explicitArea.LongitudeText = "-93.60";
+            explicitArea.RadiusMetersText = "10";
+            explicitArea.FindCommand.Execute(null);
+            Assert.Equal(SolidGroundDialogStep.Review, explicitArea.CurrentStep);
+
+            explicitArea.EditSettingsCommand.Execute(null);
+
+            Assert.Equal(SolidGroundDialogStep.Review, explicitArea.CurrentStep);
+            Assert.Equal(10d, DistanceDisplayConverter.ParseMeters(explicitArea.RadiusMetersText, DistanceDisplayFormat.UsSurveyFeet), 8);
+            explicitArea.CreateCommand.Execute(null);
+            Assert.Equal(10d, Assert.IsType<Wgs84RadiusAoi>(explicitArea.Result!.Aoi).Radius.Value, 8);
+
+            SolidGroundDialogViewModel parcel = new(CreateInputs(metres, new ImmediateParcelSource(), _ => feet, null));
+            parcel.EntryMode = LocationEntryMode.Radius;
+            parcel.LatitudeText = "41.59";
+            parcel.LongitudeText = "-93.60";
+            parcel.RadiusMetersText = "10";
+            parcel.EntryMode = LocationEntryMode.Coordinates;
+            parcel.FindCommand.Execute(null);
+            PumpUntil(() => parcel.ParcelCandidates.Count == 1);
+            ParcelProximityCandidate confirmed = Assert.Single(parcel.ParcelCandidates);
+            parcel.SelectedParcelCandidate = confirmed;
+            parcel.UseParcelCommand.Execute(null);
+
+            parcel.EditSettingsCommand.Execute(null);
+
+            Assert.Equal(SolidGroundDialogStep.Review, parcel.CurrentStep);
+            Assert.Equal(confirmed, parcel.SelectedParcelCandidate);
+        });
+    }
+
+    [Fact]
+    public void CorrectedSearchStartsBeforeAnOlderNonCooperativeLookupFinishes()
+    {
+        StaTestHost.Run(() =>
+        {
+            DelayedGeocoder geocoder = new();
+            SolidGroundDialogViewModel viewModel = new(CreateInputs(
+                UiSettingsStore.CreateDefault(), new ImmediateParcelSource(), null, null) with { Geocoder = geocoder });
+            viewModel.AddressText = "Synthetic stale address";
+            viewModel.FindCommand.Execute(null);
+            Assert.Single(geocoder.Pending);
+
+            viewModel.AddressText = "Synthetic corrected address";
+            Assert.True(viewModel.FindCommand.CanExecute(null));
+            viewModel.FindCommand.Execute(null);
+            Assert.Equal(2, geocoder.Pending.Count);
+
+            geocoder.FailNext();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            Assert.True(viewModel.IsBusy);
+            Assert.Null(viewModel.ErrorText);
+
+            geocoder.CompleteNext("Synthetic corrected result");
+            PumpUntil(() => viewModel.ConfirmedLocation?.MatchedAddress == "Synthetic corrected result" && !viewModel.IsBusy);
+            Assert.Null(viewModel.ErrorText);
+            Assert.False(viewModel.IsBusy);
+        });
+    }
+
+    [Fact]
+    public async Task MissingLocalParcelTermsAreDeferredAsAnActionableSettingsError()
+    {
+        RevitAddressAndParcelSettings settings = new(
+            AddressGeocoderProvider.Census, null, null, "synthetic-missing-parcels.geojson", null, null, null);
+        MethodInfo build = typeof(SolidGroundDialogHost).GetMethod("BuildParcelSource", BindingFlags.NonPublic | BindingFlags.Static)!;
+        using HttpClient client = new();
+        IParcelBoundarySource source = Assert.IsAssignableFrom<IParcelBoundarySource>(build.Invoke(null, [settings, client]));
+
+        ParcelBoundarySourceException error = await Assert.ThrowsAnyAsync<ParcelBoundarySourceException>(
+            () => source.FindAsync(new ParcelPointQuery(41.59d, -93.60d), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("Settings", error.Message, StringComparison.Ordinal);
+        Assert.Contains("source label", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("license", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static SolidGroundDialogInputs CreateInputs(
         RevitSettings settings,
         IParcelBoundarySource? parcelSource,
@@ -281,6 +449,8 @@ public sealed class SolidGroundDialogResumeTests
 
         internal void CompleteNext(string address) => Pending.Dequeue().SetResult(
             new AddressGeocodeAcquisition([new AddressGeocodeCandidate(41.59d, -93.60d, address, "Synthetic attribution")]));
+
+        internal void FailNext() => Pending.Dequeue().SetException(new InvalidOperationException("Synthetic non-cooperative failure."));
     }
 
     private sealed class ImmediateParcelSource : IParcelBoundarySource
@@ -295,6 +465,12 @@ public sealed class SolidGroundDialogResumeTests
                 legalDescription: "Synthetic legal description.");
             return ValueTask.FromResult(new ParcelBoundaryAcquisition([candidate]));
         }
+    }
+
+    private sealed class EmptyParcelSource : IParcelBoundarySource
+    {
+        public ValueTask<ParcelBoundaryAcquisition> FindAsync(ParcelBoundaryQuery query, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(new ParcelBoundaryAcquisition([]));
     }
 
     private static HorizontalReference GeographicReference() => new(

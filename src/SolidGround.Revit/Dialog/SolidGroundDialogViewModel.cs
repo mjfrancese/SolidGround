@@ -38,6 +38,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private string _estimateSummary = string.Empty;
     private bool _addressWasGeocoded;
     private string? _geocodedAddress;
+    private bool _suppressRadiusInputInvalidation;
 
     internal event EventHandler? CloseRequested;
 
@@ -187,7 +188,13 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     partial void OnSouthTextChanged(string value) => InvalidateInput();
     partial void OnEastTextChanged(string value) => InvalidateInput();
     partial void OnNorthTextChanged(string value) => InvalidateInput();
-    partial void OnRadiusMetersTextChanged(string value) => InvalidateInput();
+    partial void OnRadiusMetersTextChanged(string value)
+    {
+        if (!_suppressRadiusInputInvalidation)
+        {
+            InvalidateInput();
+        }
+    }
     partial void OnLocalGeometryTextChanged(string value) => InvalidateInput();
     partial void OnLocalGeometryFormatChanged(string value) => InvalidateInput();
 
@@ -205,7 +212,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 
     private bool CanFind() => !IsBusy && CurrentStep == SolidGroundDialogStep.Location;
 
-    [RelayCommand(CanExecute = nameof(CanFind), IncludeCancelCommand = true)]
+    [RelayCommand(CanExecute = nameof(CanFind), IncludeCancelCommand = true, AllowConcurrentExecutions = true)]
     private async Task FindAsync(CancellationToken cancellationToken)
     {
         ErrorText = null;
@@ -257,7 +264,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
                 candidates = acquisition.Candidates;
             }
 
-            if (cancellationToken.IsCancellationRequested || !_flow.TryApplyLocations(ticket, candidates))
+            if (cancellationToken.IsCancellationRequested || !IsCurrentOperation(operation) || !_flow.TryApplyLocations(ticket, candidates))
             {
                 return;
             }
@@ -266,6 +273,13 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             _geocodedAddress = directCandidate is null ? AddressText.Trim() : null;
 
             SelectedGeocodeCandidate = _flow.SelectedLocation;
+            if (candidates.Count == 0)
+            {
+                ErrorText = "No address matches were returned. Correct the address and try Find again.";
+                NotifyFlowChanged();
+                return;
+            }
+
             NotifyFlowChanged();
             if (candidates.Count == 1)
             {
@@ -274,7 +288,10 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         }
         catch (AddressGeocoderException ex) { SetErrorIfCurrent(ticket, operation, ex.Message); }
         catch (OperationCanceledException) { SetErrorIfCurrent(ticket, operation, "The location lookup was cancelled."); }
-        catch (Exception) { SetErrorIfCurrent(ticket, operation, "The location lookup could not complete safely."); }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            SetErrorIfCurrent(ticket, operation, "The location lookup could not complete safely.");
+        }
         finally
         {
             if (IsCurrentOperation(operation))
@@ -318,15 +335,22 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             double nearbySearchRadiusMeters = _nearbySearchRadiusMeters;
             ParcelProximityAcquisition acquisition = await NearbyParcelBoundaryFinder.FindAsync(
                 parcelSource, location.Latitude, location.Longitude, nearbySearchRadiusMeters, timeout.Token).ConfigureAwait(true);
-            if (!cancellationToken.IsCancellationRequested && _flow.TryApplyParcels(ticket, acquisition))
+            if (!cancellationToken.IsCancellationRequested && IsCurrentOperation(operation) && _flow.TryApplyParcels(ticket, acquisition))
             {
                 SelectedParcelCandidate = null;
+                if (acquisition.Candidates.Count == 0)
+                {
+                    ErrorText = "No parcel boundary was found for this location. Try another address or coordinate, or use Settings to verify the configured parcel source.";
+                }
                 NotifyFlowChanged();
             }
         }
         catch (ParcelBoundarySourceException ex) { SetErrorIfCurrent(ticket, operation, ex.Message); }
         catch (OperationCanceledException) { SetErrorIfCurrent(ticket, operation, "The parcel lookup was cancelled."); }
-        catch (Exception) { SetErrorIfCurrent(ticket, operation, "The parcel lookup could not complete safely."); }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            SetErrorIfCurrent(ticket, operation, "The parcel lookup could not complete safely.");
+        }
         finally
         {
             if (IsCurrentOperation(operation))
@@ -351,6 +375,8 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     [RelayCommand]
     private void Back()
     {
+        FindCancelCommand.Execute(null);
+        InvalidateCurrentOperation();
         if (CurrentStep == SolidGroundDialogStep.Review)
         {
             _flow.ReturnToParcel();
@@ -399,32 +425,24 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
+            ApplySettingsPresentation(edited, radiusMetersBeforeEdit);
+            FindCancelCommand.Execute(null);
+            InvalidateCurrentOperation();
+            _flow.ChangeSource();
+            SelectedParcelCandidate = null;
+            RefreshEstimate();
+            NotifyFlowChanged();
             ErrorText = "Settings were saved, but the updated lookup source could not be configured. Reopen Settings and correct the source before searching.";
             return;
         }
         lookupConfigurationChanged |= services.CredentialRevision != _credentialRevision;
-        _effectiveSettings = edited;
         _geocoder = services.Geocoder;
         _geocoderProvider = services.GeocoderProvider;
         _parcelSource = services.ParcelSource;
         _nearbySearchRadiusMeters = services.NearbySearchRadiusMeters;
         _networkTimeoutSeconds = services.NetworkTimeoutSeconds;
         _credentialRevision = services.CredentialRevision;
-        if (radiusMetersBeforeEdit is { } radiusMeters)
-        {
-            RadiusMetersText = DistanceDisplayConverter.FormatMeters(radiusMeters, edited.DistanceDisplayFormat);
-        }
-        PointBudget = edited.Request.Simplification.PointBudget;
-        SelectedOutputUnit = edited.Request.OutputUnit;
-        OnPropertyChanged(nameof(EffectiveSettings));
-        OnPropertyChanged(nameof(SettingsSummary));
-        OnPropertyChanged(nameof(SourceSummary));
-        OnPropertyChanged(nameof(ExtensionSummary));
-        OnPropertyChanged(nameof(TerrainExtensionMeters));
-        OnPropertyChanged(nameof(TerrainExtensionDisplay));
-        OnPropertyChanged(nameof(RadiusLabel));
-        RefreshEstimate();
-        OnPropertyChanged(nameof(NativePointBudgetWarning));
+        ApplySettingsPresentation(edited, radiusMetersBeforeEdit);
         if (lookupConfigurationChanged)
         {
             // The revision is the authority for non-cooperative requests. Cancellation is best-effort only.
@@ -584,6 +602,35 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         {
             ErrorText = message;
         }
+    }
+
+    private void ApplySettingsPresentation(RevitSettings edited, double? radiusMetersBeforeEdit)
+    {
+        _effectiveSettings = edited;
+        if (radiusMetersBeforeEdit is { } radiusMeters)
+        {
+            _suppressRadiusInputInvalidation = true;
+            try
+            {
+                RadiusMetersText = DistanceDisplayConverter.FormatMeters(radiusMeters, edited.DistanceDisplayFormat);
+            }
+            finally
+            {
+                _suppressRadiusInputInvalidation = false;
+            }
+        }
+
+        PointBudget = edited.Request.Simplification.PointBudget;
+        SelectedOutputUnit = edited.Request.OutputUnit;
+        OnPropertyChanged(nameof(EffectiveSettings));
+        OnPropertyChanged(nameof(SettingsSummary));
+        OnPropertyChanged(nameof(SourceSummary));
+        OnPropertyChanged(nameof(ExtensionSummary));
+        OnPropertyChanged(nameof(TerrainExtensionMeters));
+        OnPropertyChanged(nameof(TerrainExtensionDisplay));
+        OnPropertyChanged(nameof(RadiusLabel));
+        RefreshEstimate();
+        OnPropertyChanged(nameof(NativePointBudgetWarning));
     }
 
     private static readonly HorizontalReference Wgs84Reference = new(
