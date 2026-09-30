@@ -14,16 +14,12 @@ using SolidGround.Revit.Diagnostics;
 namespace SolidGround.Revit.Settings;
 
 /// <summary>
-/// Reads and (once, when absent) writes the one flat settings document at a caller-supplied path (normally
-/// <see cref="RevitSettingsLocator.Resolve"/>'s result). See SolidGround Issue #15's design record §2.4 row
-/// 22 and §4.4.
+/// Opens per-user Settings and reads the flat legacy document for explicit import. The retained template
+/// helpers support legacy callers; interactive persistence belongs to <see cref="UiSettingsStore"/>.
 /// </summary>
 /// <remarks>
-/// AGENTS.md's general settings convention calls for "a mutex plus digest-conflict check plus atomic write".
-/// The digest-conflict check has no live trigger here: <see cref="EnsureTemplateExists"/> only ever creates
-/// the file when it is absent and never rewrites an existing one (even an invalid one), so no read-modify-
-/// write cycle -- the only case a digest conflict could arise from -- ever happens in this milestone. A
-/// future settings-editing feature that performs a real read-modify-write would need to add it.
+/// UiSettingsStore performs mutex/digest/atomic persistence. <see cref="EnsureTemplateExists"/> only creates
+/// an absent legacy document and never rewrites one; interactive commands do not call that helper.
 /// </remarks>
 internal static class RevitSettingsIo
 {
@@ -170,7 +166,7 @@ internal static class RevitSettingsIo
             + source + Environment.NewLine
             + $"Local origin: {legacy.Request.LocalOrigin.Kind}; output: {legacy.Request.OutputUnit}; terrain extension: {legacy.TerrainExtensionMeters.ToString("R", CultureInfo.InvariantCulture)} m." + Environment.NewLine
             + parcelSource + Environment.NewLine
-            + "Paths shown above are rebased from the legacy file folder. Shared-coordinate writing is turned off. The legacy bytes remain unchanged until an explicit Save creates per-user settings." + Environment.NewLine + Environment.NewLine
+            + "Paths shown above are rebased from the legacy file folder. Shared-coordinate writing is turned off. The legacy bytes remain unchanged; an explicit Save creates a separate per-user settings document." + Environment.NewLine + Environment.NewLine
             + "Yes: review/import. No: start new settings. Cancel: abort.";
     }
     /// <summary>How long <see cref="EnsureTemplateExists"/> waits to acquire the cross-process settings lock before reporting a lock problem (orchestrator decision (c)).</summary>
