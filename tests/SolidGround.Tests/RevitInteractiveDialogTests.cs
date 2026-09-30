@@ -59,7 +59,8 @@ public sealed class RevitInteractiveDialogTests
     {
         string dialog = Read("SolidGroundDialog.cs");
         string viewModel = Read("SolidGroundDialogViewModel.cs");
-        foreach (string binding in Regex.Matches(dialog, @"nameof\(SolidGroundDialogViewModel\.([A-Za-z0-9_]+)\)").Select(match => match.Groups[1].Value).Where(name => !name.EndsWith("Command", StringComparison.Ordinal)).Distinct(StringComparer.Ordinal))
+        string[] hostSuppliedSummaryBindings = ["RadiusLabel", "LocationAttribution", "NativePointBudgetWarning"];
+        foreach (string binding in Regex.Matches(dialog, @"nameof\(SolidGroundDialogViewModel\.([A-Za-z0-9_]+)\)").Select(match => match.Groups[1].Value).Where(name => !name.EndsWith("Command", StringComparison.Ordinal) && !hostSuppliedSummaryBindings.Contains(name, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal))
         {
             bool explicitPublicProperty = Regex.IsMatch(viewModel, @"public\s+(?:[A-Za-z0-9_?.<>]+\s+)+" + Regex.Escape(binding) + @"\b");
             string backingName = "_" + char.ToLowerInvariant(binding[0]) + binding[1..];
@@ -145,11 +146,12 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("class ParcelBoundaryPreview", all, StringComparison.Ordinal);
         Assert.Contains("Canvas", all, StringComparison.Ordinal);
         Assert.DoesNotContain("WebView", all, StringComparison.Ordinal);
-        Assert.Contains("ParcelBoundaryAoiFactory.FromCandidate", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("selected.Candidate.Boundary", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
         Assert.Contains("StrokeDashArray", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
         Assert.Contains("SelectedGeocodeCandidate", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
         Assert.Contains("DialogPalette palette", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
-        Assert.Contains("source request envelope, not the projected terrain-buffer boundary", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("ParcelTerrainPreview.Build", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("approximate terrain extension", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
         Assert.Contains("N ↑", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
     }
 
@@ -164,6 +166,10 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("Candidate.ComputedAreaSquareMeters", source, StringComparison.Ordinal);
         Assert.Contains("Candidate.SourceIdentity", source, StringComparison.Ordinal);
         Assert.Contains("SelectedParcelSourceTerms", source, StringComparison.Ordinal);
+        Assert.Contains("nameof(SolidGroundDialogViewModel.LocationAttribution)", source, StringComparison.Ordinal);
+        Assert.Contains("nameof(SolidGroundDialogViewModel.RadiusLabel)", source, StringComparison.Ordinal);
+        Assert.Contains("nameof(SolidGroundDialogViewModel.NativePointBudgetWarning)", source, StringComparison.Ordinal);
+        Assert.Contains("new GridLength(55d, GridUnitType.Star)", source, StringComparison.Ordinal);
         Assert.Contains("openstreetmap.org/?mlat=", source, StringComparison.Ordinal);
         Assert.Contains("portal.opentopography.org", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WebView", source, StringComparison.Ordinal);
