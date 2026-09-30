@@ -225,6 +225,48 @@ public sealed class TerrainExportBundleReaderTests
     }
 
     [Fact]
+    public void ReadProvenancePreservesCollectionDatesButLeavesAvailabilityUnknownForASchemaVersionFourDocument()
+    {
+        CollectionPeriod period = new(new DateOnly(2019, 4, 1), new DateOnly(2019, 4, 3));
+        TerrainExportBundle current = TerrainExportBundleRenderer.Render(
+            CreatePayload(collectionPeriod: period),
+            "reader-schema-four-legacy-with-dates");
+        string documentText = Encoding.UTF8.GetString(current.DocumentBytes.Span);
+        using JsonDocument document = JsonDocument.Parse(current.DocumentBytes);
+
+        JsonElement source = document.RootElement.GetProperty("provenance").GetProperty("source");
+        JsonElement simplification = document.RootElement.GetProperty("provenance").GetProperty("simplification");
+        string legacyText = RemoveTrailingJsonProperty(documentText, simplification, "coverageFloorFraction");
+        legacyText = RemoveJsonProperty(legacyText, source, "collectionPeriodAvailability");
+        legacyText = ReplaceExactlyOnce(
+            legacyText,
+            $"\"schemaVersion\": {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}",
+            "\"schemaVersion\": 4");
+
+        TerrainProvenance provenance = TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(legacyText));
+
+        Assert.Equal(period, provenance.Source.CollectionPeriod);
+        Assert.Null(provenance.Source.CollectionPeriodAvailability);
+    }
+
+    [Fact]
+    public void ReadProvenanceRejectsAVersionFiveDocumentThatClaimsDatesWereNotReported()
+    {
+        CollectionPeriod period = new(new DateOnly(2019, 4, 1), new DateOnly(2019, 4, 3));
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(
+            CreatePayload(collectionPeriod: period),
+            "reader-contradictory-collection-status");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+        string tamperedText = ReplaceExactlyOnce(
+            documentText,
+            "\"collectionPeriodAvailability\": \"Reported\"",
+            "\"collectionPeriodAvailability\": \"NotReportedBySource\"");
+
+        Assert.Throws<TerrainExportException>(
+            () => TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(tamperedText)));
+    }
+
+    [Fact]
     public void ReadProvenanceRoundTripsANonDefaultCoverageFloorFractionBitForBit()
     {
         const double coverageFloorFraction = 0.3d;

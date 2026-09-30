@@ -118,7 +118,7 @@ public sealed record ElevationSourceMetadata
             throw new ArgumentException("A reported collection period requires dates.", nameof(collectionPeriodAvailability));
         }
 
-        if (collectionPeriod is not null && collectionPeriodAvailability != global::SolidGround.Core.Sources.CollectionPeriodAvailability.Reported)
+        if (!isLegacyAvailabilityUnknown && collectionPeriod is not null && collectionPeriodAvailability != global::SolidGround.Core.Sources.CollectionPeriodAvailability.Reported)
         {
             throw new ArgumentException("Collection-period dates must be marked reported.", nameof(collectionPeriodAvailability));
         }
