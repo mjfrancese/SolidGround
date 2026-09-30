@@ -9,7 +9,8 @@ public sealed record TerrainVertexCandidateCollision(int ActualIndex, IReadOnlyL
 /// <summary>The result of a tolerance-bounded, injective expected-to-actual vertex match.</summary>
 public sealed record TerrainVertexMatchResult(
     IReadOnlyList<TerrainVertexMismatch> UnmatchedExpected,
-    IReadOnlyList<TerrainVertexCandidateCollision> CandidateCollisions)
+    IReadOnlyList<TerrainVertexCandidateCollision> CandidateCollisions,
+    int CandidateComparisons)
 {
     public bool Passed => UnmatchedExpected.Count == 0;
 }
@@ -33,22 +34,26 @@ public static class TerrainVertexMatcher
             throw new ArgumentOutOfRangeException(nameof(tolerance), "Tolerance must be finite and non-negative.");
         }
 
+        Dictionary<Bucket, List<int>> spatialIndex = BuildSpatialIndex(actual, tolerance);
         List<int>[] candidates = new List<int>[expected.Count];
-        List<int>[] reverseCandidates = new List<int>[actual.Count];
-        for (int actualIndex = 0; actualIndex < actual.Count; actualIndex++)
-        {
-            reverseCandidates[actualIndex] = [];
-        }
+        Dictionary<int, List<int>> reverseCandidates = [];
+        int comparisons = 0;
 
         for (int expectedIndex = 0; expectedIndex < expected.Count; expectedIndex++)
         {
             candidates[expectedIndex] = [];
-            for (int actualIndex = 0; actualIndex < actual.Count; actualIndex++)
+            foreach (int actualIndex in CandidateIndices(expected[expectedIndex], spatialIndex, tolerance))
             {
+                comparisons++;
                 if (WithinTolerance(expected[expectedIndex], actual[actualIndex], tolerance))
                 {
                     candidates[expectedIndex].Add(actualIndex);
-                    reverseCandidates[actualIndex].Add(expectedIndex);
+                    if (!reverseCandidates.TryGetValue(actualIndex, out List<int>? reverse))
+                    {
+                        reverse = [];
+                        reverseCandidates.Add(actualIndex, reverse);
+                    }
+                    reverse.Add(expectedIndex);
                 }
             }
 
@@ -59,7 +64,7 @@ public static class TerrainVertexMatcher
         int[] expectedToActual = Enumerable.Repeat(-1, expected.Count).ToArray();
         for (int expectedIndex = 0; expectedIndex < expected.Count; expectedIndex++)
         {
-            bool[] visitedActual = new bool[actual.Count];
+            HashSet<int> visitedActual = [];
             TryAssign(expectedIndex, candidates, actualToExpected, expectedToActual, visitedActual);
         }
 
@@ -84,27 +89,27 @@ public static class TerrainVertexMatcher
         }
 
         List<TerrainVertexCandidateCollision> collisions = [];
-        for (int actualIndex = 0; actualIndex < reverseCandidates.Length; actualIndex++)
+        foreach ((int actualIndex, List<int> contenders) in reverseCandidates.OrderBy(pair => pair.Key))
         {
-            if (reverseCandidates[actualIndex].Count > 1)
+            if (contenders.Count > 1)
             {
-                collisions.Add(new TerrainVertexCandidateCollision(actualIndex, reverseCandidates[actualIndex].AsReadOnly()));
+                collisions.Add(new TerrainVertexCandidateCollision(actualIndex, contenders.AsReadOnly()));
             }
         }
 
-        return new TerrainVertexMatchResult(unmatched.AsReadOnly(), collisions.AsReadOnly());
+        return new TerrainVertexMatchResult(unmatched.AsReadOnly(), collisions.AsReadOnly(), comparisons);
     }
 
-    private static bool TryAssign(int expectedIndex, List<int>[] candidates, int[] actualToExpected, int[] expectedToActual, bool[] visitedActual)
+    private static bool TryAssign(int expectedIndex, List<int>[] candidates, int[] actualToExpected, int[] expectedToActual, HashSet<int> visitedActual)
     {
         foreach (int actualIndex in candidates[expectedIndex])
         {
-            if (visitedActual[actualIndex])
+            if (visitedActual.Contains(actualIndex))
             {
                 continue;
             }
 
-            visitedActual[actualIndex] = true;
+            visitedActual.Add(actualIndex);
             int incumbent = actualToExpected[actualIndex];
             if (incumbent < 0 || TryAssign(incumbent, candidates, actualToExpected, expectedToActual, visitedActual))
             {
@@ -115,6 +120,49 @@ public static class TerrainVertexMatcher
         }
 
         return false;
+    }
+
+    private static Dictionary<Bucket, List<int>> BuildSpatialIndex(IReadOnlyList<Coordinate3D> actual, double tolerance)
+    {
+        Dictionary<Bucket, List<int>> index = [];
+        for (int indexValue = 0; indexValue < actual.Count; indexValue++)
+        {
+            Bucket bucket = Bucket.For(actual[indexValue], tolerance);
+            if (!index.TryGetValue(bucket, out List<int>? values))
+            {
+                values = [];
+                index.Add(bucket, values);
+            }
+            values.Add(indexValue);
+        }
+        return index;
+    }
+
+    private static List<int> CandidateIndices(Coordinate3D expected, Dictionary<Bucket, List<int>> index, double tolerance)
+    {
+        if (tolerance == 0d)
+        {
+            return index.TryGetValue(Bucket.For(expected, tolerance), out List<int>? exact) ? exact : [];
+        }
+
+        Bucket center = Bucket.For(expected, tolerance);
+        List<int> result = [];
+        for (long x = center.X - 1; x <= center.X + 1; x++)
+        for (long y = center.Y - 1; y <= center.Y + 1; y++)
+        for (long z = center.Z - 1; z <= center.Z + 1; z++)
+        {
+            if (index.TryGetValue(new Bucket(x, y, z), out List<int>? values)) result.AddRange(values);
+        }
+        return result;
+    }
+
+    private readonly record struct Bucket(long X, long Y, long Z)
+    {
+        internal static Bucket For(Coordinate3D point, double tolerance) => tolerance == 0d
+            ? new(BitConverter.DoubleToInt64Bits(point.X), BitConverter.DoubleToInt64Bits(point.Y), BitConverter.DoubleToInt64Bits(point.Elevation))
+            : new(ToCell(point.X, tolerance), ToCell(point.Y, tolerance), ToCell(point.Elevation, tolerance));
+
+        private static long ToCell(double value, double size) => checked((long)Math.Floor(value / size));
     }
 
     private static bool WithinTolerance(Coordinate3D expected, Coordinate3D actual, double tolerance) =>

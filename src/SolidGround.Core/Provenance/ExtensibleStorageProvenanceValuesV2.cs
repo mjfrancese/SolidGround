@@ -12,7 +12,7 @@ public sealed record ExtensibleStorageProvenanceValuesV2(
     bool HasStableParcelId, string StableParcelId, bool HasLegalDescription, string LegalDescription,
     string ParcelLicenseDisclaimerText, bool HasSourceAttribution, string SourceAttribution,
     double CoverageFloorFraction, string CollectionPeriodAvailability, TerrainIdentity Identity,
-    string StoredOriginalUniqueId, string StoredOriginalDocumentCreationGuid)
+    string NativeVertexFingerprint, string StoredOriginalUniqueId, string StoredOriginalDocumentCreationGuid)
 {
     public static ExtensibleStorageProvenanceValuesV2 From(
         TerrainExportPayload payload, TerrainIdentity identity, double coverageFloorFraction,
@@ -43,7 +43,7 @@ public sealed record ExtensibleStorageProvenanceValuesV2(
             hasParcel, hasParcel ? parcel!.SourceKind.ToString() : string.Empty, hasParcel ? parcel!.SourceIdentity : string.Empty, hasParcel ? parcel!.ParcelId : string.Empty,
             hasStableParcelId, hasStableParcelId ? parcel!.StableParcelId! : string.Empty, hasLegalDescription, hasLegalDescription ? parcel!.LegalDescription! : string.Empty,
             hasParcel ? parcel!.LicenseDisclaimerText : string.Empty, hasAttribution, payload.Provenance.Source.Attribution ?? string.Empty,
-            coverageFloorFraction, baseValues.HasCollectionPeriod ? "reported" : "notReportedBySource", identity, string.Empty, string.Empty);
+            coverageFloorFraction, baseValues.HasCollectionPeriod ? "reported" : "notReportedBySource", identity, string.Empty, string.Empty, string.Empty);
     }
 
     /// <summary>Supplies Revit-owned element/document identities after Core has assembled the portable values.</summary>
@@ -52,5 +52,11 @@ public sealed record ExtensibleStorageProvenanceValuesV2(
         ArgumentException.ThrowIfNullOrWhiteSpace(uniqueId);
         ArgumentException.ThrowIfNullOrWhiteSpace(documentCreationGuid);
         return this with { StoredOriginalUniqueId = uniqueId, StoredOriginalDocumentCreationGuid = documentCreationGuid };
+    }
+
+    public ExtensibleStorageProvenanceValuesV2 WithNativeVertexFingerprint(string fingerprint)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
+        return this with { NativeVertexFingerprint = fingerprint };
     }
 }

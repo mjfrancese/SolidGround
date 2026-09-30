@@ -38,6 +38,7 @@ public static class ExtensibleStorageProvenanceSchemaV2
         new("terrainContentSignatureAlgorithm", typeof(string), ProvenanceFieldSpec.None, "Canonical content signature algorithm."),
         new("terrainContentSignature", typeof(string), ProvenanceFieldSpec.None, "SHA-256 canonical content signature."),
         new("terrainPointFrameHash", typeof(string), ProvenanceFieldSpec.None, "SHA-256 canonical point set and frame hash."),
+        new("nativeVertexFingerprint", typeof(string), ProvenanceFieldSpec.None, "SHA-256 order-independent fingerprint of Revit's verified native slab-shape vertices."),
         new("storedOriginalUniqueId", typeof(string), ProvenanceFieldSpec.None, "Creating element UniqueId."),
         new("storedOriginalDocumentCreationGuid", typeof(string), ProvenanceFieldSpec.None, "Creating document CreationGUID."),
     ];

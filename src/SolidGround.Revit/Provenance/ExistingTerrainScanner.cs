@@ -42,6 +42,12 @@ internal static class ExistingTerrainScanner
                         Require(entity.Get<string>("terrainContentSignatureAlgorithm"), elementId, "terrainContentSignatureAlgorithm"),
                         Require(entity.Get<string>("terrainContentSignature"), elementId, "terrainContentSignature"),
                         Require(entity.Get<string>("terrainPointFrameHash"), elementId, "terrainPointFrameHash"));
+                    string storedNativeFingerprint = Require(entity.Get<string>("nativeVertexFingerprint"), elementId, "nativeVertexFingerprint");
+                    string currentNativeFingerprint = ProvenanceEntityWriterV2.NativeVertexFingerprint(topography);
+                    if (!string.Equals(storedNativeFingerprint, currentNativeFingerprint, StringComparison.Ordinal))
+                    {
+                        throw new ExistingTerrainScanException($"SolidGround v2 provenance on element {elementId} does not match its current native terrain vertices; it was edited or is stale.");
+                    }
                     v2Records.Add(new ExistingTerrainRecord(elementId, identity,
                         Require(entity.Get<string>("storedOriginalUniqueId"), elementId, "storedOriginalUniqueId"), topography.UniqueId,
                         Require(entity.Get<string>("storedOriginalDocumentCreationGuid"), elementId, "storedOriginalDocumentCreationGuid")));

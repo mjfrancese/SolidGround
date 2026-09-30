@@ -36,10 +36,12 @@ internal static class ProvenanceSchemaAdapterV2
             if (field.Spec == ProvenanceFieldSpec.Length)
             {
                 fieldBuilder.SetSpec(SpecTypeId.Length);
+                RequireMeasurableUnit(field.Name, SpecTypeId.Length, UnitTypeId.Meters);
             }
             else if (field.Spec == ProvenanceFieldSpec.Number)
             {
                 fieldBuilder.SetSpec(SpecTypeId.Number);
+                RequireMeasurableUnit(field.Name, SpecTypeId.Number, UnitTypeId.General);
             }
         }
 
@@ -60,9 +62,38 @@ internal static class ProvenanceSchemaAdapterV2
         }
 
         Dictionary<string, Field> actual = schema.ListFields().ToDictionary(field => field.FieldName, StringComparer.Ordinal);
-        if (actual.Count != ExtensibleStorageProvenanceSchemaV2.Fields.Count || ExtensibleStorageProvenanceSchemaV2.Fields.Any(field => !actual.TryGetValue(field.Name, out Field? value) || value.ValueType != field.ClrType))
+        if (actual.Count != ExtensibleStorageProvenanceSchemaV2.Fields.Count)
         {
             throw new ProvenanceAttachmentException("A registered SolidGround v2 Extensible Storage schema has a different field shape.");
+        }
+
+        foreach (ProvenanceFieldDefinition expected in ExtensibleStorageProvenanceSchemaV2.Fields)
+        {
+            if (!actual.TryGetValue(expected.Name, out Field? field) || field.ValueType != expected.ClrType)
+            {
+                throw new ProvenanceAttachmentException($"A registered SolidGround v2 Extensible Storage schema has a missing or mistyped '{expected.Name}' field.");
+            }
+
+            ForgeTypeId actualSpec = field.GetSpecTypeId();
+            ForgeTypeId? requiredSpec = expected.Spec switch
+            {
+                ProvenanceFieldSpec.None => null,
+                ProvenanceFieldSpec.Length => SpecTypeId.Length,
+                ProvenanceFieldSpec.Number => SpecTypeId.Number,
+                _ => throw new ProvenanceAttachmentException($"SolidGround v2 field '{expected.Name}' has an unknown specification."),
+            };
+            if (requiredSpec is null ? !actualSpec.Empty() : actualSpec.Empty() || !string.Equals(actualSpec.TypeId, requiredSpec.TypeId, StringComparison.Ordinal))
+            {
+                throw new ProvenanceAttachmentException($"A registered SolidGround v2 Extensible Storage schema has an incompatible specification for '{expected.Name}'.");
+            }
+        }
+    }
+
+    private static void RequireMeasurableUnit(string fieldName, ForgeTypeId spec, ForgeTypeId unit)
+    {
+        if (!UnitUtils.IsMeasurableSpec(spec) || !UnitUtils.IsValidUnit(spec, unit))
+        {
+            throw new ProvenanceAttachmentException($"SolidGround v2 field '{fieldName}' has an invalid Revit measurable spec/unit pair.");
         }
     }
 }

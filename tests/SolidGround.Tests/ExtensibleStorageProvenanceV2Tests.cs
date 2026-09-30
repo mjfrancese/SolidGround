@@ -11,7 +11,7 @@ public sealed class ExtensibleStorageProvenanceV2Tests
         Assert.Equal(2, ExtensibleStorageProvenanceSchemaV2.CurrentVersion);
         Assert.NotEqual(ExtensibleStorageProvenanceSchema.SchemaGuid, ExtensibleStorageProvenanceSchemaV2.SchemaGuid);
         Assert.Equal(36, ExtensibleStorageProvenanceSchemaV2.Fields.Take(36).Count());
-        Assert.Equal(63, ExtensibleStorageProvenanceSchemaV2.Fields.Count);
+        Assert.Equal(64, ExtensibleStorageProvenanceSchemaV2.Fields.Count);
         Assert.All(ExtensibleStorageProvenanceSchemaV2.Fields.Where(field => field.ClrType == typeof(double)),
             field => Assert.True(field.Spec is ProvenanceFieldSpec.Length or ProvenanceFieldSpec.Number));
     }
@@ -24,7 +24,7 @@ public sealed class ExtensibleStorageProvenanceV2Tests
         [
             "hasAddressParcel", "geocodeQueryText", "parcelSourceIdentity", "stableParcelId", "sourceAttribution",
             "coverageFloorFraction", "collectionPeriodAvailability", "terrainIdentityVersion", "terrainIdentityKind",
-            "terrainIdentityStem", "terrainContentSignature", "terrainPointFrameHash", "storedOriginalUniqueId",
+            "terrainIdentityStem", "terrainContentSignature", "terrainPointFrameHash", "nativeVertexFingerprint", "storedOriginalUniqueId",
             "storedOriginalDocumentCreationGuid",
         ];
 

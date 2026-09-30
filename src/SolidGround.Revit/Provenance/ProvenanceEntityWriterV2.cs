@@ -23,7 +23,8 @@ internal static class ProvenanceEntityWriterV2
         ExtensibleStorageProvenanceValuesV2 expected = ExtensibleStorageProvenanceValuesV2.From(
             payload, identity, coverageFloorFraction, BuildIdentity.Current.InformationalVersion,
             BuildIdentity.Current.ModuleVersionId, BuildIdentity.Current.Sha256)
-            .WithStoredOriginalElementIdentity(toposolid.UniqueId, document.CreationGUID.ToString("D", CultureInfo.InvariantCulture));
+            .WithStoredOriginalElementIdentity(toposolid.UniqueId, document.CreationGUID.ToString("D", CultureInfo.InvariantCulture))
+            .WithNativeVertexFingerprint(NativeVertexFingerprint(toposolid));
         Schema schema = ProvenanceSchemaAdapterV2.EnsurePublishedSchema();
         Entity entity = new(schema);
         foreach (ProvenanceFieldDefinition field in ExtensibleStorageProvenanceSchemaV2.Fields)
@@ -49,7 +50,7 @@ internal static class ProvenanceEntityWriterV2
         {
             object expectedValue = ValueFor(expected, field.Name);
             object actualValue = Get(readBack, field);
-            if (!Equals(expectedValue, actualValue))
+            if (!ValuesMatch(expectedValue, actualValue, field))
             {
                 mismatches.Add(field.Name);
             }
@@ -129,6 +130,35 @@ internal static class ProvenanceEntityWriterV2
         : field.ClrType == typeof(string) ? entity.Get<string>(field.Name)
         : field.Spec == ProvenanceFieldSpec.Length ? entity.Get<double>(field.Name, UnitTypeId.Meters)
         : entity.Get<double>(field.Name, UnitTypeId.General);
+
+    private static bool ValuesMatch(object expected, object actual, ProvenanceFieldDefinition field)
+    {
+        if (expected is not double expectedNumber || actual is not double actualNumber)
+        {
+            return Equals(expected, actual);
+        }
+
+        double tolerance = field.Spec == ProvenanceFieldSpec.Length
+            ? ExtensibleStorageProvenanceSchema.ExtensibleStorageRoundTripTolerance.ToMeters()
+            : ExtensibleStorageProvenanceSchema.ExtensibleStorageRoundTripTolerance.ToMeters();
+        return Math.Abs(expectedNumber - actualNumber) <= tolerance;
+    }
+
+    internal static string NativeVertexFingerprint(Toposolid toposolid)
+    {
+        SlabShapeEditor editor = toposolid.GetSlabShapeEditor();
+        if (!editor.IsEnabled)
+        {
+            throw new ProvenanceAttachmentException("SolidGround cannot fingerprint an enabled-to-verify toposolid whose slab shape editor is disabled.");
+        }
+        List<Coordinate3D> vertices = [];
+        for (int index = 0; index < editor.SlabShapeVertices.Size; index++)
+        {
+            XYZ point = editor.SlabShapeVertices.get_Item(index).Position;
+            vertices.Add(new Coordinate3D(point.X, point.Y, point.Z));
+        }
+        return TerrainVertexFingerprint.Compute(vertices);
+    }
 
     private static string ToPropertyName(string fieldName) => char.ToUpperInvariant(fieldName[0]) + fieldName[1..];
 }

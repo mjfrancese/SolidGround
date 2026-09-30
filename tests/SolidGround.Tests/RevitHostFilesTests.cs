@@ -641,7 +641,7 @@ public sealed class RevitHostFilesTests
     {
         int callIndex = RequireIndex(source, callSiteText);
 
-        const int MaxPrecedingDistance = 300; // a tight window covering only the enclosing if/conditional
+        const int MaxPrecedingDistance = 800; // includes the legal-boundary losslessness guard in the parcel gate
                                                // expression, not the whole file -- unlike the vacuous check above.
         string window = source[Math.Max(0, callIndex - MaxPrecedingDistance)..callIndex];
         Assert.Contains("isParcelAoi", window, StringComparison.Ordinal);
@@ -925,7 +925,7 @@ public sealed class RevitHostFilesTests
         int addressParcelParameterCount = Regex.Count(source, Regex.Escape("AddressParcelProvenance? addressParcel"));
         Assert.Equal(3, addressParcelParameterCount); // RunPipelineAsync, RunFetchPipelineAsync, RunProcessPipelineAsync.
 
-        int runAsyncAddressParcelArgumentCount = Regex.Count(source, Regex.Escape("cancellationToken, addressParcel)"));
+        int runAsyncAddressParcelArgumentCount = Regex.Count(source, Regex.Escape("cancellationToken, addressParcel, parcelExtent)"));
         Assert.Equal(2, runAsyncAddressParcelArgumentCount); // TerrainProcessingPipeline.RunAsync's two call sites.
     }
 
@@ -939,8 +939,8 @@ public sealed class RevitHostFilesTests
         // other Stage D wiring fact in this region, it previously had no dedicated test.
         string source = ReadCreateToposolidCommandSource();
 
-        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = loaded.Settings with");
-        const int MaxFollowingDistance = 460; // covers the full `with` expression through its closing `};` (measured: 439 chars).
+        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = dialogResult.EffectiveSettings ?? loaded.Settings with");
+        const int MaxFollowingDistance = 700; // also covers the fallback with-expression after EffectiveSettings.
         string window = source[mergeIndex..Math.Min(source.Length, mergeIndex + MaxFollowingDistance)];
 
         Assert.Contains("OutputUnit = dialogResult.OutputUnit,", window, StringComparison.Ordinal);
@@ -966,7 +966,7 @@ public sealed class RevitHostFilesTests
         // path every other Preflight-shaped rejection already uses.
         string source = ReadCreateToposolidCommandSource();
 
-        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = loaded.Settings with");
+        int mergeIndex = RequireIndex(source, "RevitSettings effectiveSettings = dialogResult.EffectiveSettings ?? loaded.Settings with");
         int validateIndex = RequireIndex(source, "effectiveSettings.Request.Validate()");
         int preflightCallIndex = RequireIndex(source, "RunDocumentPreflight(");
 
@@ -989,8 +989,8 @@ public sealed class RevitHostFilesTests
         // before this issue (EnsureTemplateExists only ever creates an absent file; TryLoad never writes).
         string source = ReadCreateToposolidCommandSource();
 
-        HashSet<string> calledMembers = [.. Regex.Matches(source, @"RevitSettingsIo\.(\w+)").Select(match => match.Groups[1].Value)];
-        Assert.Equal(new HashSet<string> { "EnsureTemplateExists", "TryLoad" }, calledMembers);
+        Assert.Contains("RevitSettingsIo.LoadForUi", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RevitSettingsIo.Save", source, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -107,7 +107,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // override"). RevitSettings/TerrainRequestSettings/SimplificationSettings/RevitSharedCoordinatesSettings
         // are all already sealed records with init-only properties, so these `with` expressions are ordinary,
         // already-idiomatic C#.
-        RevitSettings effectiveSettings = loaded.Settings with
+        RevitSettings effectiveSettings = dialogResult.EffectiveSettings ?? loaded.Settings with
         {
             Request = loaded.Settings.Request with
             {
@@ -157,7 +157,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
         {
             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(context.Settings.Request.NetworkTimeoutSeconds));
             acquisition = Task.Run(
-                    () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, dialogResult.AddressParcel, cts.Token),
+                    () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, dialogResult.AddressParcel, context.Settings.TerrainExtensionMeters,
+                        LinearDistance.Meters(UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, UnitTypeId.Meters)), cts.Token),
                     cts.Token)
                 .GetAwaiter().GetResult();
         }
@@ -179,7 +180,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
             $"{LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit).ToString("R", CultureInfo.InvariantCulture)} m/unit.");
 
         LocalCoordinateFrame localFrame = acquisition.Outcome.Payload.Provenance.LocalFrame;
-        LocalBoundary rawBoundary = acquisition.Outcome.ClipResult is { } clipResult
+        LocalBoundary rawBoundary = acquisition.Outcome.TerrainExtentPlan is { } extentPlan
+            ? LocalBoundaryFactory.FromPolygonalRegion(extentPlan.TerrainClipRegion, localFrame)
+            : acquisition.Outcome.ClipResult is { } clipResult
             ? LocalBoundaryFactory.FromPolygonalRegion(clipResult.EffectiveRegion, localFrame)
             : LocalBoundaryFactory.FromGridEnvelope(acquisition.Grid, localFrame);
 
@@ -212,6 +215,33 @@ public sealed class CreateToposolidCommand : IExternalCommand
         if (!boundaryValidation.IsValid)
         {
             ShowProblemList("SolidGround could not build a valid boundary.", "Nothing changed. Correct every problem below and run this command again.", boundaryValidation.Problems);
+            return Result.Cancelled;
+        }
+
+        // Identity scanning is deliberately after final payload hashing and before export/transaction, so an
+        // exact repeat cannot overwrite an export or mutate the document before the guard decides.
+        TerrainIdentity terrainIdentity = TerrainRunComposition.BuildIdentity(
+            acquisition.Outcome.Payload, context.Aoi, acquisition.Outcome.TerrainExtentPlan, context.Settings.TerrainExtensionMeters);
+        (IReadOnlyList<ExistingTerrainRecord> V2, IReadOnlyList<string> LegacyV1) existing;
+        try
+        {
+            existing = ExistingTerrainScanner.Scan(context.Document);
+        }
+        catch (ExistingTerrainScanException ex)
+        {
+            ShowSingleCancelledProblem("SolidGround could not safely inspect existing terrain provenance.", ex.Message);
+            return Result.Cancelled;
+        }
+
+        if (acquisition.Outcome.TerrainExtentPlan?.Warnings is { Count: > 0 } warnings && !AcknowledgeTerrainWarnings(warnings))
+        {
+            return Result.Cancelled;
+        }
+        ExistingTerrainDecision decision = ExistingTerrainDecision.Decide(
+            terrainIdentity, context.Document.CreationGUID.ToString("D", CultureInfo.InvariantCulture), existing.V2, existing.LegacyV1);
+        if (decision.Kind != ExistingTerrainDecisionKind.Create)
+        {
+            ShowProblemList("SolidGround refused to create duplicate or ambiguous terrain.", decision.Detail, decision.ElementIds);
             return Result.Cancelled;
         }
 
@@ -264,9 +294,15 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // longer names every reachable run's real AOI type -- context.Aoi always does, on both dialog paths.
         bool isParcelAoi = context.Aoi is ParcelGeometryAoi;
         IList<CurveLoop>? propertyLineProfiles = null;
-        if (isParcelAoi) // a second, independent CurveLoop list -- never `profiles`, already consumed below.
+        if (isParcelAoi) // legal parcel geometry is validated losslessly in Core; never clean it here.
         {
-            propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit);
+            if (acquisition.Outcome.TerrainExtentPlan is not { } legalPlan)
+            {
+                ShowSingleCancelledProblem("SolidGround could not resolve the legal parcel boundary.", "The terrain pipeline did not return the required legal parcel extent.");
+                return Result.Cancelled;
+            }
+            double legalZInternal = UnitUtils.ConvertToInternalUnits(legalPlan.LegalPlaneZ, revitUnit);
+            propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(legalPlan.LegalLocalBoundary, legalZInternal, revitUnit);
             if (!PostCreationVerification.BoundaryIsValidPropertyLine(propertyLineProfiles, out string? propertyLineProblem))
             {
                 ShowSingleCancelledProblem("SolidGround could not build a valid boundary.", propertyLineProblem!);
@@ -279,7 +315,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // ==== Stage 5: Transaction (the only stage that mutates Document) ==================================
         return RunTransaction(
             context, acquisition.Outcome, profiles, points, expected, revitUnit, constantZInternal, toleranceInternal,
-            exportDocumentFileName, exportPointsFileName, propertyLineProfiles);
+            exportDocumentFileName, exportPointsFileName, propertyLineProfiles, terrainIdentity);
     }
 
     // -------------------------------------------------------------------------------------------------------
@@ -347,22 +383,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
         }
 
         string settingsPath = RevitSettingsLocator.Resolve();
-        RevitSettingsIo.EnsureTemplateExists(settingsPath, out bool justCreated, out string? writeError);
-        if (justCreated)
+        RevitSettings settings;
+        try { settings = RevitSettingsIo.LoadForUi(owner: null); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
         {
-            problems.Add($"A starting template was written to '{settingsPath}'. Edit it and run this command again.");
-            return new LoadResult(null, null, settingsPath, problems, 0, 0);
-        }
-
-        if (writeError is not null)
-        {
-            problems.Add(writeError);
-            return new LoadResult(null, null, settingsPath, problems, 0, 0);
-        }
-
-        if (!RevitSettingsIo.TryLoad(settingsPath, out RevitSettings? settings, out string? loadError))
-        {
-            problems.AddRange((loadError ?? "The settings file could not be loaded.").Split(Environment.NewLine));
+            problems.Add(ex.Message);
             return new LoadResult(null, null, settingsPath, problems, 0, 0);
         }
 
@@ -422,7 +447,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
     {
         problems = [];
 
-        if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && new EnvironmentOpenTopographyApiKeyProvider().GetApiKey() is null)
+        if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && SessionApiKeyOverrides.OpenTopographyProvider().GetApiKey() is null)
         {
             problems.Add("The OPENTOPOGRAPHY_API_KEY environment variable is not set (or is empty). Set it to a valid OpenTopography API key and restart Revit.");
         }
@@ -639,21 +664,24 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunPipelineAsync(
         TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
-        AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
+        AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
         return request.Mode == TerrainAcquisitionMode.Fetch
-            ? await RunFetchPipelineAsync(request, wgs84Reference, aoi, addressParcel, cancellationToken).ConfigureAwait(false)
-            : await RunProcessPipelineAsync(request, aoi, addressParcel, cancellationToken).ConfigureAwait(false);
+            ? await RunFetchPipelineAsync(request, wgs84Reference, aoi, addressParcel, terrainExtensionMeters, minimumLegalEdgeLength, cancellationToken).ConfigureAwait(false)
+            : await RunProcessPipelineAsync(request, aoi, addressParcel, terrainExtensionMeters, minimumLegalEdgeLength, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunFetchPipelineAsync(
         TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
-        AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
+        AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
-        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(aoi);
+        AreaOfInterest fetchAoi = aoi is ParcelGeometryAoi parcel
+            ? new ParcelGeometryAoi(parcel.Format, parcel.Geometry, parcel.HorizontalReference, LinearDistance.Meters(terrainExtensionMeters))
+            : aoi;
+        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(fetchAoi);
 
         using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
-        OpenTopographyUsgs1mSource source = new(httpClient, new EnvironmentOpenTopographyApiKeyProvider());
+        OpenTopographyUsgs1mSource source = new(httpClient, SessionApiKeyOverrides.OpenTopographyProvider());
 
         OpenTopographyUsgs1mAcquisition acquisition;
         try
@@ -701,17 +729,18 @@ public sealed class CreateToposolidCommand : IExternalCommand
             acquisition.Acquisition.Source.Attribution);
         ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
 
+        ParcelExtentGeometry? parcelExtent = TerrainRunComposition.BuildParcelExtent(aoi, transform, LinearDistance.Meters(terrainExtensionMeters), minimumLegalEdgeLength);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
                 grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, aoi,
                 request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
-                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel)
+                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel, parcelExtent)
             .ConfigureAwait(false);
 
         return (grid, outcome);
     }
 
     private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunProcessPipelineAsync(
-        TerrainRequestSettings request, AreaOfInterest aoi, AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
+        TerrainRequestSettings request, AreaOfInterest aoi, AddressParcelProvenance? addressParcel, double terrainExtensionMeters, LinearDistance minimumLegalEdgeLength, CancellationToken cancellationToken)
     {
         ProcessInputSettings process = request.Process!;
         string ascPath = process.Asc;
@@ -766,10 +795,11 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
         ReferenceOrigins referenceOrigins = new(ReferenceOrigin.Operator, resolvedVertical.Origin);
 
+        ParcelExtentGeometry? parcelExtent = TerrainRunComposition.BuildParcelExtent(aoi, transform, LinearDistance.Meters(terrainExtensionMeters), minimumLegalEdgeLength);
         TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
                 grid, transform, verticalReference, referenceOrigins, sourceMetadata, aoi,
                 request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
-                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel)
+                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel, parcelExtent)
             .ConfigureAwait(false);
 
         return (grid, outcome);
@@ -848,7 +878,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
         double toleranceInternal,
         string exportDocumentFileName,
         string exportPointsFileName,
-        IList<CurveLoop>? propertyLineProfiles)
+        IList<CurveLoop>? propertyLineProfiles,
+        TerrainIdentity terrainIdentity)
     {
         Document document = context.Document;
         ToposolidCreationFailureLog failureLog = new();
@@ -973,8 +1004,10 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 context, outcome, revitUnit, constantZInternal, toposolid, propertyLine, sharedCoordinatesWritten,
                 exportDocumentFileName, exportPointsFileName);
 
-            ToposolidCreatedHook? postCreationHook = ProvenanceEntityWriter.Attach; // Issue #16.
-            postCreationHook?.Invoke(document, toposolid, outcome.Payload, draft);
+            double coverageFloor = outcome.Payload.Provenance.SimplificationRequest.CoverageFloorFraction
+                ?? throw new ProvenanceAttachmentException("The completed terrain payload did not retain its actual coverage floor fraction.");
+            AddInLog.Info($"V2 provenance coverageFloorFraction={coverageFloor.ToString("R", CultureInfo.InvariantCulture)}, collectionPeriodAvailability={(outcome.Payload.Provenance.Source.CollectionPeriod is null ? "notReportedBySource" : "reported")}.");
+            ProvenanceEntityWriterV2.Attach(document, toposolid, outcome.Payload, terrainIdentity, coverageFloor);
 
             TransactionStatus commitStatus = transaction.Commit();
             if (commitStatus != TransactionStatus.Committed)
@@ -1102,7 +1135,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
             provenance.OriginalPointCount, provenance.RetainedPointCount, context.Settings.Request.Simplification.PointBudget);
 
         PlacementExtensibleStorageRecord extensibleStorage = new(
-            ExtensibleStorageProvenanceSchema.SchemaGuidText, ExtensibleStorageProvenanceSchema.CurrentVersion);
+            ExtensibleStorageProvenanceSchemaV2.SchemaGuidText, ExtensibleStorageProvenanceSchemaV2.CurrentVersion);
 
         // SolidGround Issue #30 (PH3-3). PropertyLine: created is always present; ElementId/AreaInternal are
         // null exactly when created is false (every non-parcel-AOI run, and structurally the only reachable
@@ -1291,6 +1324,22 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
     private static void ShowSingleCancelledProblem(string mainInstruction, string detail) =>
         ShowProblemList(mainInstruction, "Nothing changed. Correct the problem below and run this command again.", [detail]);
+
+    private static bool AcknowledgeTerrainWarnings(IReadOnlyList<TerrainExtentWarning> warnings)
+    {
+        string text = string.Join(Environment.NewLine, warnings.Select(warning => warning.Kind switch
+        {
+            TerrainExtentWarningKind.LegalParcelHasMultiplePolygons => $"The legal parcel has {warning.Count} polygon(s).",
+            TerrainExtentWarningKind.LegalParcelHasHoles => $"The legal parcel has {warning.Count} hole(s).",
+            TerrainExtentWarningKind.TerrainMarginChangesTopology => $"The terrain extension changed topology in {warning.Count} place(s).",
+            TerrainExtentWarningKind.LegalParcelContainsNoData => $"The legal parcel contains {warning.Count} NODATA cell(s).",
+            TerrainExtentWarningKind.TerrainExtentContainsNoData => $"The terrain extent contains {warning.Count} NODATA cell(s).",
+            _ => $"Terrain extent warning ({warning.Count}).",
+        }));
+        TaskDialogResult result = TaskDialog.Show(DialogTitle, text + Environment.NewLine + Environment.NewLine + "Continue this run?",
+            TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.Cancel, TaskDialogResult.Cancel);
+        return result == TaskDialogResult.Yes;
+    }
 
     private static void ShowSingleFailed(string mainInstruction)
     {

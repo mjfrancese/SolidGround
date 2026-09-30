@@ -56,7 +56,9 @@ public sealed record TerrainIdentity(
         string content = string.Create(CultureInfo.InvariantCulture,
             $"topology={canonicalLegalTopology}\nextensionMeters={terrainExtensionMeters:R}\nframe={frame}\n" +
             $"source={payload.Provenance.Source.DatasetIdentifier}\nmethod={payload.Provenance.SimplificationRequest.Method}\n" +
-            $"budget={payload.Provenance.SimplificationRequest.PointBudget}\npointFrameHash={pointFrameHash}");
+            $"budget={payload.Provenance.SimplificationRequest.PointBudget}\n" +
+            $"coverageFloorFraction={CanonicalNullable(payload.Provenance.SimplificationRequest.CoverageFloorFraction)}\n" +
+            $"pointFrameHash={pointFrameHash}");
 
         return new TerrainIdentity(CurrentVersion, kind, Hash(stemMaterial), CurrentContentSignatureAlgorithm, Hash(content), pointFrameHash);
     }
@@ -75,6 +77,10 @@ public sealed record TerrainIdentity(
         .ThenBy(point => point.Y)
         .ThenBy(point => point.Elevation)
         .Select(point => string.Create(CultureInfo.InvariantCulture, $"{point.X:R},{point.Y:R},{point.Elevation:R}")));
+
+    private static string CanonicalNullable(double? value) => value is double fraction
+        ? fraction.ToString("R", CultureInfo.InvariantCulture)
+        : "unknown";
 
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 }

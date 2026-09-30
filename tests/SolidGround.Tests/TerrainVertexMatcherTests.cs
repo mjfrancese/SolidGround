@@ -42,4 +42,15 @@ public sealed class TerrainVertexMatcherTests
         Assert.Single(result.UnmatchedExpected);
         Assert.Single(result.CandidateCollisions);
     }
+
+    [Fact]
+    public void UsesLocalBucketsForASeparatedFifteenThousandVertexTerrain()
+    {
+        Coordinate3D[] points = Enumerable.Range(0, 15_000).Select(index => new Coordinate3D(index * 2d, 0d, index % 17)).ToArray();
+
+        TerrainVertexMatchResult result = TerrainVertexMatcher.Match(points, points.Reverse().ToArray(), 0.01d);
+
+        Assert.True(result.Passed);
+        Assert.True(result.CandidateComparisons < 100_000, $"Expected bounded candidate work, got {result.CandidateComparisons} comparisons.");
+    }
 }
