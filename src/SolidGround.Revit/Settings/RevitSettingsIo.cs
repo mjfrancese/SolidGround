@@ -40,9 +40,10 @@ internal static class RevitSettingsIo
         string? legacyError = null;
         if (!File.Exists(path) && File.Exists(legacyPath) && TryLoad(legacyPath, out legacy, out legacyError))
         {
+            string importSummary = DescribeLegacyImport(legacy!, legacyPath);
             MessageBoxResult choice = owner is null
-                ? MessageBox.Show("A previous SolidGround settings file is available. Review and import its values for this session? The legacy file will remain unchanged.", "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information)
-                : MessageBox.Show(owner, "A previous SolidGround settings file is available. Review and import its values for this session? The legacy file will remain unchanged.", "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information);
+                ? MessageBox.Show(importSummary, "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information)
+                : MessageBox.Show(owner, importSummary, "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information);
             if (choice == MessageBoxResult.Yes)
             {
                 AddInLog.Info("Operator chose a read-only legacy settings import draft.");
@@ -54,6 +55,20 @@ internal static class RevitSettingsIo
                 return UiSettingsStore.CreateDefault();
             }
             AddInLog.Info("Operator cancelled legacy import.");
+            return null;
+        }
+        if (!File.Exists(path) && File.Exists(legacyPath))
+        {
+            string legacyFailure = legacyError ?? "The previous SolidGround settings file could not be imported.";
+            MessageBoxResult choice = owner is null
+                ? MessageBox.Show(legacyFailure + Environment.NewLine + Environment.NewLine + "Start new settings instead? The legacy bytes will remain unchanged.", "Previous settings need repair", MessageBoxButton.YesNo, MessageBoxImage.Warning)
+                : MessageBox.Show(owner, legacyFailure + Environment.NewLine + Environment.NewLine + "Start new settings instead? The legacy bytes will remain unchanged.", "Previous settings need repair", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (choice == MessageBoxResult.Yes)
+            {
+                AddInLog.Info("Operator explicitly chose Start new after legacy import failed.");
+                return UiSettingsStore.CreateDefault();
+            }
+            AddInLog.Info("Operator cancelled after legacy import failed.");
             return null;
         }
         if (UiSettingsStore.TryLoad(path, out UiSettingsDraft? draft, out string? error))
@@ -135,6 +150,20 @@ internal static class RevitSettingsIo
             TerrainExtensionMeters = extension,
             SharedCoordinates = new RevitSharedCoordinatesSettings(false),
         };
+    }
+
+    internal static string DescribeLegacyImport(RevitSettings legacy, string legacyPath)
+    {
+        ArgumentNullException.ThrowIfNull(legacy);
+        ProcessInputSettings? process = legacy.Request.Process;
+        string source = process is null
+            ? "Fetch mode; no local raster/process source is configured."
+            : $"Process mode; raster '{process.Asc}', projection '{process.Prj ?? "none"}', source sidecar '{process.SourceJson ?? "none"}'.";
+        return "A previous SolidGround settings file is available. Import it into this session?" + Environment.NewLine + Environment.NewLine
+            + source + Environment.NewLine
+            + $"Local origin: {legacy.Request.LocalOrigin.Kind}; output: {legacy.Request.OutputUnit}; terrain extension: {legacy.TerrainExtensionMeters.ToString("R", CultureInfo.InvariantCulture)} m." + Environment.NewLine
+            + "Paths will be rebased from the legacy file folder. Shared-coordinate writing will be turned off. The legacy bytes remain unchanged until an explicit Save creates per-user settings." + Environment.NewLine + Environment.NewLine
+            + "Yes: review/import. No: start new settings. Cancel: abort.";
     }
     /// <summary>How long <see cref="EnsureTemplateExists"/> waits to acquire the cross-process settings lock before reporting a lock problem (orchestrator decision (c)).</summary>
     private static readonly TimeSpan MutexTimeout = TimeSpan.FromSeconds(5);
