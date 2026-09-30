@@ -1,16 +1,37 @@
 using SolidGround.Core.Processing;
 using SolidGround.Core.Workflow;
+using SolidGround.Core.Aois;
 
 namespace SolidGround.Tests;
 
 public sealed class PreFetchEstimateTests
 {
     [Fact]
-    public void RadiusEstimateIsPureAndLabelsItsTwoRequestCostModel()
+    public void RadiusEstimateUsesTheActualNormalizedRectangularFetchEnvelope()
     {
         PreFetchEstimate estimate = PreFetchEstimator.FromRadius(new RadiusAoiSettings { CenterLatitude = 41, CenterLongitude = -93, RadiusMeters = 10 });
         Assert.Equal(2, estimate.OpenTopographyRequestCount);
-        Assert.Equal(315L, estimate.ApproximateOneMeterSamples);
+        Assert.NotNull(estimate.FetchEnvelope);
+        Assert.NotNull(estimate.MinimumSideExpansion);
+        Assert.True(estimate.MinimumSideExpansion!.Applied);
+        Assert.True(estimate.EnvelopeSquareMeters >= 12_000d);
+        Assert.Equal((long)Math.Ceiling(estimate.EnvelopeSquareMeters), estimate.ApproximateOneMeterSamples);
         Assert.Contains("not an entitlement", estimate.Label, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BoundingBoxAndProcessEstimatesUseTheSameMinimumEnvelopeWithoutAHttpQuote()
+    {
+        Wgs84BoundingBoxAoi tiny = new(-0.00001d, -0.00001d, 0.00001d, 0.00001d);
+
+        PreFetchEstimate fetch = PreFetchEstimator.FromAreaOfInterest(tiny);
+        PreFetchEstimate process = PreFetchEstimator.FromProcessAreaOfInterest(tiny);
+
+        Assert.Equal(fetch.FetchEnvelope, process.FetchEnvelope);
+        Assert.Equal(fetch.EnvelopeSquareMeters, process.EnvelopeSquareMeters);
+        Assert.Equal(2, fetch.OpenTopographyRequestCount);
+        Assert.Equal(0, process.OpenTopographyRequestCount);
+        Assert.DoesNotContain("OpenTopography", process.Label, StringComparison.Ordinal);
+        Assert.Contains("no HTTP request", process.Label, StringComparison.Ordinal);
     }
 }

@@ -1,9 +1,16 @@
+using SolidGround.Core.Aois;
 using SolidGround.Core.Processing;
 
 namespace SolidGround.Core.Workflow;
 
 /// <summary>A deliberately approximate, pre-acquisition fetch-envelope estimate.</summary>
-public sealed record PreFetchEstimate(double EnvelopeSquareMeters, long ApproximateOneMeterSamples, int OpenTopographyRequestCount, string Label);
+public sealed record PreFetchEstimate(
+    double EnvelopeSquareMeters,
+    long ApproximateOneMeterSamples,
+    int OpenTopographyRequestCount,
+    string Label,
+    Wgs84BoundingBoxAoi? FetchEnvelope = null,
+    FetchEnvelopeExpansion? MinimumSideExpansion = null);
 
 public static class PreFetchEstimator
 {
@@ -11,20 +18,55 @@ public static class PreFetchEstimator
     public static PreFetchEstimate FromBoundingBox(BoundingBoxAoiSettings box)
     {
         ArgumentNullException.ThrowIfNull(box);
-        double centerLatitude = (box.South + box.North) / 2d;
-        double metersPerLatitudeDegree = 111_132d;
-        double metersPerLongitudeDegree = 111_320d * Math.Cos(centerLatitude * Math.PI / 180d);
-        double area = Math.Abs((box.East - box.West) * metersPerLongitudeDegree * (box.North - box.South) * metersPerLatitudeDegree);
-        return Build(area);
+        return FromAreaOfInterest(new Wgs84BoundingBoxAoi(box.West, box.South, box.East, box.North));
     }
 
     public static PreFetchEstimate FromRadius(RadiusAoiSettings radius)
     {
         ArgumentNullException.ThrowIfNull(radius);
-        return Build(Math.PI * radius.RadiusMeters * radius.RadiusMeters);
+        return FromAreaOfInterest(new Wgs84RadiusAoi(
+            radius.CenterLatitude,
+            radius.CenterLongitude,
+            SolidGround.Core.Units.LinearDistance.Meters(radius.RadiusMeters)));
     }
 
-    private static PreFetchEstimate Build(double area) => new(
-        area, checked((long)Math.Ceiling(area)), 2,
-        "Approximate rectangular fetch-envelope estimate at one metre spacing; OpenTopography USGS 1 m normally uses up to two requests (AAIGrid plus GeoTIFF metadata). It is not an entitlement, coverage, cost, or exact point-count quote.");
+    /// <summary>
+    /// Estimates the exact WGS 84 fetch envelope that acquisition would request, including its normalizer's
+    /// 110-metre minimum-side expansion. This is deliberately pre-acquisition and has no provider side effect.
+    /// </summary>
+    public static PreFetchEstimate FromAreaOfInterest(AreaOfInterest aoi)
+    {
+        ArgumentNullException.ThrowIfNull(aoi);
+        (Wgs84BoundingBoxAoi envelope, FetchEnvelopeExpansion expansion) = ClipRegionFactory.BuildFetchEnvelope(aoi);
+        return Build(envelope, expansion, openTopographyRequestCount: 2,
+            "Approximate rectangular fetch-envelope estimate at one metre spacing; OpenTopography USGS 1 m normally uses up to two requests (AAIGrid plus GeoTIFF metadata). It is not an entitlement, coverage, cost, or exact point-count quote.");
+    }
+
+    /// <summary>
+    /// Calculates the same envelope and approximate sample count for a local-input run without representing it
+    /// as an OpenTopography request or contacting any source.
+    /// </summary>
+    public static PreFetchEstimate FromProcessAreaOfInterest(AreaOfInterest aoi)
+    {
+        ArgumentNullException.ThrowIfNull(aoi);
+        (Wgs84BoundingBoxAoi envelope, FetchEnvelopeExpansion expansion) = ClipRegionFactory.BuildFetchEnvelope(aoi);
+        return Build(envelope, expansion, openTopographyRequestCount: 0,
+            "Approximate rectangular terrain-envelope estimate at one metre spacing for local input; it reads no raster, makes no HTTP request, and is not an exact point-count quote.");
+    }
+
+    private static PreFetchEstimate Build(Wgs84BoundingBoxAoi envelope, FetchEnvelopeExpansion expansion, int openTopographyRequestCount, string label)
+    {
+        // Use the exact same conservative distance factors as AoiNormalizer's minimum-envelope operation.
+        // The result is deliberately an estimate of the requested rectangle, rather than a circle or parcel
+        // area, because OpenTopography receives this rectangle.
+        double latitudeForLongitudeFactor = Math.Abs(envelope.SouthLatitude) >= Math.Abs(envelope.NorthLatitude)
+            ? envelope.SouthLatitude
+            : envelope.NorthLatitude;
+        double widthMeters = (envelope.EastLongitude - envelope.WestLongitude) *
+            Wgs84Ellipsoid.MetersPerDegreeLongitude(latitudeForLongitudeFactor);
+        double heightMeters = (envelope.NorthLatitude - envelope.SouthLatitude) *
+            Wgs84Ellipsoid.MetersPerDegreeLatitude(0d);
+        double area = widthMeters * heightMeters;
+        return new PreFetchEstimate(area, checked((long)Math.Ceiling(area)), openTopographyRequestCount, label, envelope, expansion);
+    }
 }

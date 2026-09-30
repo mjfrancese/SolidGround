@@ -55,6 +55,54 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("class ParcelBoundaryPreview", all, StringComparison.Ordinal);
         Assert.Contains("Canvas", all, StringComparison.Ordinal);
         Assert.DoesNotContain("WebView", all, StringComparison.Ordinal);
+        Assert.Contains("ParcelBoundaryAoiFactory.FromCandidate", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("StrokeDashArray", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("SelectedGeocodeCandidate", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WindowUsesVisibleLabelsDetailedParcelRowsAndOperatorInitiatedStatelessLinks()
+    {
+        string source = Read("SolidGroundDialog.cs");
+        Assert.Contains("Label(\"Street address\"", source, StringComparison.Ordinal);
+        Assert.Contains("Field(\"Latitude\"", source, StringComparison.Ordinal);
+        Assert.Contains("Field(\"West longitude\"", source, StringComparison.Ordinal);
+        Assert.Contains("Browse GeoJSON or WKT", source, StringComparison.Ordinal);
+        Assert.Contains("Candidate.ComputedAreaSquareMeters", source, StringComparison.Ordinal);
+        Assert.Contains("Candidate.SourceIdentity", source, StringComparison.Ordinal);
+        Assert.Contains("SelectedParcelSourceTerms", source, StringComparison.Ordinal);
+        Assert.Contains("openstreetmap.org/?mlat=", source, StringComparison.Ordinal);
+        Assert.Contains("portal.opentopography.org", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("WebView", source, StringComparison.Ordinal);
+        Assert.Contains("UseShellExecute = true", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WindowKeepsFooterFixedAndHasOneVisibleDefaultAndOneCancelButton()
+    {
+        string source = Read("SolidGroundDialog.cs");
+        Assert.Contains("VerticalScrollBarVisibility = ScrollBarVisibility.Auto", source, StringComparison.Ordinal);
+        Assert.Contains("Add(root, BuildFooter(palette), 4)", source, StringComparison.Ordinal);
+        Assert.Contains("cancel.IsCancel = true", source, StringComparison.Ordinal);
+        Assert.Contains("_findButton.IsDefault = _findButton.Visibility == Visibility.Visible", source, StringComparison.Ordinal);
+        Assert.Contains("_useLocationButton.IsDefault = _useLocationButton.Visibility == Visibility.Visible", source, StringComparison.Ordinal);
+        Assert.Contains("_useParcelButton.IsDefault = _useParcelButton.Visibility == Visibility.Visible", source, StringComparison.Ordinal);
+        Assert.Contains("_createButton.IsDefault = _createButton.Visibility == Visibility.Visible", source, StringComparison.Ordinal);
+        Assert.Contains("ClampToWorkingArea", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EstimateAndReachabilityAreBoundedCoreHelpers()
+    {
+        string estimate = File.ReadAllText(Path.Combine(Root, "src", "SolidGround.Core", "Workflow", "PreFetchEstimate.cs"));
+        string reachability = File.ReadAllText(Path.Combine(Root, "src", "SolidGround.Core", "Workflow", "ReachabilityProbe.cs"));
+        Assert.Contains("ClipRegionFactory.BuildFetchEnvelope", estimate, StringComparison.Ordinal);
+        Assert.Contains("FromProcessAreaOfInterest", estimate, StringComparison.Ordinal);
+        Assert.Contains("openTopographyRequestCount: 0", estimate, StringComparison.Ordinal);
+        Assert.Contains("new(HttpMethod.Get, endpoint)", reachability, StringComparison.Ordinal);
+        Assert.DoesNotContain("while", reachability, StringComparison.Ordinal);
+        Assert.Contains("CancelAfter(timeout)", reachability, StringComparison.Ordinal);
+        Assert.Contains("could not complete safely", reachability, StringComparison.Ordinal);
     }
 
     [Fact]
