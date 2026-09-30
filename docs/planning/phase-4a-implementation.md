@@ -1,7 +1,7 @@
 # Phase 4A combined implementation plan
 
 Date: 2026-09-30  
-Status: implementation plan for approved #40, #43–#54, #60, and linked #36/#38. This is a planning artifact for adversarial review; it makes no claim that an implementation Revit session or a benchmark score has passed.
+Status: approved implementation plan for #40, #43–#54, #60, and linked #36/#38. Source implementation and automated verification are in progress. The public-reference benchmark is recorded; native Revit acceptance remains pending.
 
 ## Purpose and boundaries
 
@@ -133,11 +133,11 @@ The scorer accepts either a SolidGround bundle or external CSV `x,y,z` plus decl
 
 Before comparison, bundle input reconstructs projected source coordinates from its local-origin metadata. External CSV declares CRS axis order and horizontal units; the scorer performs explicit checked axis and unit conversion before point location and never assumes easting/northing order. A declared vertical-datum mismatch is non-comparable unless a separately implemented, cited transform is available. An undeclared external datum is geometry-only and labelled `vertical datum undeclared`; it is never reported as datum-aligned. Tests cover reconstruction, axis swap, unit conversion, declared mismatch, undeclared datum, and NODATA gaps.
 
-The real reference is captured only after explicit opt-in with an available `OPENTOPOGRAPHY_API_KEY`, at the public example site, through the existing two-call CLI fetch path. It remains under ignored `artifacts/`; the benchmark note records acquisition date and SHA-256 but no key, URL, address, place name, or local path. Current evidence: the authorized bounded capture succeeded using the existing current-user environment in its own subprocess, without printing, persisting, or changing that environment. Its acquisition/hash set is recorded in this plan; its separately required benchmark-note record is pending. Until that note exists, it is not reproducible benchmark evidence and must not be replaced by synthetic evidence. The scorecard is append-only and says “not measured” where a comparable export has not been supplied. Watch mechanisms remain outside repository automation.
+The real reference is captured only after explicit opt-in with an available `OPENTOPOGRAPHY_API_KEY`, at the public example site, through the existing two-call CLI fetch path. It remains under ignored `artifacts/`; the benchmark note records acquisition date and SHA-256 but no key, URL, address, place name, or local path. Current evidence: the authorized bounded capture succeeded using the existing current-user environment in its own subprocess, without printing, persisting, or changing that environment. Its acquisition/hash set and 15k/8k/4k measurements are recorded in the benchmark note. The opt-in local reference test verifies all hashes and reproduces those measurements without HTTP; synthetic evidence remains separate. The scorecard is append-only and says “not measured” where a comparable export has not been supplied. Watch mechanisms remain outside repository automation.
 
 ## Acceptance and evidence matrix
 
-Current benchmark capture status: the authorized bounded CLI capture succeeded through the existing current-user environment in its own subprocess. It did not print, persist, or change the user environment; it stored only ignored reference artifacts. Acquisition time is `2026-09-30T19:58:50.957Z`. The captured set's SHA-256 values are raster `F5D71C8D496628144626BF3588C107D55EFEA5E8476404BB82BD36A5103BD3D5`, projection `9423E96198C5EB06477BA59B0C6E758B7D19D06030CA7BB5C80FD5D98BE37D17`, and source metadata `90A7A0D018B07FB4CA9D708C34D79326BFE028EA6FF8D53AF8D83755E1195E5D`. The eventual benchmark note must record this same acquisition and hash set before any score is treated as reproducible real-reference evidence. Synthetic fixtures remain offline-test evidence only.
+Current benchmark capture status: the authorized bounded CLI capture succeeded through the existing current-user environment in its own subprocess. It did not print, persist, or change the user environment; it stored only ignored reference artifacts. Acquisition time is `2026-09-30T19:58:50.957Z`. The captured set's SHA-256 values are raster `F5D71C8D496628144626BF3588C107D55EFEA5E8476404BB82BD36A5103BD3D5`, projection `9423E96198C5EB06477BA59B0C6E758B7D19D06030CA7BB5C80FD5D98BE37D17`, and source metadata `90A7A0D018B07FB4CA9D708C34D79326BFE028EA6FF8D53AF8D83755E1195E5D`. The benchmark note records this acquisition and hash set alongside the measured scores. Synthetic fixtures remain offline-test evidence only.
 
 “Offline” is required before merge for code it covers. “Runtime” means a signed build/deploy/restart/hash-verified Revit 2027 session and is not satisfied by source inspection. Research rows require cited, reproducible findings but no model mutation.
 
@@ -162,10 +162,10 @@ The mandatory live closeout for the Phase 4A integrity core is #43/#44/#48 toget
 
 ## Known gaps, blockers, and stop conditions
 
-1. Reference capture has succeeded through the authorized bounded current-user-environment path, and its acquisition/hash set is recorded above. The separate benchmark note must repeat that record before a score can be treated as reproducible benchmark evidence; no synthetic substitution is allowed.
+1. Reference capture and its separately recorded hash-verified measurements are complete in [comparison-benchmark.md](../architecture/comparison-benchmark.md). Synthetic fixtures remain a separate offline evidence source; no comparable external-tool export has been supplied.
 2. #45 is a hard prerequisite for #46; #54 informs but does not replace its measurement basis. #46 must not turn into a stealth algorithm implementation.
 3. #51 requires current installed-Revit metadata plus owner direction after its memo. Ambiguous or internal APIs, including the combined-scale-factor call, stop at research.
-4. #47 collection-date feasibility is unresolved. A catalog endpoint that returns broad/overlapping coverage is insufficient; ambiguity or an unbudgeted third call yields “not reported by source.”
+4. #47's [collection-date decision](../architecture/elevation-collection-date-investigation.md) retains “not reported by source.” The catalog does not unambiguously identify the returned mosaic pixels; no third acquisition request was added.
 5. A V2 schema cannot retroactively identify v1 terrain. The scanner must show a visible legacy-provenance warning before the documented `Create` outcome; that conservative outcome does not prevent a duplicate of a v1 element. Migrating legacy entities is explicitly out of scope and needs a separate owner decision.
 6. Revit API behavior is not established by XML documentation alone. Every new call is checked against the installed 2027 SDK and compiled accessibility, then demonstrated in the required runtime rows.
 7. The approved usability design changes persistence and command layout. Its security, migration, accessibility, display-scaling, external-link privacy, cancellation, and legal-boundary invariants remain release gates, not cosmetic follow-up work.

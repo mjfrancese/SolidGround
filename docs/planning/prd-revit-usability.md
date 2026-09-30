@@ -1,6 +1,6 @@
 # Revit usability overhaul: research and implementation plan
 
-Date: 2026-09-30. Status: owner accepted; implementation preparation and independent plan review in progress.
+Date: 2026-09-30. Status: owner accepted; independent plan review approved after two rounds. Implementation and automated verification are in progress; native Revit and formative-user acceptance remain pending.
 
 Tracking: [Issue #60](https://github.com/mjfrancese/SolidGround/issues/60). The issue includes the full researched proposal so review does not depend on an unpublished repository file.
 
