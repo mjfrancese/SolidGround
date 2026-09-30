@@ -119,6 +119,20 @@ public sealed class ProjectionCharacteristicsTests
         Assert.Contains("stencil", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void InformationalMeasurementOmitsAnUnstableTransformWithoutThrowing()
+    {
+        IHorizontalCoordinateTransform transform = new StepUnstableTransform();
+        LocalCoordinateFrame frame = new(new Coordinate3D(0d, 0d, 0d), transform.Definition.TargetReference,
+            new VerticalReference("NAVD88", LengthUnit.Meter), LengthUnit.Meter);
+
+        bool measured = ProjectionCharacteristics.TryMeasure(transform, frame, out ProjectionCharacteristicsMeasurement? characteristics, out string? reason);
+
+        Assert.False(measured);
+        Assert.Null(characteristics);
+        Assert.Contains("stencil", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static IHorizontalCoordinateTransform CreateTransform(string fixtureName) =>
         ProjNetHorizontalCoordinateTransformFactory.Create(
             ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText,

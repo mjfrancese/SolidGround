@@ -70,6 +70,31 @@ public static class ProjectionCharacteristics
             (eastScale + northScale) / 2d);
     }
 
+    /// <summary>
+    /// Attempts an informational measurement without turning a valid terrain-processing result into a failure.
+    /// Only the documented validation failures of <see cref="Measure"/> are absorbed; callers receive the
+    /// reason for logs/UI and must not publish numeric characteristics when this returns false.
+    /// </summary>
+    public static bool TryMeasure(
+        IHorizontalCoordinateTransform transform,
+        LocalCoordinateFrame localFrame,
+        out ProjectionCharacteristicsMeasurement? measurement,
+        out string? unavailableReason)
+    {
+        try
+        {
+            measurement = Measure(transform, localFrame);
+            unavailableReason = null;
+            return true;
+        }
+        catch (ArgumentException exception)
+        {
+            measurement = null;
+            unavailableReason = exception.Message;
+            return false;
+        }
+    }
+
     private static Derivative Differentiate(
         IHorizontalCoordinateTransform transform, Coordinate2D point, LengthUnit projectedUnit, double halfStepMeters)
     {

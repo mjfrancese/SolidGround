@@ -768,7 +768,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel, parcelExtent)
             .ConfigureAwait(false);
 
-        return new AcquisitionResult(grid, outcome, ProjectionCharacteristics.Measure(transform, outcome.Payload.Provenance.LocalFrame));
+        ProjectionCharacteristics.TryMeasure(transform, outcome.Payload.Provenance.LocalFrame, out ProjectionCharacteristicsMeasurement? projection, out string? unavailableReason);
+        if (unavailableReason is not null) AddInLog.Warning($"Authoritative grid projection characteristics unavailable: {unavailableReason}");
+        return new AcquisitionResult(grid, outcome, projection);
     }
 
     private static async Task<AcquisitionResult> RunProcessPipelineAsync(
@@ -834,7 +836,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel, parcelExtent)
             .ConfigureAwait(false);
 
-        return new AcquisitionResult(grid, outcome, ProjectionCharacteristics.Measure(transform, outcome.Payload.Provenance.LocalFrame));
+        ProjectionCharacteristics.TryMeasure(transform, outcome.Payload.Provenance.LocalFrame, out ProjectionCharacteristicsMeasurement? projection, out string? unavailableReason);
+        if (unavailableReason is not null) AddInLog.Warning($"Authoritative grid projection characteristics unavailable: {unavailableReason}");
+        return new AcquisitionResult(grid, outcome, projection);
     }
 
     private static CollectionPeriod? ParseCollectionPeriod(ProcessInputSettings process)
