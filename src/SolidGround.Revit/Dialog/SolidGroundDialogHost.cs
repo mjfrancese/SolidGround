@@ -51,6 +51,7 @@ internal static class SolidGroundDialogHost
         // Keep the shared client unbounded so a Settings edit can change that timeout before the next lookup.
         using HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
         (RevitIniToposolidThresholds.Thresholds thresholds, string revitIniPath) = ReadRevitIniThresholds(commandData);
+        DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
 
         SolidGroundDialog? dialogOwner = null;
         SolidGroundDialogInputs inputs = BuildInputs(
@@ -61,12 +62,12 @@ internal static class SolidGroundDialogHost
             SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal),
             thresholds,
             revitIniPath,
-            current => RevitSettingsIo.Edit(dialogOwner, current));
+            current => RevitSettingsIo.Edit(dialogOwner, current, palette));
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         // Revit theme access remains in the Revit-only host. The palette-injected dialog constructor is kept
         // free of UIThemeManager so the local WPF test lane can render it without loading RevitAPIUI.
-        dialogOwner = new SolidGroundDialog(viewModel, DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast));
+        dialogOwner = new SolidGroundDialog(viewModel, palette);
         _ = new WindowInteropHelper(dialogOwner) { Owner = commandData.Application.MainWindowHandle };
 
         AddInLog.Info("Showing the SolidGround interactive dialog.");
@@ -112,6 +113,7 @@ internal static class SolidGroundDialogHost
             settings.Request.AreaOfInterest,
             initialServices.NearbySearchRadiusMeters,
             settings.Request.Mode,
+            InitialCredentialRevision: initialServices.CredentialRevision,
             Settings: settings,
             EditSettings: editSettings,
             ReconfigureLookupServices: updated => BuildLookupServices(updated, httpClient));
@@ -143,7 +145,8 @@ internal static class SolidGroundDialogHost
             settings.AddressAndParcel.GeocoderProvider,
             BuildParcelSource(settings.AddressAndParcel, httpClient),
             nearbySearchRadiusMeters,
-            settings.Request.NetworkTimeoutSeconds);
+            settings.Request.NetworkTimeoutSeconds,
+            SessionApiKeyOverrides.Revision);
     }
 
     /// <summary>

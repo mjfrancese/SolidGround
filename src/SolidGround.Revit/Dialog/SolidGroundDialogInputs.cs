@@ -16,7 +16,8 @@ internal sealed record SolidGroundDialogLookupServices(
     AddressGeocoderProvider GeocoderProvider,
     IParcelBoundarySource? ParcelSource,
     double NearbySearchRadiusMeters,
-    int NetworkTimeoutSeconds);
+    int NetworkTimeoutSeconds,
+    long CredentialRevision);
 
 /// <summary>Immutable host-resolved dependencies and preferences for one guided dialog run.</summary>
 /// <remarks>All lookup work copies the relevant values into a revision ticket before awaiting I/O.</remarks>
@@ -38,6 +39,7 @@ internal sealed record SolidGroundDialogInputs(
     AoiSettings ConfiguredAreaOfInterest,
     double NearbySearchRadiusMeters,
     TerrainAcquisitionMode Mode,
+    long InitialCredentialRevision = 0,
     RevitSettings? Settings = null,
     Func<RevitSettings, RevitSettings?>? EditSettings = null,
     Func<RevitSettings, SolidGroundDialogLookupServices>? ReconfigureLookupServices = null);

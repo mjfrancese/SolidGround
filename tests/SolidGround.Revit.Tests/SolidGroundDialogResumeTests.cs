@@ -4,6 +4,7 @@ using SolidGround.Core.Hosting;
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Dialog;
 using SolidGround.Revit.Settings;
@@ -42,7 +43,7 @@ public sealed class SolidGroundDialogResumeTests
                 _ =>
                 {
                     factoryCalls++;
-                    return new SolidGroundDialogLookupServices(NullGeocoder.Instance, AddressGeocoderProvider.Census, configuredSource, 30d, 30);
+                    return new SolidGroundDialogLookupServices(NullGeocoder.Instance, AddressGeocoderProvider.Census, configuredSource, 30d, 30, 0);
                 }));
 
             viewModel.EntryMode = LocationEntryMode.Coordinates;
@@ -58,9 +59,11 @@ public sealed class SolidGroundDialogResumeTests
             Assert.False(viewModel.WriteSharedCoordinatesIfAbsent);
             Assert.Single(configuredSource.Pending);
 
-            staleSource.CompleteNext("stale-parcel");
+            staleSource.FailNext();
             PumpUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
             Assert.Empty(viewModel.ParcelCandidates);
+            Assert.Null(viewModel.ErrorText);
+            Assert.True(viewModel.IsBusy);
 
             configuredSource.CompleteNext("configured-parcel");
             PumpUntil(() => viewModel.ParcelCandidates.Count == 1);
@@ -70,6 +73,7 @@ public sealed class SolidGroundDialogResumeTests
             Assert.Contains("configured-parcel", viewModel.SelectedParcelDetail, StringComparison.Ordinal);
             Assert.Contains("Synthetic parcel source", viewModel.SelectedParcelSourceTerms, StringComparison.Ordinal);
             Assert.Contains("Synthetic license disclaimer.", viewModel.SelectedParcelSourceTerms, StringComparison.Ordinal);
+            Assert.Contains("Synthetic legal description.", viewModel.SelectedParcelDetail, StringComparison.Ordinal);
             viewModel.UseParcelCommand.Execute(null);
             Assert.Equal(SolidGroundDialogStep.Review, viewModel.CurrentStep);
 
@@ -105,6 +109,77 @@ public sealed class SolidGroundDialogResumeTests
             Assert.Equal(DialogAoiSource.ExplicitArea, result.AoiSource);
             ParcelGeometryAoi area = Assert.IsType<ParcelGeometryAoi>(result.Aoi);
             Assert.Equal(0d, area.Buffer.Value);
+        });
+    }
+
+    [Fact]
+    public void ViewModelRetainsMeterOutputAndResolvesAnAmbiguousLocationBeforeParcelConfirmation()
+    {
+        StaTestHost.Run(() =>
+        {
+            RevitSettings settings = UiSettingsStore.CreateDefault() with
+            {
+                Request = UiSettingsStore.CreateDefault().Request with { OutputUnit = LengthUnit.Meter },
+            };
+            ImmediateGeocoder geocoder = new(
+                new AddressGeocodeCandidate(41.59d, -93.60d, "Synthetic first", "Synthetic attribution"),
+                new AddressGeocodeCandidate(41.60d, -93.61d, "Synthetic second", "Synthetic attribution"));
+            SolidGroundDialogViewModel viewModel = new(new SolidGroundDialogInputs(
+                geocoder,
+                AddressGeocoderProvider.Census,
+                new ImmediateParcelSource(),
+                [new NamedElevationCandidate(1, "Synthetic level", 0d)],
+                [new NamedCandidate(2, "Synthetic toposolid")],
+                null, null, LengthUnit.Meter, 15_000, false, false,
+                new RevitIniToposolidThresholds.Thresholds(20_000, null), "synthetic-revit.ini", 30,
+                settings.Request.AreaOfInterest, 30d, settings.Request.Mode, Settings: settings));
+
+            Assert.Equal(LengthUnit.Meter, viewModel.SelectedOutputUnit);
+            Assert.Contains(OpenTopographyUsgs1mSource.AttributionNotice, viewModel.SourceSummary, StringComparison.Ordinal);
+            viewModel.AddressText = "Synthetic ambiguous address";
+            viewModel.FindCommand.Execute(null);
+            PumpUntil(() => viewModel.GeocodeCandidates.Count == 2);
+            Assert.True(viewModel.HasMultipleLocations);
+
+            viewModel.SelectedGeocodeCandidate = viewModel.GeocodeCandidates[1];
+            viewModel.UseLocationCommand.Execute(null);
+            PumpUntil(() => viewModel.ParcelCandidates.Count == 1);
+            Assert.False(viewModel.HasMultipleLocations);
+            Assert.Equal("Synthetic attribution", viewModel.LocationAttribution);
+        });
+    }
+
+    [Fact]
+    public void ChangingGeocoderRequeriesTheAddressBeforeAnyNewParcelLookup()
+    {
+        StaTestHost.Run(() =>
+        {
+            RevitSettings initial = UiSettingsStore.CreateDefault();
+            RevitSettings changed = initial with
+            {
+                AddressAndParcel = initial.AddressAndParcel with { GeocoderProvider = AddressGeocoderProvider.Geocodio },
+            };
+            DelayedGeocoder first = new();
+            DelayedGeocoder replacement = new();
+            SolidGroundDialogViewModel viewModel = new(CreateInputs(
+                initial,
+                null,
+                _ => changed,
+                _ => new SolidGroundDialogLookupServices(replacement, AddressGeocoderProvider.Geocodio, null, 30d, 30, 0)) with
+            {
+                Geocoder = first,
+            });
+
+            viewModel.AddressText = "Synthetic provider address";
+            viewModel.FindCommand.Execute(null);
+            first.CompleteNext("Synthetic initial provider result");
+            PumpUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
+
+            viewModel.EditSettingsCommand.Execute(null);
+            Assert.Single(replacement.Pending);
+            replacement.CompleteNext("Synthetic replacement provider result");
+            PumpUntil(() => viewModel.ConfirmedLocation?.MatchedAddress == "Synthetic replacement provider result");
+            Assert.Equal(AddressGeocoderProvider.Geocodio, viewModel.EffectiveSettings!.AddressAndParcel.GeocoderProvider);
         });
     }
 
@@ -179,8 +254,46 @@ public sealed class SolidGroundDialogResumeTests
                 100d,
                 ParcelBoundarySourceKind.LocalParcelFile,
                 "Synthetic parcel source",
-                "Synthetic license disclaimer.");
+                "Synthetic license disclaimer.",
+                legalDescription: "Synthetic legal description.");
             Pending.Dequeue().SetResult(new ParcelBoundaryAcquisition([candidate]));
+        }
+
+        internal void FailNext() => Pending.Dequeue().SetException(new InvalidOperationException("Synthetic non-cooperative failure."));
+    }
+
+    private sealed class ImmediateGeocoder(params AddressGeocodeCandidate[] candidates) : IAddressGeocoder
+    {
+        public ValueTask<AddressGeocodeAcquisition> GeocodeAsync(AddressGeocodeRequest request, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(new AddressGeocodeAcquisition(candidates));
+    }
+
+    private sealed class DelayedGeocoder : IAddressGeocoder
+    {
+        internal Queue<TaskCompletionSource<AddressGeocodeAcquisition>> Pending { get; } = [];
+
+        public ValueTask<AddressGeocodeAcquisition> GeocodeAsync(AddressGeocodeRequest request, CancellationToken cancellationToken = default)
+        {
+            TaskCompletionSource<AddressGeocodeAcquisition> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Pending.Enqueue(completion);
+            return new ValueTask<AddressGeocodeAcquisition>(completion.Task);
+        }
+
+        internal void CompleteNext(string address) => Pending.Dequeue().SetResult(
+            new AddressGeocodeAcquisition([new AddressGeocodeCandidate(41.59d, -93.60d, address, "Synthetic attribution")]));
+    }
+
+    private sealed class ImmediateParcelSource : IParcelBoundarySource
+    {
+        public ValueTask<ParcelBoundaryAcquisition> FindAsync(ParcelBoundaryQuery query, CancellationToken cancellationToken = default)
+        {
+            ParcelBoundaryCandidate candidate = new(
+                ParcelGeometryParser.Parse(ParcelGeometryFormat.Wkt,
+                    "POLYGON ((-93.61 41.58, -93.59 41.58, -93.59 41.60, -93.61 41.58))", GeographicReference()),
+                "ambiguous-flow-parcel", 100d, ParcelBoundarySourceKind.LocalParcelFile,
+                "Synthetic parcel source", "Synthetic license disclaimer.",
+                legalDescription: "Synthetic legal description.");
+            return ValueTask.FromResult(new ParcelBoundaryAcquisition([candidate]));
         }
     }
 

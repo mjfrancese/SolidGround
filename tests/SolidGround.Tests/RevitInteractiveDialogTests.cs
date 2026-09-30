@@ -223,7 +223,7 @@ public sealed class RevitInteractiveDialogTests
     public void HostSuppliesARealSettingsEditorCallbackAndGatesUnacknowledgedCountyUse()
     {
         string host = Read("SolidGroundDialogHost.cs");
-        Assert.Contains("current => RevitSettingsIo.Edit(dialogOwner, current)", host, StringComparison.Ordinal);
+        Assert.Contains("current => RevitSettingsIo.Edit(dialogOwner, current, palette)", host, StringComparison.Ordinal);
         Assert.Contains("CountyServiceAuthorizedUseAcknowledged", host, StringComparison.Ordinal);
         Assert.Contains("BuildLookupServices", host, StringComparison.Ordinal);
         Assert.Contains("SessionApiKeyOverrides.GeocodioProvider()", host, StringComparison.Ordinal);

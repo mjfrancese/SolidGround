@@ -8,6 +8,7 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Units;
 using SolidGround.Core.Workflow;
 using SolidGround.Revit.Settings;
@@ -29,8 +30,12 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private IParcelBoundarySource? _parcelSource;
     private double _nearbySearchRadiusMeters;
     private int _networkTimeoutSeconds;
+    private long _credentialRevision;
+    private long _operationRevision;
     private RevitSettings? _effectiveSettings;
     private AreaOfInterest? _explicitAreaOfInterest;
+    private PreFetchEstimate? _cachedEstimate;
+    private string _estimateSummary = string.Empty;
     private bool _addressWasGeocoded;
     private string? _geocodedAddress;
 
@@ -45,12 +50,14 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         _parcelSource = inputs.ParcelSource;
         _nearbySearchRadiusMeters = inputs.NearbySearchRadiusMeters;
         _networkTimeoutSeconds = inputs.NetworkTimeoutSeconds;
+        _credentialRevision = inputs.InitialCredentialRevision;
         SelectedLevel = NamedElevationSelector.SelectLowestElevation(inputs.LevelCandidates, inputs.ConfiguredLevelName);
         SelectedToposolidType = NamedSelector.SelectFirstByOrdinalName(inputs.ToposolidTypeCandidates, inputs.ConfiguredToposolidTypeName);
         PointBudget = inputs.PrefilledPointBudget;
-        SelectedOutputUnit = inputs.PrefilledOutputUnit is LengthUnit.InternationalFoot ? LengthUnit.InternationalFoot : LengthUnit.UsSurveyFoot;
+        SelectedOutputUnit = Enum.IsDefined(inputs.PrefilledOutputUnit) ? inputs.PrefilledOutputUnit : LengthConverter.DefaultOutputUnit;
         // This is deliberately a current-run decision, never restored from old settings.
         WriteSharedCoordinatesIfAbsent = false;
+        RefreshEstimate();
     }
 
     public SolidGroundDialogStep CurrentStep => _flow.Stage switch
@@ -72,21 +79,24 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     public IReadOnlyList<AddressGeocodeCandidate> GeocodeCandidates => _flow.LocationCandidates;
     /// <summary>The current resolved location, retained while a configured parcel source is replaced.</summary>
     public AddressGeocodeCandidate? ConfirmedLocation => _flow.SelectedLocation;
+    /// <summary>The actual provider attribution for the selected address result, shown once that result is used.</summary>
+    public string LocationAttribution => _addressWasGeocoded && ConfirmedLocation is { } location
+        ? location.Attribution
+        : string.Empty;
     public IReadOnlyList<ParcelProximityCandidate> ParcelCandidates => _flow.ParcelCandidates;
-    public bool HasMultipleLocations => GeocodeCandidates.Count > 1;
+    public bool HasMultipleLocations => _flow.LocationRequiresConfirmation;
     public bool ShowCoordinates => EntryMode == LocationEntryMode.Coordinates;
     public bool ShowOtherAreaOptions => EntryMode is LocationEntryMode.BoundingBox or LocationEntryMode.Radius or LocationEntryMode.LocalGeometry;
     public bool ShowAddress => EntryMode == LocationEntryMode.Address;
-    public bool IsBusy { get; private set; }
     public bool UsedNearbyTier => _flow.UsedNearbyTier;
     public string? NearbyTierNoticeText => UsedNearbyTier
-        ? $"No parcel contains this point. Choose a nearby parcel explicitly (within {_inputs.NearbySearchRadiusMeters.ToString("N0", CultureInfo.InvariantCulture)} m)."
+        ? $"No parcel contains this point. Choose a nearby parcel explicitly (within {_nearbySearchRadiusMeters.ToString("N0", CultureInfo.InvariantCulture)} m)."
         : null;
     public string ContainmentLabel => SelectedParcelCandidate is null ? string.Empty :
         SelectedParcelCandidate.DistanceMeters == 0d ? "Contains the resolved location" :
         $"Nearby: {SelectedParcelCandidate.DistanceMeters.ToString("N1", CultureInfo.InvariantCulture)} m from the resolved location";
     public string SelectedParcelDetail => SelectedParcelCandidate is not { } selected ? string.Empty :
-        $"Parcel {selected.Candidate.ParcelId} · {selected.Candidate.ComputedAreaSquareMeters.ToString("N0", CultureInfo.InvariantCulture)} m² · {ContainmentLabel}";
+        DescribeParcel(selected);
     public string SelectedParcelSourceTerms => SelectedParcelCandidate is not { } selected ? string.Empty :
         $"Source: {selected.Candidate.SourceIdentity}. {selected.Candidate.LicenseDisclaimerText}";
     public string AccuracyDisclaimer => _inputs.ParcelSource is null
@@ -96,7 +106,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     public string SettingsSummary => _effectiveSettings is null ? "Settings were loaded for this run." :
         $"{_effectiveSettings.Request.Mode} · {PointBudget.ToString(CultureInfo.InvariantCulture)} points · {SelectedOutputUnit}";
     public string SourceSummary => EffectiveMode == TerrainAcquisitionMode.Fetch
-        ? "USGS 1 m elevation through OpenTopography; Find does not request elevation."
+        ? "USGS 1 m elevation through OpenTopography; Find does not request elevation. " + OpenTopographyUsgs1mSource.AttributionNotice
         : "Local elevation input will be read only after Create toposolid.";
     public string ExtensionSummary => _effectiveSettings is null
         ? "Terrain extension is a saved Settings preference and is read-only here."
@@ -104,10 +114,9 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     public double TerrainExtensionMeters => _effectiveSettings?.TerrainExtensionMeters ?? 0d;
     public string TerrainExtensionDisplay => DistanceDisplayConverter.FormatMeters(
         TerrainExtensionMeters, _effectiveSettings?.DistanceDisplayFormat ?? DistanceDisplayFormat.UsSurveyFeet);
-    public string EstimateSummary => EffectiveMode == TerrainAcquisitionMode.Fetch
-        ? "Pre-fetch estimate is shown after the terrain extent is planned; it does not check entitlement or request elevation."
-        : "Local-input estimate is shown after the terrain extent is planned; it does not read the raster yet.";
-    public string EstimateText => DescribeEstimate();
+    /// <summary>Cached estimate for the current confirmed AOI; it never performs planner work during binding reads.</summary>
+    public string EstimateSummary => _estimateSummary;
+    public string RadiusLabel => $"Radius ({RadiusDisplayUnit})";
     public string? NativePointBudgetWarning => RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds)
         ? RevitIniToposolidThresholds.DescribeExceedance(PointBudget, _inputs.RevitIniThresholds.NativeToposolidMaxPointThreshold!.Value, _inputs.RevitIniPath)
         : null;
@@ -146,7 +155,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(UseLocationCommand), nameof(UseParcelCommand), nameof(CreateCommand))]
-    [NotifyPropertyChangedFor(nameof(ContainmentLabel))]
+    [NotifyPropertyChangedFor(nameof(ContainmentLabel), nameof(HasMultipleLocations), nameof(ConfirmedLocation))]
     private AddressGeocodeCandidate? _selectedGeocodeCandidate;
 
     [ObservableProperty]
@@ -155,10 +164,14 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     private ParcelProximityCandidate? _selectedParcelCandidate;
 
     [ObservableProperty] private string? _errorText;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(FindCommand), nameof(UseLocationCommand), nameof(UseParcelCommand), nameof(CreateCommand))]
+    private bool _isBusy;
     [ObservableProperty] private NamedElevationCandidate? _selectedLevel;
     [ObservableProperty] private NamedCandidate? _selectedToposolidType;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SettingsSummary), nameof(NativePointBudgetWarning))]
+    [NotifyCanExecuteChangedFor(nameof(CreateCommand))]
     private int _pointBudget;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SettingsSummary))]
@@ -180,11 +193,13 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 
     private void InvalidateInput()
     {
+        FindCancelCommand.Execute(null);
+        InvalidateCurrentOperation();
         _explicitAreaOfInterest = null;
         _flow.ChangeInput();
         SelectedGeocodeCandidate = null;
         SelectedParcelCandidate = null;
-        OnPropertyChanged(nameof(EstimateText));
+        RefreshEstimate();
         NotifyFlowChanged();
     }
 
@@ -210,7 +225,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 
             _explicitAreaOfInterest = area;
             _flow.UseExplicitArea();
-            OnPropertyChanged(nameof(EstimateText));
+            RefreshEstimate();
             NotifyFlowChanged();
             return;
         }
@@ -223,16 +238,13 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         }
 
         LocationParcelLookupTicket ticket = _flow.BeginLocationLookup();
-        IsBusy = true;
-        FindCommand.NotifyCanExecuteChanged();
+        long operation = BeginOperation();
         try
         {
             IReadOnlyList<AddressGeocodeCandidate> candidates;
             if (directCandidate is not null)
             {
                 candidates = [directCandidate];
-                _addressWasGeocoded = false;
-                _geocodedAddress = null;
             }
             else
             {
@@ -243,14 +255,15 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
                     .GeocodeAsync(new AddressGeocodeRequest(AddressText.Trim()), timeout.Token)
                     .ConfigureAwait(true);
                 candidates = acquisition.Candidates;
-                _addressWasGeocoded = true;
-                _geocodedAddress = AddressText.Trim();
             }
 
-            if (!_flow.TryApplyLocations(ticket, candidates))
+            if (cancellationToken.IsCancellationRequested || !_flow.TryApplyLocations(ticket, candidates))
             {
                 return;
             }
+
+            _addressWasGeocoded = directCandidate is null;
+            _geocodedAddress = directCandidate is null ? AddressText.Trim() : null;
 
             SelectedGeocodeCandidate = _flow.SelectedLocation;
             NotifyFlowChanged();
@@ -259,12 +272,15 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
                 await FindParcelsAsync(cancellationToken).ConfigureAwait(true);
             }
         }
-        catch (AddressGeocoderException ex) { ErrorText = ex.Message; }
-        catch (OperationCanceledException) { ErrorText = "The location lookup was cancelled."; }
+        catch (AddressGeocoderException ex) { SetErrorIfCurrent(ticket, operation, ex.Message); }
+        catch (OperationCanceledException) { SetErrorIfCurrent(ticket, operation, "The location lookup was cancelled."); }
+        catch (Exception) { SetErrorIfCurrent(ticket, operation, "The location lookup could not complete safely."); }
         finally
         {
-            IsBusy = false;
-            FindCommand.NotifyCanExecuteChanged();
+            if (IsCurrentOperation(operation))
+            {
+                IsBusy = false;
+            }
         }
     }
 
@@ -294,7 +310,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
 
         LocationParcelLookupTicket ticket = _flow.BeginParcelLookup();
         AddressGeocodeCandidate location = _flow.SelectedLocation!;
-        IsBusy = true;
+        long operation = BeginOperation();
         try
         {
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -302,15 +318,22 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             double nearbySearchRadiusMeters = _nearbySearchRadiusMeters;
             ParcelProximityAcquisition acquisition = await NearbyParcelBoundaryFinder.FindAsync(
                 parcelSource, location.Latitude, location.Longitude, nearbySearchRadiusMeters, timeout.Token).ConfigureAwait(true);
-            if (_flow.TryApplyParcels(ticket, acquisition))
+            if (!cancellationToken.IsCancellationRequested && _flow.TryApplyParcels(ticket, acquisition))
             {
                 SelectedParcelCandidate = null;
                 NotifyFlowChanged();
             }
         }
-        catch (ParcelBoundarySourceException ex) { ErrorText = ex.Message; }
-        catch (OperationCanceledException) { ErrorText = "The parcel lookup was cancelled."; }
-        finally { IsBusy = false; }
+        catch (ParcelBoundarySourceException ex) { SetErrorIfCurrent(ticket, operation, ex.Message); }
+        catch (OperationCanceledException) { SetErrorIfCurrent(ticket, operation, "The parcel lookup was cancelled."); }
+        catch (Exception) { SetErrorIfCurrent(ticket, operation, "The parcel lookup could not complete safely."); }
+        finally
+        {
+            if (IsCurrentOperation(operation))
+            {
+                IsBusy = false;
+            }
+        }
     }
 
     private bool CanUseParcel() => !IsBusy && CurrentStep == SolidGroundDialogStep.Parcel && SelectedParcelCandidate is not null;
@@ -320,6 +343,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     {
         if (SelectedParcelCandidate is not null && _flow.TryUseParcel(SelectedParcelCandidate))
         {
+            RefreshEstimate();
             NotifyFlowChanged();
         }
     }
@@ -347,22 +371,49 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             return;
         }
 
-        RevitSettings? edited = _inputs.EditSettings(_effectiveSettings ?? _inputs.Settings);
+        RevitSettings? edited;
+        try
+        {
+            edited = _inputs.EditSettings(_effectiveSettings ?? _inputs.Settings);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            ErrorText = "Settings could not be opened or applied safely. No dialog choices were changed.";
+            return;
+        }
         if (edited is null)
         {
             return;
         }
 
         RevitSettings previous = _effectiveSettings ?? _inputs.Settings;
+        DistanceDisplayFormat previousDistanceFormat = previous.DistanceDisplayFormat;
+        double? radiusMetersBeforeEdit = TryParseRadiusMeters(previousDistanceFormat);
+        bool geocoderChanged = previous.AddressAndParcel.GeocoderProvider != edited.AddressAndParcel.GeocoderProvider;
         bool lookupConfigurationChanged = !Equals(previous.AddressAndParcel, edited.AddressAndParcel);
-        SolidGroundDialogLookupServices services = _inputs.ReconfigureLookupServices?.Invoke(edited) ??
-            new SolidGroundDialogLookupServices(_geocoder, _geocoderProvider, _parcelSource, _nearbySearchRadiusMeters, _networkTimeoutSeconds);
+        SolidGroundDialogLookupServices services;
+        try
+        {
+            services = _inputs.ReconfigureLookupServices?.Invoke(edited) ??
+                new SolidGroundDialogLookupServices(_geocoder, _geocoderProvider, _parcelSource, _nearbySearchRadiusMeters, _networkTimeoutSeconds, _credentialRevision);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            ErrorText = "Settings were saved, but the updated lookup source could not be configured. Reopen Settings and correct the source before searching.";
+            return;
+        }
+        lookupConfigurationChanged |= services.CredentialRevision != _credentialRevision;
         _effectiveSettings = edited;
         _geocoder = services.Geocoder;
         _geocoderProvider = services.GeocoderProvider;
         _parcelSource = services.ParcelSource;
         _nearbySearchRadiusMeters = services.NearbySearchRadiusMeters;
         _networkTimeoutSeconds = services.NetworkTimeoutSeconds;
+        _credentialRevision = services.CredentialRevision;
+        if (radiusMetersBeforeEdit is { } radiusMeters)
+        {
+            RadiusMetersText = DistanceDisplayConverter.FormatMeters(radiusMeters, edited.DistanceDisplayFormat);
+        }
         PointBudget = edited.Request.Simplification.PointBudget;
         SelectedOutputUnit = edited.Request.OutputUnit;
         OnPropertyChanged(nameof(EffectiveSettings));
@@ -371,16 +422,27 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         OnPropertyChanged(nameof(ExtensionSummary));
         OnPropertyChanged(nameof(TerrainExtensionMeters));
         OnPropertyChanged(nameof(TerrainExtensionDisplay));
-        OnPropertyChanged(nameof(EstimateSummary));
-        OnPropertyChanged(nameof(EstimateText));
+        OnPropertyChanged(nameof(RadiusLabel));
+        RefreshEstimate();
         OnPropertyChanged(nameof(NativePointBudgetWarning));
         if (lookupConfigurationChanged)
         {
             // The revision is the authority for non-cooperative requests. Cancellation is best-effort only.
             FindCancelCommand.Execute(null);
+            InvalidateCurrentOperation();
             _flow.ChangeSource();
+            bool mustRegeocode = geocoderChanged && _addressWasGeocoded && !string.IsNullOrWhiteSpace(_geocodedAddress);
+            if (mustRegeocode)
+            {
+                EntryMode = LocationEntryMode.Address;
+                AddressText = _geocodedAddress!;
+                // EntryMode/AddressText invalidate the old provider snapshot. The new provider must produce
+                // the candidate that later reaches provenance; retaining the old candidate would misstate it.
+                _ = FindAsync(CancellationToken.None);
+            }
             SelectedParcelCandidate = null;
-            if (_flow.SelectedLocation is not null)
+            RefreshEstimate();
+            if (!mustRegeocode && _flow.SelectedLocation is not null)
             {
                 _ = FindParcelsAsync(CancellationToken.None);
             }
@@ -388,8 +450,10 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         NotifyFlowChanged();
     }
 
-    private bool CanCreate() => CurrentStep == SolidGroundDialogStep.Review && SelectedLevel is not null && SelectedToposolidType is not null &&
-        (_flow.SelectedParcel is not null || ShowOtherAreaOptions);
+    private bool CanCreate() => !IsBusy && CurrentStep == SolidGroundDialogStep.Review && SelectedLevel is not null && SelectedToposolidType is not null &&
+        PointBudget is >= SimplificationSettings.MinPointBudget and <= SimplificationSettings.MaxPointBudget &&
+        !RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds) &&
+        (_flow.SelectedParcel is not null || _explicitAreaOfInterest is not null);
 
     [RelayCommand(CanExecute = nameof(CanCreate))]
     private void Create()
@@ -468,7 +532,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
                 case LocationEntryMode.Radius:
                     area = new Wgs84RadiusAoi(
                         ParseNumber(LatitudeText, "Latitude"), ParseNumber(LongitudeText, "Longitude"),
-                        LinearDistance.Meters(ParseNumber(RadiusMetersText, "Radius metres")));
+                        LinearDistance.Meters(ParseRadiusMeters()));
                     return true;
                 case LocationEntryMode.LocalGeometry:
                     ParcelGeometryFormat format = LocalGeometryText.TrimStart().StartsWith('{')
@@ -499,35 +563,104 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         return value;
     }
 
+    private long BeginOperation()
+    {
+        long operation = Interlocked.Increment(ref _operationRevision);
+        IsBusy = true;
+        return operation;
+    }
+
+    private void InvalidateCurrentOperation()
+    {
+        Interlocked.Increment(ref _operationRevision);
+        IsBusy = false;
+    }
+
+    private bool IsCurrentOperation(long operation) => operation == Interlocked.Read(ref _operationRevision);
+
+    private void SetErrorIfCurrent(LocationParcelLookupTicket ticket, long operation, string message)
+    {
+        if (IsCurrentOperation(operation) && _flow.IsCurrent(ticket))
+        {
+            ErrorText = message;
+        }
+    }
+
     private static readonly HorizontalReference Wgs84Reference = new(
         "WGS 84", "World Geodetic System 1984", HorizontalReferenceKind.Geographic,
         HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);
 
-    private string DescribeEstimate()
+    private void RefreshEstimate()
     {
-        if (EffectiveMode != TerrainAcquisitionMode.Fetch)
+        _cachedEstimate = null;
+        AreaOfInterest? area = CurrentAreaOfInterest();
+        if (area is null)
         {
-            return "Local input is estimated after the terrain extent is planned.";
+            _estimateSummary = EffectiveMode == TerrainAcquisitionMode.Fetch
+                ? "Confirm an area to estimate the OpenTopography fetch envelope."
+                : "Confirm an area to estimate the local terrain envelope; no raster is read and no HTTP request is made.";
+            OnPropertyChanged(nameof(EstimateSummary));
+            return;
         }
 
-        return _explicitAreaOfInterest switch
+        try
         {
-            Wgs84BoundingBoxAoi box => DescribeEstimate(PreFetchEstimator.FromBoundingBox(new BoundingBoxAoiSettings
-            {
-                West = box.WestLongitude, South = box.SouthLatitude, East = box.EastLongitude, North = box.NorthLatitude,
-            })),
-            Wgs84RadiusAoi radius => DescribeEstimate(PreFetchEstimator.FromRadius(new RadiusAoiSettings
-            {
-                CenterLatitude = radius.Latitude, CenterLongitude = radius.Longitude, RadiusMeters = radius.Radius.Value,
-            })),
-            ParcelGeometryAoi => "The polygon's terrain extent will be planned before elevation is requested.",
-            _ => EstimateSummary,
-        };
+            LinearDistance? terrainMargin = area is ParcelGeometryAoi ? LinearDistance.Meters(TerrainExtensionMeters) : null;
+            _cachedEstimate = EffectiveMode == TerrainAcquisitionMode.Fetch
+                ? PreFetchEstimator.FromAreaOfInterest(area, terrainMargin)
+                : PreFetchEstimator.FromProcessAreaOfInterest(area, terrainMargin);
+            _estimateSummary = DescribeEstimate(_cachedEstimate);
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
+        {
+            _estimateSummary = "The current area could not be estimated: " + ex.Message;
+        }
+
+        OnPropertyChanged(nameof(EstimateSummary));
     }
 
     private static string DescribeEstimate(PreFetchEstimate estimate) =>
         $"Estimated {estimate.ApproximateOneMeterSamples.ToString("N0", CultureInfo.InvariantCulture)} one-metre samples across " +
         $"{estimate.EnvelopeSquareMeters.ToString("N0", CultureInfo.InvariantCulture)} m². {estimate.Label}";
+
+    private static string DescribeParcel(ParcelProximityCandidate selected)
+    {
+        ParcelBoundaryCandidate candidate = selected.Candidate;
+        string description = $"Parcel {candidate.ParcelId} · {candidate.ComputedAreaSquareMeters.ToString("N0", CultureInfo.InvariantCulture)} m² · " +
+            (selected.DistanceMeters == 0d
+                ? "Contains the resolved location"
+                : $"Nearby: {selected.DistanceMeters.ToString("N1", CultureInfo.InvariantCulture)} m from the resolved location");
+
+        if (candidate.LegalDescription is { } legalDescription)
+        {
+            description += " · Legal description: " + legalDescription;
+        }
+
+        return description;
+    }
+
+    private AreaOfInterest? CurrentAreaOfInterest() => _explicitAreaOfInterest ??
+        (_flow.SelectedParcel is { } parcel ? ParcelBoundaryAoiFactory.FromCandidate(parcel.Candidate, LinearDistance.Zero) : null);
+
+    private double ParseRadiusMeters() => DistanceDisplayConverter.ParseMeters(RadiusMetersText, EffectiveDistanceDisplayFormat);
+
+    private double? TryParseRadiusMeters(DistanceDisplayFormat format)
+    {
+        if (string.IsNullOrWhiteSpace(RadiusMetersText)) return null;
+        try { return DistanceDisplayConverter.ParseMeters(RadiusMetersText, format); }
+        catch (FormatException) { return null; }
+    }
+
+    private DistanceDisplayFormat EffectiveDistanceDisplayFormat => _effectiveSettings?.DistanceDisplayFormat ?? DistanceDisplayFormat.Metres;
+
+    private string RadiusDisplayUnit => EffectiveDistanceDisplayFormat switch
+    {
+        DistanceDisplayFormat.UsSurveyFeet => "US survey ft",
+        DistanceDisplayFormat.InternationalFeet => "international ft",
+        DistanceDisplayFormat.InternationalInches => "in",
+        DistanceDisplayFormat.FeetAndInches => "ft/in",
+        _ => "m",
+    };
 
     private void NotifyFlowChanged()
     {
@@ -535,6 +668,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         OnPropertyChanged(nameof(StageAnnouncement));
         OnPropertyChanged(nameof(GeocodeCandidates));
         OnPropertyChanged(nameof(ConfirmedLocation));
+        OnPropertyChanged(nameof(LocationAttribution));
         OnPropertyChanged(nameof(ParcelCandidates));
         OnPropertyChanged(nameof(HasMultipleLocations));
         OnPropertyChanged(nameof(UsedNearbyTier));

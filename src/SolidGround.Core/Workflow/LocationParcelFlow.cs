@@ -147,7 +147,8 @@ public sealed class LocationParcelFlow
     /// <summary>Returns to Location without discarding otherwise-valid lookup results.</summary>
     public void ReturnToLocation() => Stage = LocationParcelStage.Location;
 
-    private bool IsCurrent(LocationParcelLookupTicket ticket) =>
+    /// <summary>True only while a host-owned asynchronous operation still matches this flow's input/source snapshot.</summary>
+    public bool IsCurrent(LocationParcelLookupTicket ticket) =>
         ticket.InputRevision == _inputRevision && ticket.SourceRevision == _sourceRevision;
 
     private void ClearParcels()
