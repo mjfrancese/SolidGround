@@ -46,7 +46,8 @@ V2 is `SolidGround_Provenance_Toposolid_V2`, GUID
 - `coverageFloorFraction` (Number spec) and `collectionPeriodAvailability`;
 - `terrainIdentityVersion`, `terrainIdentityKind`, `terrainIdentityStem`,
   `terrainContentSignatureAlgorithm`, `terrainContentSignature`, `terrainPointFrameHash`,
-  `storedOriginalUniqueId`, and `storedOriginalDocumentCreationGuid`.
+  `storedOriginalUniqueId`, and `storedOriginalDocumentCreationGuid`;
+- `nativeVertexFingerprint`, covering the verified native vertices and profile topology.
 
 `ExtensibleStorageProvenanceValuesV2.From` composes the existing v1 `From` result rather than duplicating
 its unit and reference conversion. The writer does four checks before commit: entity GUID recognition,
@@ -64,8 +65,10 @@ lookup dates and UI text and include the final expected point set and frame.
 `ExistingTerrainScanner` is read-only and must run after the pipeline makes the point/frame hash available,
 before opening a transaction. It returns plain Core decision data. A malformed/unreadable v2 or v1 entity
 throws a named scan exception and is never skipped. V1 entities require explicit current-run acknowledgement.
-For v2, no match creates, one fully equal same-history match reuses, and any changed content, point/frame,
-document creation GUID, unique id, or more than one matching stem refuses. Save As retains history only if the
+For v2, no match permits creation, and any changed content, point/frame, document creation GUID, unique id,
+or more than one matching stem refuses. Core identifies an exact same-history match as eligible for reuse;
+the current command conservatively refuses that repeat and identifies the existing element instead of
+creating duplicate terrain or overwriting exports. Automatic reuse is not implemented. Save As retains history only if the
 creation GUID, current unique id, and all signatures still agree.
 
 V2 additionally stores a post-verification native fingerprint. It combines the order-independent slab-shape
