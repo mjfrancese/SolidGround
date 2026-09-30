@@ -1,4 +1,6 @@
 using SolidGround.Core.Accuracy;
+using SolidGround.Core.Aois;
+using SolidGround.Core.Clipping;
 using SolidGround.Core.Geometry;
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Terrain;
@@ -52,6 +54,23 @@ public sealed class TerrainErrorAnalyzerTests
         Assert.Equal(16, report.ComparedCellCount);
         Assert.Equal(0, report.UncoveredCellCount);
         Assert.Equal(0d, report.MaximumAbsoluteResidual, precision: 10);
+    }
+
+    [Theory]
+    [InlineData(LengthUnit.UsSurveyFoot)]
+    [InlineData(LengthUnit.InternationalFoot)]
+    public void UnitRoundTripAtOuterBoundaryIsNormalizedWithoutExpandingSupport(LengthUnit externalUnit)
+    {
+        ElevationGrid grid = Grid(4, 4, (_, _) => 10d);
+        double Convert(double value) => LengthConverter.Convert(LengthConverter.Convert(value, LengthUnit.Meter, externalUnit), externalUnit, LengthUnit.Meter);
+        TerrainSample[] surface =
+        [new(new Coordinate3D(Convert(0d), Convert(0d), 10d)), new(new Coordinate3D(Convert(4d), Convert(0d), 10d)),
+         new(new Coordinate3D(Convert(0d), Convert(4d), 10d)), new(new Coordinate3D(Convert(4d), Convert(4d), 10d))];
+
+        TerrainErrorReport report = TerrainErrorAnalyzer.AnalyzeSurface(grid, surface, LengthUnit.Meter);
+
+        Assert.Equal(16, report.ComparedCellCount);
+        Assert.Equal(0, report.UncoveredCellCount);
     }
 
     [Fact]
@@ -113,6 +132,50 @@ public sealed class TerrainErrorAnalyzerTests
         Assert.Equal(first.ComparedCellCount, second.ComparedCellCount);
         Assert.Equal(first.UncoveredCellCount, second.UncoveredCellCount);
         Assert.Equal(first.UncoveredByReason.OrderBy(pair => pair.Key), second.UncoveredByReason.OrderBy(pair => pair.Key));
+    }
+
+    [Fact]
+    public void PointInsideNoDataHoleIsRejectedRatherThanSnappedAcrossItsBoundary()
+    {
+        ElevationGrid grid = Grid(5, 5, (row, column) => row == 2 && column == 2 ? null : 0d);
+        TerrainSample[] surface =
+        [new(new Coordinate3D(0.1, 0.1, 0)), new(new Coordinate3D(4.9, 0.1, 0)), new(new Coordinate3D(2.5, 2.5, 0))];
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => TerrainErrorAnalyzer.AnalyzeSurface(grid, surface, LengthUnit.Meter));
+
+        Assert.Contains("support footprint", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConcaveClipMaskRejectsTheDelaunayBridgeAcrossTheMissingCorner()
+    {
+        ElevationGrid source = Grid(5, 5, (_, _) => 0d);
+        NetTopologySuite.IO.WKTReader reader = new();
+        PolygonalRegion lShape = PolygonalRegion.FromGeometry(reader.Read("POLYGON ((0 0, 5 0, 5 2, 2 2, 2 5, 0 5, 0 0))"), source.HorizontalReference);
+        GridClipResult clipped = GridClipper.Clip(source, ClipRegion.FromRegion(lShape, LinearDistance.Zero));
+        TerrainSample[] corners = [Sample(clipped.Grid, 0, 0), Sample(clipped.Grid, 0, 4), Sample(clipped.Grid, 4, 0)];
+
+        TerrainErrorReport report = TerrainErrorAnalyzer.Analyze(clipped, corners, LengthUnit.Meter);
+
+        Assert.Equal(16, clipped.RetainedElevationCount);
+        Assert.Equal(0, report.ComparedCellCount);
+        Assert.Equal(16, report.UncoveredCellCount);
+        Assert.Equal(16, report.UncoveredByReason.Values.Sum());
+    }
+
+    [Theory]
+    [InlineData(1d)]
+    [InlineData(-1d)]
+    public void RidgeAndSwaleResidualsAreMeasuredAtAConstrainedBudget(double sign)
+    {
+        ElevationGrid grid = Grid(5, 5, (_, column) => sign * (10d - Math.Abs(column - 2)));
+        TerrainSample[] corners = [Sample(grid, 0, 0), Sample(grid, 0, 4), Sample(grid, 4, 0), Sample(grid, 4, 4)];
+
+        TerrainErrorReport report = TerrainErrorAnalyzer.Analyze(grid, corners, LengthUnit.Meter);
+
+        Assert.Equal(25, report.ComparedCellCount);
+        Assert.True(report.MaximumAbsoluteResidual > 0d);
+        Assert.True(report.RootMeanSquareResidual > 0d);
     }
 
     private static ElevationGrid Grid(int rows, int columns, Func<int, int, double?> elevation)
