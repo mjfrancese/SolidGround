@@ -57,8 +57,11 @@ internal static class UiSettingsStore
             draft = new UiSettingsDraft(Decode(snapshot.Bytes, path), snapshot.Version, path);
             return true;
         }
-        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException or ArgumentException)
         {
+            // JsonNode's object materializer raises ArgumentException for duplicate property names
+            // before Decode can inspect the object. Treat it like every other malformed document:
+            // report repair guidance and, crucially, leave the original bytes untouched.
             error = $"Settings at '{path}' need repair: {ex.Message}";
             return false;
         }

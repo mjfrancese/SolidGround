@@ -212,7 +212,10 @@ internal sealed class SettingsDialog : Window
     private static TextBlock Label(string text) => new() { Text = text, Margin = new Thickness(0, 8, 0, 2) };
     private static TextBox Text(string text, bool multiline = false)
     {
-        TextBox box = new() { Text = text, MinWidth = 360, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, AcceptsReturn = multiline, MinHeight = multiline ? 64 : double.NaN };
+        // FrameworkElement.MinHeight rejects NaN (unlike Width/Height's Auto sentinel). Leave the
+        // default alone for one-line editors and give only the multi-line notice editor a minimum.
+        TextBox box = new() { Text = text, MinWidth = 360, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, AcceptsReturn = multiline };
+        if (multiline) box.MinHeight = 64;
         return box;
     }
     private static ComboBox Choice<T>(IEnumerable<T> values, T selected) { ComboBox box = new() { ItemsSource = values.ToArray(), SelectedItem = selected, MinWidth = 240 }; return box; }
