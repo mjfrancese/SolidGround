@@ -119,12 +119,22 @@ internal static class DialogTheme
     /// </summary>
     internal static DialogPalette Resolve(UITheme revitTheme, bool highContrast)
     {
+        return GetPalette(revitTheme == UITheme.Dark, highContrast);
+    }
+
+    /// <summary>
+    /// Returns the same production palette as <see cref="Resolve"/> without naming a Revit UI type.
+    /// This keeps the local WPF rendered-control test lane able to exercise the real palette even when
+    /// RevitAPIUI is intentionally absent from that test process.
+    /// </summary>
+    internal static DialogPalette GetPalette(bool dark, bool highContrast)
+    {
         if (highContrast)
         {
             return HighContrastPalette;
         }
 
-        return revitTheme == UITheme.Dark ? DarkPalette : LightPalette;
+        return dark ? DarkPalette : LightPalette;
     }
 
     private static SolidColorBrush Brush(byte red, byte green, byte blue)
