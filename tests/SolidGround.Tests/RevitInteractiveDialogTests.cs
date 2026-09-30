@@ -1,3 +1,7 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
+
 namespace SolidGround.Tests;
 
 /// <summary>Cross-platform contract checks for code-built WPF source; rendered-state coverage lives in the local Windows lane.</summary>
@@ -5,6 +9,92 @@ public sealed class RevitInteractiveDialogTests
 {
     private static readonly string Root = FindRoot();
     private static readonly string Dialog = Path.Combine(Root, "src", "SolidGround.Revit", "Dialog");
+    private static readonly string RevitProject = Path.Combine(Root, "src", "SolidGround.Revit");
+    private const string MvvmPackage = "CommunityToolkit.Mvvm";
+    private const string MvvmVersion = "8.4.2";
+
+    [Fact]
+    public void RevitDialogRemainsCodeOnlyAndUsesTheApprovedMvvmPackageShape()
+    {
+        Assert.Empty(Directory.EnumerateFiles(RevitProject, "*.xaml", SearchOption.AllDirectories));
+        XDocument project = XDocument.Load(Path.Combine(RevitProject, "SolidGround.Revit.csproj"));
+        XElement package = Assert.Single(project.Descendants("PackageReference"), element => (string?)element.Attribute("Include") == MvvmPackage);
+        Assert.Equal(MvvmVersion, (string?)package.Attribute("Version"));
+        Assert.Null(package.Attribute("Condition"));
+        Assert.Null(package.Parent?.Attribute("Condition"));
+        Assert.Equal("true", Assert.Single(project.Descendants("UseWPF")).Value);
+        Assert.Empty(project.Descendants("FrameworkReference"));
+    }
+
+    [Fact]
+    public void MvvmIsRevitOnlyAndPinnedInBothRestoreGraphs()
+    {
+        string[] projects = [.. Directory.EnumerateFiles(Root, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase) && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase))];
+        Assert.Equal(Path.Combine(RevitProject, "SolidGround.Revit.csproj"), Assert.Single(projects, path => File.ReadAllText(path).Contains(MvvmPackage, StringComparison.Ordinal)));
+        foreach (string lockFile in new[] { "packages.lock.json", "packages.ci.lock.json" })
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(Path.Combine(RevitProject, lockFile)));
+            string source = document.RootElement.GetRawText();
+            Assert.Equal(1, Regex.Count(source, "\\\"" + Regex.Escape(MvvmPackage) + "\\\""));
+            Assert.Contains("\"resolved\": \"" + MvvmVersion + "\"", source, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ThemeAndControlStylesKeepHighContrastAndSemanticPaletteCoverage()
+    {
+        string theme = Read("DialogTheme.cs");
+        string styles = Read("DialogControlStyles.cs");
+        Assert.Contains("SystemParameters.HighContrast", Read("SolidGroundDialogHost.cs"), StringComparison.Ordinal);
+        Assert.Contains("SystemColors.", theme, StringComparison.Ordinal);
+        Assert.Contains("UIThemeManager.CurrentTheme", Read("SolidGroundDialogHost.cs"), StringComparison.Ordinal);
+        Assert.Contains("PrimaryButtonStyleKey", styles, StringComparison.Ordinal);
+        Assert.Contains("ComboBoxTemplate", styles, StringComparison.Ordinal);
+        Assert.Contains("ToolTipStyle", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DialogBindingsTargetPublicViewModelPropertiesAndUseNoInlineBrushes()
+    {
+        string dialog = Read("SolidGroundDialog.cs");
+        string viewModel = Read("SolidGroundDialogViewModel.cs");
+        foreach (string binding in Regex.Matches(dialog, @"nameof\(SolidGroundDialogViewModel\.([A-Za-z0-9_]+)\)").Select(match => match.Groups[1].Value).Where(name => !name.EndsWith("Command", StringComparison.Ordinal)).Distinct(StringComparer.Ordinal))
+        {
+            bool explicitPublicProperty = Regex.IsMatch(viewModel, @"public\s+(?:[A-Za-z0-9_?.<>]+\s+)+" + Regex.Escape(binding) + @"\b");
+            string backingName = "_" + char.ToLowerInvariant(binding[0]) + binding[1..];
+            bool generatedPublicProperty = Regex.IsMatch(viewModel, @"\[ObservableProperty\][\s\S]{0,600}" + Regex.Escape(backingName) + @"\b");
+            Assert.True(explicitPublicProperty || generatedPublicProperty, $"Binding '{binding}' must target a public property or an [ObservableProperty] backing field.");
+        }
+        Assert.DoesNotContain("Brushes.", dialog, StringComparison.Ordinal);
+        Assert.DoesNotContain("Color.From", dialog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LookupPathsAreAsyncBoundedAndInvalidateStaleConfirmedState()
+    {
+        string source = Read("SolidGroundDialogViewModel.cs");
+        Assert.Contains("timeout.CancelAfter", source, StringComparison.Ordinal);
+        Assert.Contains("catch (AddressGeocoderException", source, StringComparison.Ordinal);
+        Assert.Contains("catch (ParcelBoundarySourceException", source, StringComparison.Ordinal);
+        Assert.Contains("catch (OperationCanceledException)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetAwaiter().GetResult", source, StringComparison.Ordinal);
+        Assert.Contains("_flow.ChangeInput()", source, StringComparison.Ordinal);
+        Assert.Contains("SelectedGeocodeCandidate = null", source, StringComparison.Ordinal);
+        Assert.Contains("SelectedParcelCandidate = null", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DialogRetainsSourceAttributionNearbySafetyAndTypedParcelSelection()
+    {
+        string source = Read("SolidGroundDialogViewModel.cs");
+        string host = Read("SolidGroundDialogHost.cs");
+        Assert.Contains("NearbyParcelBoundaryFinder.FindAsync", source, StringComparison.Ordinal);
+        Assert.Contains("ParcelProximityCandidate? _selectedParcelCandidate", source, StringComparison.Ordinal);
+        Assert.Contains("Nearby parcels are never selected automatically", Read("SolidGroundDialog.cs"), StringComparison.Ordinal);
+        Assert.Contains("CountyServiceAuthorizedUseAcknowledged", host, StringComparison.Ordinal);
+        Assert.Contains("TerrainAcquisitionMode Mode", Read("SolidGroundDialogInputs.cs"), StringComparison.Ordinal);
+    }
 
     [Fact]
     public void GuidedDialogHasOnlyLocationParcelAndReviewStages()
