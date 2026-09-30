@@ -1,5 +1,6 @@
 using System.Globalization;
 using Autodesk.Revit.DB;
+using SolidGround.Core.Geometry;
 using SolidGround.Revit.Diagnostics;
 
 namespace SolidGround.Revit.Transactions;
@@ -83,15 +84,15 @@ internal static class PostCreationVerification
         ArgumentNullException.ThrowIfNull(points);
 
         BoundingBoxXYZ? actual = toposolid.get_BoundingBox(null);
+        string boundingBoxDetail;
         if (actual is null)
         {
             AddInLog.Warning(
                 "Toposolid.get_BoundingBox(null) returned null immediately after Regenerate(); treating this as " +
-                "informational only (Appendix A UNVERIFIED item 6), not a verification failure.");
-            return new VerificationResult(true, "Bounding box was not available immediately after regeneration; not treated as a failure.");
+                "informational only; continuing with the required per-vertex verification.");
+            boundingBoxDetail = "Bounding box was unavailable immediately after regeneration.";
         }
-
-        if (!Contains(actual, expected, toleranceInternal))
+        else if (!Contains(actual, expected, toleranceInternal))
         {
             return new VerificationResult(
                 false,
@@ -99,20 +100,49 @@ internal static class PostCreationVerification
                 $"within tolerance. Expected (at least) Min=({Format(expected.Min)}) Max=({Format(expected.Max)}); " +
                 $"observed Min=({Format(actual.Min)}) Max=({Format(actual.Max)}).");
         }
-
-        string vertexDetail = "Slab shape editor was not enabled; skipped the per-vertex check.";
-        SlabShapeEditor editor = toposolid.GetSlabShapeEditor();
-        if (editor.IsEnabled)
+        else
         {
-            int vertexCount = editor.SlabShapeVertices.Size;
-            vertexDetail = $"Slab shape editor reports {vertexCount} vertex(es) for {points.Count} supplied point(s).";
-            if (vertexCount < points.Count)
-            {
-                return new VerificationResult(false, DescribeVertexShortfall(vertexCount, points.Count, nativeToposolidMaxPointThreshold));
-            }
+            boundingBoxDetail = "Bounding box matched within tolerance.";
         }
 
-        return new VerificationResult(true, $"Bounding box matched within tolerance ({strategy}). {vertexDetail}");
+        SlabShapeEditor editor = toposolid.GetSlabShapeEditor();
+        if (!editor.IsEnabled)
+        {
+            return new VerificationResult(false,
+                "The created toposolid's slab shape editor was disabled, so SolidGround cannot verify every supplied terrain vertex. The change was undone.");
+        }
+
+        int vertexCount = editor.SlabShapeVertices.Size;
+        if (vertexCount < points.Count)
+        {
+            return new VerificationResult(false, DescribeVertexShortfall(vertexCount, points.Count, nativeToposolidMaxPointThreshold));
+        }
+
+        Coordinate3D[] expectedVertices = points.Select(point => new Coordinate3D(point.X, point.Y, point.Z)).ToArray();
+        Coordinate3D[] actualVertices = new Coordinate3D[vertexCount];
+        for (int index = 0; index < vertexCount; index++)
+        {
+            XYZ position = editor.SlabShapeVertices.get_Item(index).Position;
+            actualVertices[index] = new Coordinate3D(position.X, position.Y, position.Z);
+        }
+
+        TerrainVertexMatchResult match = TerrainVertexMatcher.Match(expectedVertices, actualVertices, toleranceInternal);
+        if (!match.Passed)
+        {
+            TerrainVertexMismatch mismatch = match.UnmatchedExpected[0];
+            string nearest = mismatch.NearestActual is { } observed
+                ? $"nearest observed vertex was ({Format(observed)}) with delta ({Format(mismatch.NearestDelta)})"
+                : "the slab shape editor returned no observed vertices";
+            string collisions = match.CandidateCollisions.Count > 0
+                ? $" {match.CandidateCollisions.Count.ToString(CultureInfo.InvariantCulture)} candidate collision(s) were also detected."
+                : string.Empty;
+            return new VerificationResult(false,
+                $"The created toposolid did not contain expected terrain vertex index {mismatch.ExpectedIndex.ToString(CultureInfo.InvariantCulture)} " +
+                $"({Format(mismatch.Expected)}) within {toleranceInternal.ToString("R", CultureInfo.InvariantCulture)} internal-unit tolerance; {nearest}.{collisions}");
+        }
+
+        return new VerificationResult(true,
+            $"{boundingBoxDetail} Per-vertex injective match verified {points.Count.ToString(CultureInfo.InvariantCulture)} supplied point(s) against {vertexCount.ToString(CultureInfo.InvariantCulture)} slab-shape vertex(es) ({strategy}).");
     }
 
     /// <summary>
@@ -229,4 +259,8 @@ internal static class PostCreationVerification
     private static string Format(XYZ point) => string.Create(
         CultureInfo.InvariantCulture,
         $"{point.X:R}, {point.Y:R}, {point.Z:R}");
+
+    private static string Format(Coordinate3D point) => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{point.X:R}, {point.Y:R}, {point.Elevation:R}");
 }
