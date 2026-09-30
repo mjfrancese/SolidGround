@@ -40,14 +40,15 @@ internal static class RevitSettingsIo
         string? legacyError = null;
         if (!File.Exists(path) && File.Exists(legacyPath) && TryLoad(legacyPath, out legacy, out legacyError))
         {
-            string importSummary = DescribeLegacyImport(legacy!, legacyPath);
+            RevitSettings importedLegacy = ImportLegacy(legacy!, legacyPath);
+            string importSummary = DescribeLegacyImport(importedLegacy, legacyPath);
             MessageBoxResult choice = owner is null
                 ? MessageBox.Show(importSummary, "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information)
                 : MessageBox.Show(owner, importSummary, "Previous settings found", MessageBoxButton.YesNoCancel, MessageBoxImage.Information);
             if (choice == MessageBoxResult.Yes)
             {
                 AddInLog.Info("Operator chose a read-only legacy settings import draft.");
-                return ImportLegacy(legacy!, legacyPath);
+                return importedLegacy;
             }
             if (choice == MessageBoxResult.No)
             {
@@ -156,13 +157,20 @@ internal static class RevitSettingsIo
     {
         ArgumentNullException.ThrowIfNull(legacy);
         ProcessInputSettings? process = legacy.Request.Process;
-        string source = process is null
-            ? "Fetch mode; no local raster/process source is configured."
-            : $"Process mode; raster '{process.Asc}', projection '{process.Prj ?? "none"}', source sidecar '{process.SourceJson ?? "none"}'.";
+        string source = legacy.Request.Mode == TerrainAcquisitionMode.Process
+            ? $"Process mode; raster '{process?.Asc ?? "missing"}', projection '{process?.Prj ?? "none"}', source sidecar '{process?.SourceJson ?? "none"}'."
+            : "Fetch mode; any unused local process fields will remain inactive.";
+        RevitAddressAndParcelSettings address = legacy.AddressAndParcel;
+        string parcelSource = !string.IsNullOrWhiteSpace(address.CountyRegistryPath)
+            ? $"County registry '{address.CountyRegistryPath}' (authorization acknowledgement: {address.CountyServiceAuthorizedUseAcknowledged})."
+            : !string.IsNullOrWhiteSpace(address.LocalParcelFilePath)
+                ? $"Local parcel source '{address.LocalParcelFilePath}' with its stored label/license text."
+                : "No parcel source registration is configured.";
         return "A previous SolidGround settings file is available. Import it into this session?" + Environment.NewLine + Environment.NewLine
             + source + Environment.NewLine
             + $"Local origin: {legacy.Request.LocalOrigin.Kind}; output: {legacy.Request.OutputUnit}; terrain extension: {legacy.TerrainExtensionMeters.ToString("R", CultureInfo.InvariantCulture)} m." + Environment.NewLine
-            + "Paths will be rebased from the legacy file folder. Shared-coordinate writing will be turned off. The legacy bytes remain unchanged until an explicit Save creates per-user settings." + Environment.NewLine + Environment.NewLine
+            + parcelSource + Environment.NewLine
+            + "Paths shown above are rebased from the legacy file folder. Shared-coordinate writing is turned off. The legacy bytes remain unchanged until an explicit Save creates per-user settings." + Environment.NewLine + Environment.NewLine
             + "Yes: review/import. No: start new settings. Cancel: abort.";
     }
     /// <summary>How long <see cref="EnsureTemplateExists"/> waits to acquire the cross-process settings lock before reporting a lock problem (orchestrator decision (c)).</summary>

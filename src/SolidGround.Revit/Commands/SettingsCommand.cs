@@ -36,26 +36,26 @@ public sealed class SettingsCommand : IExternalCommand
             }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
             {
-                return ShowOpenFailure(ref message, ex);
+                return ShowOpenFailure(ex);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
-            return ShowOpenFailure(ref message, ex);
+            return ShowOpenFailure(ex);
         }
     }
 
-    private static Result ShowOpenFailure(ref string message, Exception ex)
+    private static Result ShowOpenFailure(Exception ex)
     {
-        message = "SolidGround could not open Settings. See the SolidGround log for details.";
+        const string detail = "SolidGround could not open Settings. See the SolidGround log for details.";
         Diagnostics.AddInLog.Error("Could not open SolidGround Settings.", ex);
         TaskDialog dialog = new("SolidGround Settings")
         {
             MainInstruction = "SolidGround could not open Settings.",
-            MainContent = message,
+            MainContent = detail,
             CommonButtons = TaskDialogCommonButtons.Close,
         };
         dialog.Show();
-        return Result.Failed;
+        return Result.Cancelled;
     }
 }

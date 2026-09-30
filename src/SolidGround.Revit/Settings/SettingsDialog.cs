@@ -80,6 +80,9 @@ internal sealed class SettingsDialog : Window
     private readonly Button saveCountyRegistration;
     private readonly Func<SettingsRecoveryAction, bool>? confirmRecovery;
     private DistanceDisplayFormat extensionFormat;
+    private double canonicalExtensionMeters;
+    private bool extensionEdited;
+    private bool updatingExtensionText;
     private CountyParcelServiceMetadata? countyMetadata;
     private CountyParcelRegistryDocument? stagedCountyRegistry;
     private string? stagedCountyRegistryPath;
@@ -121,7 +124,9 @@ internal sealed class SettingsDialog : Window
         Grid.SetRow(pages, 1);
         pointBudget = Text(current.Request.Simplification.PointBudget.ToString(CultureInfo.InvariantCulture));
         extensionFormat = current.DistanceDisplayFormat;
-        extension = Text(DistanceDisplayConverter.FormatMeters(current.TerrainExtensionMeters, extensionFormat));
+        canonicalExtensionMeters = current.TerrainExtensionMeters;
+        extension = Text(DistanceDisplayConverter.FormatMeters(canonicalExtensionMeters, extensionFormat));
+        extension.TextChanged += (_, _) => { if (!updatingExtensionText) extensionEdited = true; };
         outputUnit = Choice([LengthUnit.UsSurveyFoot, LengthUnit.InternationalFoot, LengthUnit.Meter], current.Request.OutputUnit);
         displayFormat = Choice(Enum.GetValues<DistanceDisplayFormat>(), current.DistanceDisplayFormat);
         displayFormat.SelectionChanged += (_, _) => ChangeExtensionFormat();
@@ -292,7 +297,7 @@ internal sealed class SettingsDialog : Window
             error.Text = "Maximum terrain points must be a positive whole number."; pointBudget.Focus(); return false;
         }
         double extensionMeters;
-        try { extensionMeters = DistanceDisplayConverter.ParseMeters(extension.Text, (DistanceDisplayFormat)displayFormat.SelectedItem); }
+        try { extensionMeters = extensionEdited ? DistanceDisplayConverter.ParseMeters(extension.Text, (DistanceDisplayFormat)displayFormat.SelectedItem) : canonicalExtensionMeters; }
         catch (FormatException)
         {
             error.Text = "Terrain extension must be a finite nonnegative value in the selected display format."; extension.Focus(); return false;
@@ -425,6 +430,7 @@ internal sealed class SettingsDialog : Window
         draft = loaded!;
         DiscardStagedCountyRegistry();
         current = RevitSettingsIo.RebaseInputPaths(draft.Settings, draft.Path);
+        savingBlockedUntilStartNew = false;
         ApplySettings(current);
         error.Text = "Saved settings reloaded. Unsaved changes in this dialog were discarded.";
     }
@@ -520,7 +526,9 @@ internal sealed class SettingsDialog : Window
         pointBudget.Text = settings.Request.Simplification.PointBudget.ToString(CultureInfo.InvariantCulture);
         extensionFormat = settings.DistanceDisplayFormat;
         displayFormat.SelectedItem = extensionFormat;
-        extension.Text = DistanceDisplayConverter.FormatMeters(settings.TerrainExtensionMeters, extensionFormat);
+        canonicalExtensionMeters = settings.TerrainExtensionMeters;
+        extensionEdited = false;
+        SetExtensionText(DistanceDisplayConverter.FormatMeters(canonicalExtensionMeters, extensionFormat));
         outputUnit.SelectedItem = settings.Request.OutputUnit;
         acquisitionMode.SelectedItem = settings.Request.Mode;
         ascPath.Text = settings.Request.Process?.Asc ?? string.Empty;
@@ -795,15 +803,23 @@ internal sealed class SettingsDialog : Window
         DistanceDisplayFormat next = (DistanceDisplayFormat)displayFormat.SelectedItem;
         try
         {
-            double meters = DistanceDisplayConverter.ParseMeters(extension.Text, extensionFormat);
-            extension.Text = DistanceDisplayConverter.FormatMeters(meters, next);
+            if (extensionEdited) canonicalExtensionMeters = DistanceDisplayConverter.ParseMeters(extension.Text, extensionFormat);
+            SetExtensionText(DistanceDisplayConverter.FormatMeters(canonicalExtensionMeters, next));
             extensionFormat = next;
+            extensionEdited = false;
         }
         catch (FormatException)
         {
             // Keep invalid text visible for correction; Save will focus it and report the field error.
             extensionFormat = next;
         }
+    }
+
+    private void SetExtensionText(string value)
+    {
+        updatingExtensionText = true;
+        try { extension.Text = value; }
+        finally { updatingExtensionText = false; }
     }
 
     private void Register(string name, FrameworkElement element)
