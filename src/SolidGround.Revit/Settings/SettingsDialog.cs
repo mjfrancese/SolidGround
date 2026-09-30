@@ -44,6 +44,18 @@ internal sealed class SettingsDialog : Window
     private readonly TextBox ascPath;
     private readonly TextBox prjPath;
     private readonly TextBox sidecarPath;
+    private readonly TextBox processSourceName;
+    private readonly TextBox processDataset;
+    private readonly TextBox processVerticalDatum;
+    private readonly ComboBox processVerticalUnit;
+    private readonly TextBox processGeoid;
+    private readonly TextBox processCollectionStart;
+    private readonly TextBox processCollectionEnd;
+    private readonly TextBox processQualityLevel;
+    private readonly ComboBox originKind;
+    private readonly TextBox originX;
+    private readonly TextBox originY;
+    private readonly TextBox originZ;
     private readonly TextBox localParcelPath;
     private readonly TextBox localParcelLabel;
     private readonly TextBox localParcelLicense;
@@ -122,6 +134,14 @@ internal sealed class SettingsDialog : Window
         ascPath = Text(current.Request.Process?.Asc ?? string.Empty);
         prjPath = Text(current.Request.Process?.Prj ?? string.Empty);
         sidecarPath = Text(current.Request.Process?.SourceJson ?? string.Empty);
+        processSourceName = Text(current.Request.Process?.SourceName ?? string.Empty);
+        processDataset = Text(current.Request.Process?.Dataset ?? string.Empty);
+        processVerticalDatum = Text(current.Request.Process?.VerticalDatum ?? string.Empty);
+        processVerticalUnit = new ComboBox { ItemsSource = new object?[] { null, LengthUnit.UsSurveyFoot, LengthUnit.InternationalFoot, LengthUnit.Meter }, SelectedItem = current.Request.Process?.VerticalUnit, MinWidth = 240 };
+        processGeoid = Text(current.Request.Process?.Geoid ?? string.Empty);
+        processCollectionStart = Text(current.Request.Process?.CollectionStart ?? string.Empty);
+        processCollectionEnd = Text(current.Request.Process?.CollectionEnd ?? string.Empty);
+        processQualityLevel = Text(current.Request.Process?.QualityLevel ?? string.Empty);
         localParcelPath = Text(current.AddressAndParcel.LocalParcelFilePath ?? string.Empty);
         localParcelLabel = Text(current.AddressAndParcel.LocalParcelFileSourceLabel ?? string.Empty);
         localParcelLicense = Text(current.AddressAndParcel.LocalParcelFileLicenseDisclaimerText ?? string.Empty, true);
@@ -181,22 +201,31 @@ internal sealed class SettingsDialog : Window
         nearbyRadius = Text(current.AddressAndParcel.NearbySearchRadiusMeters?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty);
         coverageFloor = Text(current.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture));
         simplificationMethod = Choice(new[] { SimplificationMethod.CurvatureAware, SimplificationMethod.UniformSampler }, current.Request.Simplification.Method);
-        pages.Items.Add(Page("Advanced", Panel(Label("Simplification method"), simplificationMethod, Label("Network timeout (seconds)"), timeout, Label("Nearby parcel search distance (metres; blank uses default)"), nearbyRadius, Label("Sampler coverage fraction (0 through 1)"), coverageFloor, new TextBlock { Text = "The local-origin policy and full process metadata are preserved unless changed by a dedicated source workflow.", TextWrapping = TextWrapping.Wrap })));
+        originKind = Choice(Enum.GetValues<LocalOriginKind>(), current.Request.LocalOrigin.Kind);
+        originX = Text(current.Request.LocalOrigin.X.ToString("R", CultureInfo.InvariantCulture));
+        originY = Text(current.Request.LocalOrigin.Y.ToString("R", CultureInfo.InvariantCulture));
+        originZ = Text(current.Request.LocalOrigin.Z.ToString("R", CultureInfo.InvariantCulture));
+        pages.Items.Add(Page("Advanced", Panel(Label("Simplification method"), simplificationMethod, Label("Network timeout (seconds)"), timeout, Label("Nearby parcel search distance (metres; blank uses default)"), nearbyRadius, Label("Sampler coverage fraction (0 through 1)"), coverageFloor,
+            new Separator { Margin = new Thickness(0, 12, 0, 8) }, new TextBlock { Text = "Local origin", FontWeight = FontWeights.SemiBold }, Label("Origin kind"), originKind, Label("Explicit origin X (source horizontal units)"), originX, Label("Explicit origin Y (source horizontal units)"), originY, Label("Explicit origin Z (source elevation units)"), originZ,
+            new TextBlock { Text = "Explicit coordinates are used only when Origin kind is Explicit; they are stored at full precision in source units.", TextWrapping = TextWrapping.Wrap },
+            new Separator { Margin = new Thickness(0, 12, 0, 8) }, new TextBlock { Text = "Local process source metadata", FontWeight = FontWeights.SemiBold }, new TextBlock { Text = "Used for a local .asc input when a source sidecar does not provide these details.", TextWrapping = TextWrapping.Wrap },
+            Label("Source name"), processSourceName, Label("Dataset"), processDataset, Label("Vertical datum"), processVerticalDatum, Label("Vertical unit"), processVerticalUnit, Label("Geoid model"), processGeoid, Label("Collection start (yyyy-MM-dd)"), processCollectionStart, Label("Collection end (yyyy-MM-dd)"), processCollectionEnd, Label("Quality level"), processQualityLevel)));
         Register("pointBudget", pointBudget); Register("terrainExtension", extension); Register("outputUnit", outputUnit); Register("distanceDisplayFormat", displayFormat);
         Register("acquisitionMode", acquisitionMode); Register("rasterPath", ascPath); Register("projectionPath", prjPath); Register("sourceSidecarPath", sidecarPath);
+        Register("processSourceName", processSourceName); Register("processDataset", processDataset); Register("processVerticalDatum", processVerticalDatum); Register("processVerticalUnit", processVerticalUnit); Register("processGeoid", processGeoid); Register("processCollectionStart", processCollectionStart); Register("processCollectionEnd", processCollectionEnd); Register("processQualityLevel", processQualityLevel);
         Register("localParcelPath", localParcelPath); Register("localParcelLabel", localParcelLabel); Register("localParcelLicense", localParcelLicense);
         Register("countyRegistryPath", countyRegistryPath); Register("countyAuthorization", countyAuthorization); Register("geocoderProvider", geocoderProvider);
         Register("countyName", countyName); Register("countyGeoid", countyGeoid); Register("countyServiceUrl", countyServiceUrl); Register("countyAttribution", countyAttribution); Register("countyLicense", countyLicense);
         Register("countyLayer", countyLayer); Register("countyParcelIdField", countyParcelIdField); Register("countySitusAddressField", countySitusAddressField); Register("countyLegalDescriptionField", countyLegalDescriptionField);
         Register("useCountySource", saveCountyRegistration);
         Register("openTopographyKey", openTopographyKey); Register("geocodioKey", geocodioKey); Register("esriKey", esriKey);
-        Register("exportDirectory", exportDirectory); Register("exportBaseName", exportBaseName); Register("networkTimeout", timeout); Register("nearbyRadius", nearbyRadius); Register("coverageFloor", coverageFloor); Register("simplificationMethod", simplificationMethod);
+        Register("exportDirectory", exportDirectory); Register("exportBaseName", exportBaseName); Register("networkTimeout", timeout); Register("nearbyRadius", nearbyRadius); Register("coverageFloor", coverageFloor); Register("simplificationMethod", simplificationMethod); Register("originKind", originKind); Register("originX", originX); Register("originY", originY); Register("originZ", originZ);
         shell.Children.Add(pages);
 
         error = new TextBlock { Foreground = colors.Error, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 6) };
         Grid.SetRow(error, 2);
         shell.Children.Add(error);
-        StackPanel footer = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        WrapPanel footer = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         Button restoreDefaults = new() { Content = "Restore defaults", MinWidth = 108, Margin = new Thickness(6) };
         restoreDefaults.Click += (_, _) => RestoreDefaults();
         Button reloadSavedSettings = new() { Content = "Reload saved", MinWidth = 104, Margin = new Thickness(6) };
@@ -283,8 +312,26 @@ internal sealed class SettingsDialog : Window
             error.Text = "Nearby parcel search distance must be a positive number of metres or blank."; nearbyRadius.Focus(); return false;
         }
         else if (!string.IsNullOrWhiteSpace(nearbyRadius.Text)) nearby = double.Parse(nearbyRadius.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
+        LocalOriginKind selectedOriginKind = (LocalOriginKind)originKind.SelectedItem;
+        double originXValue = current.Request.LocalOrigin.X;
+        double originYValue = current.Request.LocalOrigin.Y;
+        double originZValue = current.Request.LocalOrigin.Z;
+        if (selectedOriginKind == LocalOriginKind.Explicit
+            && (!double.TryParse(originX.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out originXValue) || !double.IsFinite(originXValue)
+                || !double.TryParse(originY.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out originYValue) || !double.IsFinite(originYValue)
+                || !double.TryParse(originZ.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out originZValue) || !double.IsFinite(originZValue)))
+        {
+            error.Text = "Explicit local-origin X, Y, and Z must be finite source-unit coordinates.";
+            originX.Focus();
+            return false;
+        }
         ProcessInputSettings? process = mode == TerrainAcquisitionMode.Process
-            ? (baseline.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with { Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text) }
+            ? (baseline.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with
+            {
+                Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text),
+                SourceName = BlankAsNull(processSourceName.Text), Dataset = BlankAsNull(processDataset.Text), VerticalDatum = BlankAsNull(processVerticalDatum.Text), VerticalUnit = processVerticalUnit.SelectedItem as LengthUnit?, Geoid = BlankAsNull(processGeoid.Text),
+                CollectionStart = BlankAsNull(processCollectionStart.Text), CollectionEnd = BlankAsNull(processCollectionEnd.Text), QualityLevel = BlankAsNull(processQualityLevel.Text),
+            }
             : null;
         RevitAddressAndParcelSettings address = baseline.AddressAndParcel with
         {
@@ -293,7 +340,7 @@ internal sealed class SettingsDialog : Window
         };
         proposed = baseline with
         {
-            Request = baseline.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, NetworkTimeoutSeconds = timeoutSeconds, Simplification = baseline.Request.Simplification with { PointBudget = budget, CoverageFloorFraction = coverage, Method = (SimplificationMethod)simplificationMethod.SelectedItem }, Output = baseline.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
+            Request = baseline.Request with { Mode = mode, Process = process, LocalOrigin = new LocalOriginRequest(selectedOriginKind, originXValue, originYValue, originZValue), OutputUnit = (LengthUnit)outputUnit.SelectedItem, NetworkTimeoutSeconds = timeoutSeconds, Simplification = baseline.Request.Simplification with { PointBudget = budget, CoverageFloorFraction = coverage, Method = (SimplificationMethod)simplificationMethod.SelectedItem }, Output = baseline.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
             AddressAndParcel = address, TerrainExtensionMeters = extensionMeters, DistanceDisplayFormat = (DistanceDisplayFormat)displayFormat.SelectedItem,
         };
         return true;
@@ -342,10 +389,28 @@ internal sealed class SettingsDialog : Window
     {
         if (!ConfirmRecovery(SettingsRecoveryAction.RestoreDefaults)) return;
         RevitSettings defaults = UiSettingsStore.CreateDefault();
+        RevitAddressAndParcelSettings preservedSources = current.AddressAndParcel with
+        {
+            GeocoderProvider = defaults.AddressAndParcel.GeocoderProvider,
+            NearbySearchRadiusMeters = defaults.AddressAndParcel.NearbySearchRadiusMeters,
+        };
+        RevitSettings preferenceDefaults = current with
+        {
+            Request = defaults.Request with
+            {
+                Mode = current.Request.Mode,
+                Process = current.Request.Process,
+                AreaOfInterest = current.Request.AreaOfInterest,
+                LocalOrigin = current.Request.LocalOrigin,
+            },
+            AddressAndParcel = preservedSources,
+            TerrainExtensionMeters = defaults.TerrainExtensionMeters,
+            DistanceDisplayFormat = defaults.DistanceDisplayFormat,
+        };
         DiscardStagedCountyRegistry();
-        current = defaults;
-        draft = draft with { Settings = defaults };
-        ApplySettings(defaults);
+        current = preferenceDefaults;
+        draft = draft with { Settings = preferenceDefaults };
+        ApplySettings(preferenceDefaults);
         error.Text = "Defaults are staged in this dialog only. Choose Save settings to write them.";
     }
 
@@ -443,7 +508,7 @@ internal sealed class SettingsDialog : Window
         if (confirmRecovery is not null) return confirmRecovery(action);
         string prompt = action switch
         {
-            SettingsRecoveryAction.RestoreDefaults => "Replace every settings control with SolidGround defaults? Nothing is written until you choose Save settings.",
+            SettingsRecoveryAction.RestoreDefaults => "Reset display format, output unit, point budget, simplifier, network timeout, nearby distance, export folder/base name, terrain extension, and geocoder preference. Local raster/process metadata, local origin, parcel sources, county registrations, and license text stay unchanged. Nothing is written until you choose Save settings.",
             SettingsRecoveryAction.StartNewSettings => "Stage a new settings document? The unreadable saved bytes remain untouched until you choose Save settings.",
             _ => "Reapply the current controls over the latest saved settings? This explicitly replaces saved values represented by this dialog.",
         };
@@ -461,6 +526,14 @@ internal sealed class SettingsDialog : Window
         ascPath.Text = settings.Request.Process?.Asc ?? string.Empty;
         prjPath.Text = settings.Request.Process?.Prj ?? string.Empty;
         sidecarPath.Text = settings.Request.Process?.SourceJson ?? string.Empty;
+        processSourceName.Text = settings.Request.Process?.SourceName ?? string.Empty;
+        processDataset.Text = settings.Request.Process?.Dataset ?? string.Empty;
+        processVerticalDatum.Text = settings.Request.Process?.VerticalDatum ?? string.Empty;
+        processVerticalUnit.SelectedItem = settings.Request.Process?.VerticalUnit;
+        processGeoid.Text = settings.Request.Process?.Geoid ?? string.Empty;
+        processCollectionStart.Text = settings.Request.Process?.CollectionStart ?? string.Empty;
+        processCollectionEnd.Text = settings.Request.Process?.CollectionEnd ?? string.Empty;
+        processQualityLevel.Text = settings.Request.Process?.QualityLevel ?? string.Empty;
         localParcelPath.Text = settings.AddressAndParcel.LocalParcelFilePath ?? string.Empty;
         localParcelLabel.Text = settings.AddressAndParcel.LocalParcelFileSourceLabel ?? string.Empty;
         localParcelLicense.Text = settings.AddressAndParcel.LocalParcelFileLicenseDisclaimerText ?? string.Empty;
@@ -474,6 +547,10 @@ internal sealed class SettingsDialog : Window
         nearbyRadius.Text = settings.AddressAndParcel.NearbySearchRadiusMeters?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty;
         coverageFloor.Text = settings.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture);
         simplificationMethod.SelectedItem = settings.Request.Simplification.Method;
+        originKind.SelectedItem = settings.Request.LocalOrigin.Kind;
+        originX.Text = settings.Request.LocalOrigin.X.ToString("R", CultureInfo.InvariantCulture);
+        originY.Text = settings.Request.LocalOrigin.Y.ToString("R", CultureInfo.InvariantCulture);
+        originZ.Text = settings.Request.LocalOrigin.Z.ToString("R", CultureInfo.InvariantCulture);
 
         countyName.Text = string.Empty;
         countyAttribution.Text = string.Empty;
