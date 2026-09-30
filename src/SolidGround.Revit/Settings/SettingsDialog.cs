@@ -228,6 +228,8 @@ internal sealed class SettingsDialog : Window
         shell.Children.Add(pages);
 
         error = new TextBlock { Foreground = colors.Error, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 6) };
+        AutomationProperties.SetName(error, "Settings error status");
+        AutomationProperties.SetLiveSetting(error, AutomationLiveSetting.Assertive);
         Grid.SetRow(error, 2);
         shell.Children.Add(error);
         WrapPanel footer = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -826,6 +828,61 @@ internal sealed class SettingsDialog : Window
     {
         element.Name = name;
         AutomationProperties.SetAutomationId(element, name);
+        AutomationProperties.SetName(element, AccessibleName(name));
         automationElements.Add(name, element);
     }
+
+    private static string AccessibleName(string name) => name switch
+    {
+        "pointBudget" => "Maximum terrain points",
+        "terrainExtension" => "Terrain beyond property line",
+        "outputUnit" => "Output unit",
+        "distanceDisplayFormat" => "Distance display format",
+        "acquisitionMode" => "Elevation mode",
+        "rasterPath" => "Local raster file",
+        "projectionPath" => "Projection sidecar file",
+        "sourceSidecarPath" => "Source metadata sidecar file",
+        "processSourceName" => "Local process source name",
+        "processDataset" => "Local process dataset",
+        "processVerticalDatum" => "Local process vertical datum",
+        "processVerticalUnit" => "Local process vertical unit",
+        "processGeoid" => "Local process geoid model",
+        "processCollectionStart" => "Local process collection start date",
+        "processCollectionEnd" => "Local process collection end date",
+        "processQualityLevel" => "Local process quality level",
+        "localParcelPath" => "Local parcel file",
+        "localParcelLabel" => "Local parcel source label",
+        "localParcelLicense" => "Local parcel license or disclaimer",
+        "countyRegistryPath" => "County registry file",
+        "countyAuthorization" => "County service authorized use acknowledgement",
+        "countyName" => "County source identity",
+        "countyGeoid" => "County GEOID",
+        "countyServiceUrl" => "County ArcGIS service URL",
+        "countyAttribution" => "County attribution",
+        "countyLicense" => "County license or disclaimer",
+        "countyLayer" => "County parcel layer",
+        "countyParcelIdField" => "County parcel ID field",
+        "countySitusAddressField" => "County situs address field",
+        "countyLegalDescriptionField" => "County legal description field",
+        "useCountySource" => "Use this county source",
+        "geocoderProvider" => "Geocoder provider",
+        "openTopographyKey" => "OpenTopography session key",
+        "geocodioKey" => "Geocodio session key",
+        "esriKey" => "Esri session key",
+        "exportDirectory" => "Export folder",
+        "exportBaseName" => "Export base name",
+        "networkTimeout" => "Network timeout in seconds",
+        "nearbyRadius" => "Nearby parcel search distance in metres",
+        "coverageFloor" => "Sampler coverage fraction",
+        "simplificationMethod" => "Simplification method",
+        "originKind" => "Local origin kind",
+        "originX" => "Explicit local origin X in source horizontal units",
+        "originY" => "Explicit local origin Y in source horizontal units",
+        "originZ" => "Explicit local origin Z in source elevation units",
+        "restoreDefaults" => "Restore defaults",
+        "reloadSavedSettings" => "Reload saved",
+        "reapplyDraft" => "Reapply draft",
+        "startNewSettings" => "Start new settings",
+        _ => throw new ArgumentOutOfRangeException(nameof(name), name, "Every rendered Settings control needs a human-readable accessible name."),
+    };
 }
