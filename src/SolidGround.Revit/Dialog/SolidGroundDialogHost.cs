@@ -3,8 +3,12 @@ using System.Windows;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using SolidGround.Core.Hosting;
+using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.CountyParcels;
+using SolidGround.Core.Sources.Census;
+using SolidGround.Core.Sources.Esri;
+using SolidGround.Core.Sources.Geocodio;
 using SolidGround.Core.Sources.LocalParcelFile;
 using SolidGround.Revit.Diagnostics;
 using SolidGround.Revit.Elements;
@@ -43,39 +47,21 @@ internal static class SolidGroundDialogHost
         // One shared HttpClient instance lives for the dialog's lifetime, disposed on close (design record
         // "Threading and the network bridge") -- the same HttpClient backs both the geocoder and any
         // county-registry parcel source, exactly as Stage 2 acquisition's own fetch-mode HttpClient is timed.
-        using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(settings.Request.NetworkTimeoutSeconds) };
-        IAddressGeocoder geocoder = AddressGeocoderFactory.Create(
-            new AddressGeocoderSettings { Provider = settings.AddressAndParcel.GeocoderProvider }, httpClient);
-        IParcelBoundarySource? parcelSource = BuildParcelSource(settings.AddressAndParcel, httpClient);
-
+        // Each lookup applies its snapshot's configured timeout through a linked CancellationTokenSource.
+        // Keep the shared client unbounded so a Settings edit can change that timeout before the next lookup.
+        using HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
         (RevitIniToposolidThresholds.Thresholds thresholds, string revitIniPath) = ReadRevitIniThresholds(commandData);
 
-        // A settings-file override wins when configured (already validated finite/positive at decode time,
-        // RevitSettingsIo.ParseAddressAndParcel); otherwise Core's own documented default (SolidGround Issue
-        // #31 follow-up's nearby-parcel fallback tier).
-        double nearbySearchRadiusMeters = settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters;
-
         SolidGroundDialog? dialogOwner = null;
-        SolidGroundDialogInputs inputs = new(
-            geocoder,
-            settings.AddressAndParcel.GeocoderProvider,
-            parcelSource,
+        SolidGroundDialogInputs inputs = BuildInputs(
+            settings,
+            httpClient,
             LevelAndTypeResolver.ListLevels(document),
             LevelAndTypeResolver.ListToposolidTypes(document),
-            settings.Target.LevelName,
-            settings.Target.ToposolidTypeName,
-            settings.Request.OutputUnit,
-            settings.Request.Simplification.PointBudget,
-            settings.SharedCoordinates.WriteIfAbsent,
             SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal),
             thresholds,
             revitIniPath,
-            settings.Request.NetworkTimeoutSeconds,
-            settings.Request.AreaOfInterest,
-            nearbySearchRadiusMeters,
-            settings.Request.Mode,
-            Settings: settings,
-            EditSettings: current => RevitSettingsIo.Edit(dialogOwner, current));
+            current => RevitSettingsIo.Edit(dialogOwner, current));
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         // Revit theme access remains in the Revit-only host. The palette-injected dialog constructor is kept
@@ -87,6 +73,77 @@ internal static class SolidGroundDialogHost
         dialogOwner.ShowDialog();
 
         return viewModel.Result;
+    }
+
+    /// <summary>
+    /// Builds the dialog's immutable preference input and the initial immutable lookup-services snapshot. The
+    /// callback deliberately creates a fresh snapshot from the post-save settings instead of retaining the
+    /// source objects assembled at dialog-open time: configuring a previously missing county registry, changing
+    /// provider, or entering a session-only keyed-provider value must work without closing and reopening the
+    /// guided dialog. <see cref="SessionApiKeyOverrides"/> stays process/session scoped and is never written to
+    /// <paramref name="settings"/>.
+    /// </summary>
+    private static SolidGroundDialogInputs BuildInputs(
+        RevitSettings settings,
+        HttpClient httpClient,
+        IReadOnlyList<NamedElevationCandidate> levelCandidates,
+        IReadOnlyList<NamedCandidate> toposolidTypeCandidates,
+        bool documentAlreadyHasSharedCoordinates,
+        RevitIniToposolidThresholds.Thresholds thresholds,
+        string revitIniPath,
+        Func<RevitSettings, RevitSettings?> editSettings)
+    {
+        SolidGroundDialogLookupServices initialServices = BuildLookupServices(settings, httpClient);
+        return new SolidGroundDialogInputs(
+            initialServices.Geocoder,
+            initialServices.GeocoderProvider,
+            initialServices.ParcelSource,
+            levelCandidates,
+            toposolidTypeCandidates,
+            settings.Target.LevelName,
+            settings.Target.ToposolidTypeName,
+            settings.Request.OutputUnit,
+            settings.Request.Simplification.PointBudget,
+            settings.SharedCoordinates.WriteIfAbsent,
+            documentAlreadyHasSharedCoordinates,
+            thresholds,
+            revitIniPath,
+            settings.Request.NetworkTimeoutSeconds,
+            settings.Request.AreaOfInterest,
+            initialServices.NearbySearchRadiusMeters,
+            settings.Request.Mode,
+            Settings: settings,
+            EditSettings: editSettings,
+            ReconfigureLookupServices: updated => BuildLookupServices(updated, httpClient));
+    }
+
+    /// <summary>
+    /// Creates one lookup snapshot from the actual post-save settings. Keyed geocoders intentionally use the
+    /// Revit session override providers, whose current value wins over an environment value without persisting
+    /// the key. County authorization is enforced by <see cref="BuildParcelSource"/> for every snapshot.
+    /// </summary>
+    private static SolidGroundDialogLookupServices BuildLookupServices(RevitSettings settings, HttpClient httpClient)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(httpClient);
+
+        IAddressGeocoder geocoder = settings.AddressAndParcel.GeocoderProvider switch
+        {
+            AddressGeocoderProvider.Census => new CensusGeocoder(httpClient),
+            AddressGeocoderProvider.Geocodio => new GeocodioGeocoder(httpClient, SessionApiKeyOverrides.GeocodioProvider()),
+            AddressGeocoderProvider.Esri => new EsriGeocoder(httpClient, SessionApiKeyOverrides.EsriProvider()),
+            _ => throw new ArgumentOutOfRangeException(nameof(settings), settings.AddressAndParcel.GeocoderProvider, "Unsupported address geocoder provider."),
+        };
+
+        // A settings-file override wins when configured (already validated finite/positive at decode time,
+        // RevitSettingsIo.ParseAddressAndParcel); otherwise Core's documented default applies.
+        double nearbySearchRadiusMeters = settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters;
+        return new SolidGroundDialogLookupServices(
+            geocoder,
+            settings.AddressAndParcel.GeocoderProvider,
+            BuildParcelSource(settings.AddressAndParcel, httpClient),
+            nearbySearchRadiusMeters,
+            settings.Request.NetworkTimeoutSeconds);
     }
 
     /// <summary>

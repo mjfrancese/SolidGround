@@ -45,6 +45,7 @@ public sealed class RevitInteractiveDialogTests
         string result = Read("SolidGroundDialogResult.cs");
         Assert.Contains("Func<RevitSettings, RevitSettings?>? EditSettings", inputs, StringComparison.Ordinal);
         Assert.Contains("RevitSettings? EffectiveSettings = null", result, StringComparison.Ordinal);
+        Assert.Contains("ExplicitArea", Read("SolidGroundDialogStep.cs"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -76,8 +77,22 @@ public sealed class RevitInteractiveDialogTests
     public void HostSuppliesARealSettingsEditorCallbackAndGatesUnacknowledgedCountyUse()
     {
         string host = Read("SolidGroundDialogHost.cs");
-        Assert.Contains("EditSettings: current => RevitSettingsIo.Edit(dialogOwner, current)", host, StringComparison.Ordinal);
+        Assert.Contains("current => RevitSettingsIo.Edit(dialogOwner, current)", host, StringComparison.Ordinal);
         Assert.Contains("CountyServiceAuthorizedUseAcknowledged", host, StringComparison.Ordinal);
+        Assert.Contains("BuildLookupServices", host, StringComparison.Ordinal);
+        Assert.Contains("SessionApiKeyOverrides.GeocodioProvider()", host, StringComparison.Ordinal);
+        Assert.Contains("SessionApiKeyOverrides.EsriProvider()", host, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettingsResumeReconfiguresLookupServicesWithoutDiscardingUnrelatedReviewChoices()
+    {
+        string source = Read("SolidGroundDialogViewModel.cs");
+        Assert.Contains("ReconfigureLookupServices", source, StringComparison.Ordinal);
+        Assert.Contains("lookupConfigurationChanged", source, StringComparison.Ordinal);
+        Assert.Contains("PointBudget = edited.Request.Simplification.PointBudget", source, StringComparison.Ordinal);
+        Assert.Contains("SelectedOutputUnit = edited.Request.OutputUnit", source, StringComparison.Ordinal);
+        Assert.Contains("_flow.ChangeSource()", source, StringComparison.Ordinal);
     }
 
     private static string Read(string name) => File.ReadAllText(Path.Combine(Dialog, name));

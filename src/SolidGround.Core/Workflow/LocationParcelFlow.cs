@@ -137,6 +137,13 @@ public sealed class LocationParcelFlow
 
     public void ReturnToParcel() => Stage = LocationParcelStage.Parcel;
 
+    /// <summary>Advances an independently validated explicit area to review without fabricating a parcel.</summary>
+    public void UseExplicitArea()
+    {
+        ClearParcels();
+        Stage = LocationParcelStage.Review;
+    }
+
     /// <summary>Returns to Location without discarding otherwise-valid lookup results.</summary>
     public void ReturnToLocation() => Stage = LocationParcelStage.Location;
 

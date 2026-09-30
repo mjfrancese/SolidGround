@@ -12,6 +12,7 @@ internal enum SolidGroundDialogStep
 internal enum DialogAoiSource
 {
     FindParcel,
+    ExplicitArea,
     UseSettingsFile,
 }
 

@@ -48,4 +48,16 @@ public sealed class LocationParcelFlowTests
         Assert.Equal(LocationParcelStage.Parcel, flow.Stage);
         Assert.NotEqual(parcelTicket.SourceRevision, flow.SourceRevision);
     }
+
+    [Fact]
+    public void ExplicitAreaCanAdvanceToReviewWithoutInventingAParcel()
+    {
+        LocationParcelFlow flow = new();
+
+        flow.UseExplicitArea();
+
+        Assert.Equal(LocationParcelStage.Review, flow.Stage);
+        Assert.Null(flow.SelectedParcel);
+        Assert.Empty(flow.ParcelCandidates);
+    }
 }
