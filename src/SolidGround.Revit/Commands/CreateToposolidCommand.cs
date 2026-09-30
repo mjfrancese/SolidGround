@@ -1261,12 +1261,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 "SolidGround is a site-form tool, not a survey instrument. " + draft.SharedCoordinatesStatement);
 
             AddInLog.Info("Showing success dialog.");
-            TaskDialog dialog = new(DialogTitle)
-            {
-                MainInstruction = "SolidGround created the toposolid.",
-                MainContent = body,
-            };
-            dialog.Show();
+            CreationCompletionPresenter.Show(context.Document, toposolid.Id, body, context.Settings.Request.Output.Directory);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -1285,6 +1280,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string body = ProblemReportDialog.BuildRejectionBody(bodyHeadline, problems, AddInLog.LogDirectory);
         AddInLog.Info($"Showing rejection dialog: {mainInstruction}");
         TaskDialog dialog = new(DialogTitle) { MainInstruction = mainInstruction, MainContent = body };
+        if (problems.Any(problem => problem.Contains("OpenTopography", StringComparison.OrdinalIgnoreCase)
+            || problem.Contains("OPENTOPOGRAPHY_API_KEY", StringComparison.Ordinal)))
+        {
+            dialog.FooterText = "<a href=\"https://portal.opentopography.org/\">Request an API key through myOpenTopo</a>. " +
+                "USGS 1 m requires academic authorization or enterprise access.";
+        }
         dialog.Show();
     }
 

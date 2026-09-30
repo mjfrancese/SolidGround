@@ -14,6 +14,8 @@ The same SDK declares combined planar-profile `Toposolid.Create`, independent `P
 
 The authoritative entry points are [Autodesk's Revit SDK](https://aps.autodesk.com/developer/overview/revit-api) and [Revit 2027 help](https://help.autodesk.com/view/RVT/2027/ENU/). No earlier-version example substitutes for 2027 verification.
 
+The completion presenter also uses the verified `TaskDialog.AddCommandLink` overload, `TaskDialogResult.CommandLink1/2`, `TaskDialogCommonButtons.Close`, and `UIDocument(Document)` constructor from that same 2027 SDK. Optional framing and folder actions run after commit and cannot turn a committed creation into a failed result. Native failure dialogs link to the OpenTopography portal's myOpenTopo key workflow; [OpenTopography's OpenAPI contract](https://portal.opentopography.org/apidocs/openapi.json) identifies that workflow and the distinct academic/enterprise USGS 1 m entitlement requirement. Native link rendering/framing is pending the manual runtime checks, an explicit alternative to offline tests of Revit-only calls.
+
 ## Runtime evidence boundary
 
 Computer use remains off at the owner's direction. Automated local WPF checks can verify real binding and rendering behavior without driving Revit. Model transaction, Undo, native geometry, subdivision, and save/reopen evidence must use the documented signed build/deploy/restart/hash verification and a Revit 2027 manual session. Code inspection and offline geometry tests do not satisfy that runtime boundary. No such runtime result is claimed here.
