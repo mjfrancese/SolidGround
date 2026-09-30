@@ -195,110 +195,63 @@ certificate load without the "Security - Invalid Signature" dialog.
 systemwide trust change: you simply keep seeing the dialog described in "First launch" above every time
 Revit loads a new SolidGround build.
 
-## 6. Setting your OpenTopography API key
+## 6. Set up sources and preferences
 
-`fetch` mode (a live terrain download from OpenTopography) needs an API key with USGS 1-meter access. `process`
-mode, which reads a local elevation file instead, does not need one.
+Open **SolidGround → Settings**. Setup takes place in this window; you do not need to edit a settings file.
 
-Set `OPENTOPOGRAPHY_API_KEY` as a **persistent** environment variable for your Windows user account — not a
-one-off `$env:` assignment in a single PowerShell window, which disappears as soon as that window closes and
-is never visible to Revit at all. In PowerShell:
+For live elevation, choose **Fetch** and use the [OpenTopography portal](https://portal.opentopography.org/)
+to request a key through **myOpenTopo**. USGS 1 m requires academic authorization or enterprise access.
+Enter your key in the masked OpenTopography field and choose **Use for this Revit session**, or save Settings.
+The explicit session key works immediately and lasts until you clear it or exit Revit. It is never saved to
+settings, exports, or provenance. An existing `OPENTOPOGRAPHY_API_KEY` environment value remains available
+when no session override is active; changing that environment value requires restarting Revit.
 
-```powershell
-[Environment]::SetEnvironmentVariable('OPENTOPOGRAPHY_API_KEY', '<your key>', 'User')
-```
+For offline elevation, choose **Process** and browse to your AAIGrid raster, projection sidecar, and optional
+source metadata. This mode does not require an OpenTopography key.
 
-Or, without a terminal: open **Edit environment variables for your account** from the Start menu, add a new
-user variable named `OPENTOPOGRAPHY_API_KEY` with your key as its value, and click OK.
+Choose either a licensed local parcel file or configure an authorized county parcel service in **Sources**.
+County setup reads the service's metadata so you can choose its polygon layer and parcel fields. Review its
+attribution and license/disclaimer, then explicitly acknowledge authorized use. No county service is
+silently selected for you. Census is the default keyless address geocoder; Geocodio and Esri are optional
+providers with their own masked session keys.
 
-Either way, **fully restart Revit 2027** afterward. Revit (and every other already-running program) only
-sees environment variables as they were at the moment it started; setting the variable does not change
-anything for a process that is already running. This is different from `SolidGround.Cli`'s own
-`dotnet user-secrets` option, which is a developer-only mechanism this Revit add-in does not use.
+In **Terrain**, set your output unit, maximum point count, and **Terrain beyond property line** distance.
+The distance uses your selected display format, including feet, inches, feet-and-inches, U.S. survey feet,
+and metres. Converting the display format preserves the physical distance. This extension changes only
+the terrain; the original legal property line stays in place. Advanced options hold the simplification
+method, coverage fraction, timeout, and placement preferences. Choose your export folder in **Files**.
 
-Never share this key, paste it into `settings.json`, or paste it into a chat, log, or issue — SolidGround
-itself never writes it to a file or logs it, and you should not either.
+## 7. Saved preferences and recovery
 
-## 7. `settings.json`
+Preferences are saved per operator under `%LOCALAPPDATA%\SolidGround\Revit\`. Keys and the shared-coordinate
+opt-in are not saved. You can reopen Settings from the ribbon or from the creation dialog.
 
-SolidGround reads its configuration from one machine-wide file:
+If an older `%ProgramData%\SolidGround\Revit\settings.json` exists, SolidGround offers **Review/import legacy
+settings** or **Start new settings**. Import leaves the original file untouched and resolves its relative
+input paths against its original folder. Review the imported settings and save when ready.
 
-```
-%ProgramData%\SolidGround\Revit\settings.json
-```
+Malformed or unsupported settings open a repair choice instead of silently resetting preferences.
+If another session changed saved settings while your draft was open, reload the saved version or explicitly
+reapply your draft. Cancel preserves the saved bytes. These actions are available in the UI.
 
-The first time you click **Create Toposolid** with no `settings.json` present, SolidGround writes a starting
-template there for you and stops, asking you to edit it and try again. The template looks like this:
+## 8. Create your first terrain
 
-```jsonc
-// %ProgramData%\SolidGround\Revit\settings.json
-// SolidGround edits this file only to create it; it never rewrites an existing one.
-// Delete or rename this file to have SolidGround regenerate this template on the next run.
-{
-  // "fetch": call OpenTopography live (needs OPENTOPOGRAPHY_API_KEY in Revit's own process environment).
-  // "process": read a local AAIGrid .asc/.prj pair (and optional .source.json sidecar) from disk, no network.
-  "mode": "process",
+1. Open a Revit 2027 project and choose **SolidGround → Create Toposolid**.
+2. Enter a street address or switch to the separately labeled latitude and longitude fields, then click
+   **Find** once. Successful lookup advances to Parcel automatically.
+3. Compare any location alternatives. Select the parcel and inspect its boundary, containment/nearby
+   status, area, and source details. **Use this parcel** confirms the displayed location and legal boundary.
+   If a source needs setup, open Settings and return to the preserved location.
+4. In Review, check the terrain estimate, extension, point budget, export destination, Level, and toposolid
+   type. Shared-coordinate changes start off for every run; enable them only when you intend that write.
+5. Click **Create toposolid**. Preflight checks the model and effective settings before acquisition and
+   before a transaction. Creation failures roll back the transaction. A duplicate or stale SolidGround
+   terrain is disclosed before any new element is created.
+6. On success, use **Show terrain** or **Open export folder** if helpful, then save your project normally.
+   Source, unit, local-origin, and parcel provenance remain attached to the terrain after save/reopen.
 
-  "areaOfInterest": {
-    // "boundingBox" | "radius" | "parcel" -- give exactly the matching object below.
-    "kind": "parcel",
-    "boundingBox": null,
-    "radius": null,
-    "parcel": { "path": "C:\\SolidGround\\parcel.geojson", "format": "geojson", "bufferMeters": 0.0 }
-  },
-
-  // Required when mode is "process"; ignored (may be omitted) when mode is "fetch".
-  "process": {
-    "asc": "C:\\SolidGround\\terrain.asc",
-    "prj": null,
-    "sourceJson": null,
-    "sourceName": null, "dataset": null,
-    "verticalDatum": null, "verticalUnit": null, "geoid": null,
-    "collectionStart": null, "collectionEnd": null, "qualityLevel": null
-  },
-
-  // "southwest" | "centroid" | "explicit". x/y/z are only read when kind is "explicit".
-  "localOrigin": { "kind": "southwest", "x": 0.0, "y": 0.0, "z": 0.0 },
-
-  // "usSurveyFoot" | "internationalFoot" | "meter" -- exact 1200/3937 m and 0.3048 m definitions.
-  "outputUnit": "usSurveyFoot",
-
-  "simplification": { "method": "curvatureAware", "pointBudget": 15000, "coverageFloorFraction": 0.2 },
-
-  // Blank/null means: pick the existing Level with the lowest elevation (ties by name).
-  "level": { "name": null },
-  // Blank/null means: pick the first existing ToposolidType by name.
-  "toposolidType": { "name": null },
-
-  "output": { "directory": "C:\\ProgramData\\SolidGround\\Revit\\Exports", "baseName": "terrain" },
-
-  "networkTimeoutSeconds": 300
-}
-```
-
-To fetch live from OpenTopography instead of reading a local file, change `"mode"` to `"fetch"` and fill in
-`areaOfInterest.boundingBox` or `.radius` (or keep `.parcel`) instead of relying on `process`, which is
-ignored once `mode` is `"fetch"`. For the full field-by-field reference — every accepted value, every
-default, and every validation rule — see
-[the toposolid creation design note](architecture/revit-toposolid-creation.md)'s "Settings file reference"
-section. SolidGround re-reads this file fresh every time you click **Create Toposolid**; you never need to
-restart Revit after editing it.
-
-## 8. First run
-
-1. Open or start a Revit 2027 project (not a family document).
-2. Find the **SolidGround** tab on the ribbon, with one panel and one button, **Create Toposolid**.
-3. Click it. SolidGround first runs a read-only check (no changes to your model yet): it confirms a project
-   is open, that `settings.json` exists and is valid, that your area of interest is reachable, and — for
-   `fetch` mode — that `OPENTOPOGRAPHY_API_KEY` is set. If anything is wrong, a dialog titled **SolidGround**
-   reports every problem it found at once (for example, "SolidGround Preflight found a problem... Nothing
-   changed. Correct every problem below and run this command again.") and nothing in your model changes.
-4. If everything checks out, SolidGround acquires the terrain (this can take up to the configured
-   `networkTimeoutSeconds` for a live fetch, during which Revit is briefly unresponsive), then creates one
-   native Toposolid element. On success you will see "SolidGround created the toposolid."
-5. Save your project normally. The created Toposolid carries its own provenance (source, datum, units, and
-   the offset needed to reverse the coordinate transform) attached directly to the element, so it survives
-   save and reopen.
+Full context is the default display. Expanded terrain can reduce boundary effects, but it is not a promise
+of survey accuracy. Automatic parcel subdivision/hiding is awaiting Revit 2027 validation.
 
 ## 9. Logs
 
@@ -318,9 +271,9 @@ written to these logs.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | The security prompt reappears every time you launch Revit, even after importing trust | You updated to a new SolidGround build (a rebuild changes the file's bytes, which resets Revit's own per-build trust decision even under an unchanged certificate), or the trust import did not actually complete. | Re-run `Import-SigningTrust.ps1` as Administrator; confirm it reports success and prints the expected thumbprint. |
-| "The OPENTOPOGRAPHY_API_KEY environment variable is not set (or is empty)" | The key is missing, was set in the wrong scope (a one-off `$env:` assignment, or a different user account), or Revit was not restarted after you set it. | Set it as a **persistent, User-scope** variable (see "Setting your OpenTopography API key" above), then fully restart Revit. |
-| "pointBudget ... exceeds this machine's NativeToposolidMaxPointThreshold ..." | Your `settings.json`'s `simplification.pointBudget` is higher than this machine's own `Revit.ini` `NativeToposolidMaxPointThreshold` setting. | Lower `pointBudget` in `settings.json` to at most the value the message names, or raise the `Revit.ini` setting within Autodesk's documented 10,000–50,000 range and restart Revit. |
-| "A starting template was written to '...\settings.json'. Edit it and run this command again." | This is the very first run on this machine; no settings file existed yet. | Not an error. Edit the newly written template (see "settings.json" above) and click **Create Toposolid** again. |
+| No OpenTopography key is available | Neither a session override nor an environment key is available. | Open Settings → Sources, enter the masked key, and use it for this session. No restart is needed for a session key. |
+| "pointBudget ... exceeds this machine's NativeToposolidMaxPointThreshold ..." | Your saved budget exceeds the running machine's threshold. | Open Settings → Terrain and lower Maximum terrain points to the value named in the message. |
+| Saved settings changed while the editor was open | Another session saved preferences after this draft was loaded. | Use Reload saved settings or explicitly reapply the draft in Settings; an ordinary Save cannot overwrite the competing changes. |
 | Nothing happens when you double-click `install.cmd`, or it closes immediately | PowerShell's execution policy is enforced by Group Policy at a scope `-ExecutionPolicy Bypass` cannot override. | Run `Install-SolidGround.ps1` directly from a PowerShell window to see the actual error, or contact your system administrator about the enforced policy. |
 | "Refusing to deploy: a Revit.exe process is running" (or, via `install.cmd`'s own `-AllowOtherRevitVersions`, "...a Revit.exe process under '...\Revit 2027' is running") | Revit 2027 itself is open. This refusal is never overridden by `-AllowOtherRevitVersions` (which `install.cmd` already passes for you) — it only narrows the check to ignore a *different* Revit version. | Close Revit 2027 fully, then run `install.cmd` again. Other Revit versions (for example Revit 2026) can stay open. |
 | The ribbon button is greyed out or the tab is missing | The add-in did not load — check whether a security prompt was answered "Do Not Load," or whether Revit was ever restarted after installing. | Relaunch Revit; if a prompt appears, follow "First launch" above. |

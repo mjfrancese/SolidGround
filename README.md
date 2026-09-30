@@ -2,7 +2,7 @@
 
 SolidGround is a free, open-source Revit 2027 add-in that turns real, measured ground elevation data into a native Revit terrain surface for one property — clipped to the parcel, simplified to a safe size, and labeled with a record of exactly where the data came from. It's built for architects, designers, and builders who want a quick, real terrain surface instead of a flat pad or hand-traced contours.
 
-**Status:** version 0.1.0 was released 2026-09-25. See [Status and roadmap](#status-and-roadmap) below.
+**Status:** version 0.1.0 was released 2026-09-25. The workflow below describes the current development source; its usability overhaul is awaiting Revit runtime acceptance and a new release. See [Status and roadmap](#status-and-roadmap) below.
 
 ## Contents
 
@@ -29,15 +29,10 @@ A few terms used below, explained once:
 
 From your point of view, using SolidGround looks like this:
 
-1. Install SolidGround as a Revit 2027 add-in (see [Getting started](#getting-started)). It adds one tab to the ribbon, "SolidGround," with one button, "Create Toposolid."
-2. The first time you click the button, SolidGround writes a starting configuration file and stops, asking you to edit it.
-3. In that file, you choose:
-   - Where the terrain data comes from — a live download, or a file you already have.
-   - The area you want — a parcel boundary file, a map point plus a radius, or a rectangular box.
-   - Your preferred unit of measurement.
-   - Optionally, a target point budget (15,000 by default).
-   - Optionally, which Level and terrain type in your Revit project to use.
-4. Click the button again. SolidGround first runs a read-only check: it confirms a project is open, your settings make sense, your area is reachable, and (for a live download) that your API key is set. Nothing in your model changes yet — if anything is wrong, one message lists every problem at once.
+1. Install SolidGround as a Revit 2027 add-in (see [Getting started](#getting-started)). Its ribbon tab has **Create Toposolid** and **Settings**.
+2. Set up elevation and parcel sources in **Settings**, together with your preferred units, point budget, export folder, and terrain extension. Keys can be entered in masked fields for the current Revit session. No settings-file editing is required.
+3. Open **Create Toposolid**, enter an address or coordinates, and click **Find** once. Inspect the location and parcel, then choose **Use this parcel** to confirm both.
+4. Review the terrain estimate, Level, and terrain type, then click **Create toposolid**. SolidGround runs a read-only check before acquisition or model changes.
 5. If that check passes, SolidGround gets the terrain data and removes any cells with no data. It clips the result to your chosen area and shifts the coordinates to line up cleanly with your project. Finally, it reduces the number of points to a safe amount, using a method that tries to preserve ridges and low spots rather than flattening them out.
 6. SolidGround creates one native toposolid. If anything about the result looks wrong, the whole thing is undone automatically and your model is left exactly as it was — you never end up with a half-built surface.
 7. On success, you'll see a confirmation message with the element's ID and how much of the available detail was kept. The same source information is also written directly onto the new toposolid, so it stays with your Revit file even after you close and reopen it.
@@ -81,7 +76,7 @@ Where other tools may currently serve you better:
 
 - **Anywhere in the world.** SolidGround only covers the continental United States. Forma, Groundit, and several others work worldwide, at a coarser resolution than SolidGround's U.S. data.
 - **No special account needed.** Groundit needs no account or key at all. SolidGround requires an OpenTopography account with 1-meter access, which is not automatic (see [Limitations](#limitations)).
-- **Typing an address or drawing a box in the tool itself.** Several other tools let you search or draw the area directly. SolidGround has this planned but not yet built (see [Status and roadmap](#status-and-roadmap)).
+- **Drawing on an interactive map.** SolidGround offers address/coordinate lookup and a parcel outline preview; it does not embed a map picker.
 - **Older Revit versions.** Some tools support Revit versions going back to 2015. SolidGround targets Revit 2027 only.
 - **More than terrain.** Forma, Groundit, and others also bring in buildings, roads, and imagery. SolidGround is deliberately scoped to terrain alone.
 
@@ -127,9 +122,7 @@ Other real limitations, honestly listed:
 
 **Version 0.1.0** was released on 2026-09-25 — the first installable version for Revit 2027. See the [release notes](https://github.com/mjfrancese/SolidGround/releases/tag/v0.1.0).
 
-Everything described in [What it does](#what-it-does) above is built and working today.
-
-**Planned, not yet built:** typing in a street address and having SolidGround find and let you confirm the matching parcel boundary automatically, instead of supplying one yourself. This has been researched but not implemented.
+Phase 3 added address and parcel confirmation in development source. The current #60 and Phase 4A work adds guided Settings, a shorter creation flow, terrain-only extension, integrity checks, and offline accuracy scoring. Native geometry, Undo, save/reopen, and usability acceptance remain open until the [Revit 2027 runtime checks](docs/verification/revit-60-runtime-checklist.md) are completed. These changes have not been published as a release.
 
 ## For developers
 
@@ -149,7 +142,7 @@ dotnet build src/SolidGround.Cli/SolidGround.Cli.csproj --configuration Release
 dotnet test --project tests/SolidGround.Tests/SolidGround.Tests.csproj --configuration Release
 ```
 
-**Command-line tool.** `SolidGround.Cli` offers the same fetch/clip/simplify/export pipeline outside Revit — useful for development, batch runs, or inspecting results without opening a Revit project. Four commands: `process` (use a local terrain file, no key needed), `fetch` (download a raster from OpenTopography), `run` (fetch and process in one step), and `verify` (re-check a previously written result). Example:
+**Command-line tool.** `SolidGround.Cli` offers the same fetch/clip/simplify/export pipeline outside Revit. Its commands include `process` (local terrain), `fetch` (download a raster), `run` (fetch and process), `verify` (check an export), `geocode`, `parcel`, and opt-in `score` (measure a surface against a reference grid). See the [CLI guide](docs/architecture/cli-workflow.md) and [comparison benchmark](docs/architecture/comparison-benchmark.md). Example:
 
 ```powershell
 dotnet run --project src/SolidGround.Cli --configuration Release -- run --center 41.591194,-93.603806 --radius 60 --output out --name example-site
