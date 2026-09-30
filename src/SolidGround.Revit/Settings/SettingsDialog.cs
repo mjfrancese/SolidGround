@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using Microsoft.Win32;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Simplification;
+using SolidGround.Core.Sources;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Dialog;
 
@@ -17,6 +18,7 @@ internal sealed class SettingsDialog : Window
     private readonly TextBox pointBudget;
     private readonly TextBox extension;
     private readonly TextBox exportDirectory;
+    private readonly TextBox exportBaseName;
     private readonly ComboBox outputUnit;
     private readonly ComboBox displayFormat;
     private readonly ComboBox acquisitionMode;
@@ -28,9 +30,13 @@ internal sealed class SettingsDialog : Window
     private readonly TextBox localParcelLicense;
     private readonly TextBox countyRegistryPath;
     private readonly CheckBox countyAuthorization;
+    private readonly ComboBox geocoderProvider;
     private readonly PasswordBox openTopographyKey;
+    private readonly PasswordBox geocodioKey;
+    private readonly PasswordBox esriKey;
     private readonly TextBlock sessionKeyStatus;
     private readonly TextBlock error;
+    private DistanceDisplayFormat extensionFormat;
 
     private SettingsDialog(Window? owner, UiSettingsDraft draft, RevitSettings current, DialogPalette? palette)
     {
@@ -55,12 +61,14 @@ internal sealed class SettingsDialog : Window
         TabControl pages = new();
         Grid.SetRow(pages, 1);
         pointBudget = Text(current.Request.Simplification.PointBudget.ToString(CultureInfo.InvariantCulture));
-        extension = Text(current.TerrainExtensionMeters.ToString("R", CultureInfo.InvariantCulture));
+        extensionFormat = current.DistanceDisplayFormat;
+        extension = Text(DistanceDisplayConverter.FormatMeters(current.TerrainExtensionMeters, extensionFormat));
         outputUnit = Choice([LengthUnit.UsSurveyFoot, LengthUnit.InternationalFoot, LengthUnit.Meter], current.Request.OutputUnit);
         displayFormat = Choice(Enum.GetValues<DistanceDisplayFormat>(), current.DistanceDisplayFormat);
+        displayFormat.SelectionChanged += (_, _) => ChangeExtensionFormat();
         pages.Items.Add(Page("Terrain", Panel(
             Label("Output unit"), outputUnit, Label("Distance display"), displayFormat,
-            Label("Maximum terrain points"), pointBudget, Label("Terrain beyond property line (metres)"), extension,
+            Label("Maximum terrain points"), pointBudget, Label("Terrain beyond property line (selected display units)"), extension,
             new TextBlock { Text = "The extension affects terrain only; the legal parcel boundary remains unchanged.", TextWrapping = TextWrapping.Wrap })));
 
         acquisitionMode = Choice([TerrainAcquisitionMode.Fetch, TerrainAcquisitionMode.Process], current.Request.Mode);
@@ -72,7 +80,10 @@ internal sealed class SettingsDialog : Window
         localParcelLicense = Text(current.AddressAndParcel.LocalParcelFileLicenseDisclaimerText ?? string.Empty, true);
         countyRegistryPath = Text(current.AddressAndParcel.CountyRegistryPath ?? string.Empty);
         countyAuthorization = new CheckBox { Content = "I am authorized to use this county parcel service and accept its license/disclaimer.", IsChecked = current.AddressAndParcel.CountyServiceAuthorizedUseAcknowledged };
+        geocoderProvider = Choice(Enum.GetValues<AddressGeocoderProvider>(), current.AddressAndParcel.GeocoderProvider);
         openTopographyKey = new PasswordBox { MinWidth = 360 };
+        geocodioKey = new PasswordBox { MinWidth = 360 };
+        esriKey = new PasswordBox { MinWidth = 360 };
         sessionKeyStatus = new TextBlock { Text = SessionApiKeyOverrides.HasOpenTopography ? "A session key is active until Revit exits or you clear it." : "No session key is active; an environment key may still be available.", TextWrapping = TextWrapping.Wrap };
         Button useKey = new() { Content = "Use key for this Revit session", Margin = new Thickness(0, 4, 6, 4) };
         useKey.Click += (_, _) => UseSessionKey();
@@ -85,10 +96,14 @@ internal sealed class SettingsDialog : Window
             Label("Local license or disclaimer"), localParcelLicense,
             Label("County registry file"), FileField(countyRegistryPath, "County registry (*.json)|*.json|All files|*.*"), countyAuthorization,
             Label("OpenTopography session key"), openTopographyKey, sessionKeyStatus, Horizontal(useKey, clearKey),
+            Label("Geocoder provider"), geocoderProvider,
+            Label("Geocodio session key"), geocodioKey, KeyButtons(geocodioKey, SessionApiKeyOverrides.UseGeocodio, SessionApiKeyOverrides.ClearGeocodio),
+            Label("Esri session key"), esriKey, KeyButtons(esriKey, SessionApiKeyOverrides.UseEsri, SessionApiKeyOverrides.ClearEsri),
             new TextBlock { Text = "Keys are available only until this Revit session ends and are never written to settings, logs, exports, or provenance.", TextWrapping = TextWrapping.Wrap })));
 
         exportDirectory = Text(current.Request.Output.Directory);
-        pages.Items.Add(Page("Files", Panel(Label("Export folder"), exportDirectory, Label("Base name"), Text(current.Request.Output.BaseName))));
+        exportBaseName = Text(current.Request.Output.BaseName);
+        pages.Items.Add(Page("Files", Panel(Label("Export folder"), FolderField(exportDirectory), Label("Base name"), exportBaseName)));
         pages.Items.Add(Page("Advanced", Panel(new TextBlock { Text = "Network timeout, nearby parcel distance, local origin, and sampler coverage retain their validated values. Save validates the complete settings document.", TextWrapping = TextWrapping.Wrap })));
         shell.Children.Add(pages);
 
@@ -119,21 +134,24 @@ internal sealed class SettingsDialog : Window
         {
             error.Text = "Maximum terrain points must be a positive whole number."; pointBudget.Focus(); return;
         }
-        if (!double.TryParse(extension.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double extensionMeters) || !double.IsFinite(extensionMeters) || extensionMeters < 0d)
+        double extensionMeters;
+        try { extensionMeters = DistanceDisplayConverter.ParseMeters(extension.Text, (DistanceDisplayFormat)displayFormat.SelectedItem); }
+        catch (FormatException)
         {
-            error.Text = "Terrain extension must be a finite nonnegative number of metres."; extension.Focus(); return;
+            error.Text = "Terrain extension must be a finite nonnegative value in the selected display format."; extension.Focus(); return;
         }
         TerrainAcquisitionMode mode = (TerrainAcquisitionMode)acquisitionMode.SelectedItem;
         ProcessInputSettings? process = mode == TerrainAcquisitionMode.Process
-            ? new ProcessInputSettings { Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text) }
+            ? (current.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with { Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text) }
             : null;
         RevitAddressAndParcelSettings address = current.AddressAndParcel with
         {
+            GeocoderProvider = (AddressGeocoderProvider)geocoderProvider.SelectedItem,
             CountyRegistryPath = BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = BlankAsNull(localParcelPath.Text), LocalParcelFileSourceLabel = BlankAsNull(localParcelLabel.Text), LocalParcelFileLicenseDisclaimerText = BlankAsNull(localParcelLicense.Text),
         };
         RevitSettings proposed = current with
         {
-            Request = current.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, Simplification = current.Request.Simplification with { PointBudget = budget }, Output = current.Request.Output with { Directory = exportDirectory.Text } },
+            Request = current.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, Simplification = current.Request.Simplification with { PointBudget = budget }, Output = current.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
             AddressAndParcel = address, TerrainExtensionMeters = extensionMeters, DistanceDisplayFormat = (DistanceDisplayFormat)displayFormat.SelectedItem,
         };
         try
@@ -144,6 +162,8 @@ internal sealed class SettingsDialog : Window
                 SessionApiKeyOverrides.UseOpenTopography(openTopographyKey.Password);
                 openTopographyKey.Password = string.Empty;
             }
+            if (!string.IsNullOrWhiteSpace(geocodioKey.Password)) SessionApiKeyOverrides.UseGeocodio(geocodioKey.Password);
+            if (!string.IsNullOrWhiteSpace(esriKey.Password)) SessionApiKeyOverrides.UseEsri(esriKey.Password);
             Result = proposed; DialogResult = true; Close();
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
@@ -164,6 +184,20 @@ internal sealed class SettingsDialog : Window
         browse.Click += (_, _) => { OpenFileDialog dialog = new() { Filter = filter, CheckFileExists = true }; if (dialog.ShowDialog() == true) box.Text = dialog.FileName; };
         return Horizontal(box, browse);
     }
+    private static StackPanel FolderField(TextBox box)
+    {
+        Button browse = new() { Content = "Browse…", Margin = new Thickness(6, 0, 0, 0) };
+        browse.Click += (_, _) => { OpenFolderDialog dialog = new(); if (dialog.ShowDialog() == true) box.Text = dialog.FolderName; };
+        return Horizontal(box, browse);
+    }
+    private static StackPanel KeyButtons(PasswordBox key, Action<string> use, Action clear)
+    {
+        Button useButton = new() { Content = "Use for this Revit session", Margin = new Thickness(0, 4, 6, 4) };
+        useButton.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(key.Password)) { use(key.Password); key.Password = string.Empty; } };
+        Button clearButton = new() { Content = "Clear session key", Margin = new Thickness(0, 4, 6, 4) };
+        clearButton.Click += (_, _) => { clear(); key.Password = string.Empty; };
+        return Horizontal(useButton, clearButton);
+    }
     private static string? BlankAsNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private void UseSessionKey()
@@ -173,5 +207,21 @@ internal sealed class SettingsDialog : Window
         openTopographyKey.Password = string.Empty;
         sessionKeyStatus.Text = "A session key is active until Revit exits or you clear it.";
         error.Text = string.Empty;
+    }
+
+    private void ChangeExtensionFormat()
+    {
+        DistanceDisplayFormat next = (DistanceDisplayFormat)displayFormat.SelectedItem;
+        try
+        {
+            double meters = DistanceDisplayConverter.ParseMeters(extension.Text, extensionFormat);
+            extension.Text = DistanceDisplayConverter.FormatMeters(meters, next);
+            extensionFormat = next;
+        }
+        catch (FormatException)
+        {
+            // Keep invalid text visible for correction; Save will focus it and report the field error.
+            extensionFormat = next;
+        }
     }
 }
