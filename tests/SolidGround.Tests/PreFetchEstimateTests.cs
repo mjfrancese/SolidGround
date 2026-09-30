@@ -1,6 +1,9 @@
 using SolidGround.Core.Processing;
 using SolidGround.Core.Workflow;
 using SolidGround.Core.Aois;
+using SolidGround.Core.Metadata;
+using SolidGround.Core.Transformations;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Tests;
 
@@ -33,5 +36,21 @@ public sealed class PreFetchEstimateTests
         Assert.Equal(0, process.OpenTopographyRequestCount);
         Assert.DoesNotContain("OpenTopography", process.Label, StringComparison.Ordinal);
         Assert.Contains("no HTTP request", process.Label, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LegalParcelEstimateUsesTheSameProjectionAwareRequestEnvelopeAsAcquisition()
+    {
+        HorizontalReference wgs84 = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
+        double longitude = -80d;
+        double latitude = 30d;
+        string geometry = $"POLYGON (({longitude - 0.001d:R} {latitude - 0.001d:R}, {longitude + 0.001d:R} {latitude - 0.001d:R}, {longitude + 0.001d:R} {latitude + 0.001d:R}, {longitude - 0.001d:R} {latitude + 0.001d:R}, {longitude - 0.001d:R} {latitude - 0.001d:R}))";
+        ParcelGeometryAoi legal = new(ParcelGeometryFormat.Wkt, geometry, wgs84, LinearDistance.Zero);
+        LinearDistance margin = LinearDistance.Meters(25d);
+
+        PreFetchEstimate estimate = PreFetchEstimator.FromAreaOfInterest(legal, margin);
+
+        Assert.Equal(ParcelFetchEnvelopePlanner.Build(legal, margin), estimate.FetchEnvelope);
+        Assert.Null(estimate.MinimumSideExpansion);
     }
 }

@@ -121,9 +121,9 @@ internal sealed class SolidGroundDialog : Window
         panel.Children.Add(mode);
 
         TextBox address = Input("Street address", nameof(SolidGroundDialogViewModel.AddressText), palette);
-        panel.Children.Add(Label("Street address", address, palette));
-        address.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowAddress)) { Converter = BooleanToVisibilityConverter.Instance });
-        panel.Children.Add(address);
+        StackPanel addressField = Field("Street address", address, palette);
+        addressField.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowAddress)) { Converter = BooleanToVisibilityConverter.Instance });
+        panel.Children.Add(addressField);
         StackPanel coordinates = new() { Orientation = Orientation.Horizontal };
         TextBox latitude = Input("Latitude", nameof(SolidGroundDialogViewModel.LatitudeText), palette);
         TextBox longitude = Input("Longitude", nameof(SolidGroundDialogViewModel.LongitudeText), palette);
@@ -135,16 +135,27 @@ internal sealed class SolidGroundDialog : Window
         StackPanel other = new();
         other.Children.Add(Text("Other area options", palette, FontWeights.SemiBold));
         other.Children.Add(Text("Use a bounding box, point and radius, or a local polygon instead of a parcel. This does not create a property line.", palette));
-        other.Children.Add(Field("West longitude", Input("West longitude", nameof(SolidGroundDialogViewModel.WestText), palette), palette));
-        other.Children.Add(Field("South latitude", Input("South latitude", nameof(SolidGroundDialogViewModel.SouthText), palette), palette));
-        other.Children.Add(Field("East longitude", Input("East longitude", nameof(SolidGroundDialogViewModel.EastText), palette), palette));
-        other.Children.Add(Field("North latitude", Input("North latitude", nameof(SolidGroundDialogViewModel.NorthText), palette), palette));
-        other.Children.Add(Field("Radius in metres", Input("Radius in metres", nameof(SolidGroundDialogViewModel.RadiusMetersText), palette), palette));
+        StackPanel boundingBox = new();
+        boundingBox.Children.Add(Field("West longitude", Input("West longitude", nameof(SolidGroundDialogViewModel.WestText), palette), palette));
+        boundingBox.Children.Add(Field("South latitude", Input("South latitude", nameof(SolidGroundDialogViewModel.SouthText), palette), palette));
+        boundingBox.Children.Add(Field("East longitude", Input("East longitude", nameof(SolidGroundDialogViewModel.EastText), palette), palette));
+        boundingBox.Children.Add(Field("North latitude", Input("North latitude", nameof(SolidGroundDialogViewModel.NorthText), palette), palette));
+        boundingBox.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.EntryMode)) { Converter = new EntryModeVisibilityConverter(LocationEntryMode.BoundingBox) });
+        other.Children.Add(boundingBox);
+        StackPanel radius = new() { Orientation = Orientation.Horizontal };
+        radius.Children.Add(Field("Center latitude", Input("Center latitude", nameof(SolidGroundDialogViewModel.LatitudeText), palette), palette));
+        radius.Children.Add(Field("Center longitude", Input("Center longitude", nameof(SolidGroundDialogViewModel.LongitudeText), palette), palette));
+        radius.Children.Add(Field("Radius in metres", Input("Radius in metres", nameof(SolidGroundDialogViewModel.RadiusMetersText), palette), palette));
+        radius.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.EntryMode)) { Converter = new EntryModeVisibilityConverter(LocationEntryMode.Radius) });
+        other.Children.Add(radius);
         TextBox geometry = Input("Local GeoJSON or WKT", nameof(SolidGroundDialogViewModel.LocalGeometryText), palette);
         Button browseGeometry = Secondary("Browse GeoJSON or WKT…", null, palette, "Browse local GeoJSON or WKT");
         browseGeometry.Click += (_, _) => BrowseGeometry(geometry);
-        other.Children.Add(Field("Paste local GeoJSON or WKT", geometry, palette));
-        other.Children.Add(browseGeometry);
+        StackPanel localGeometry = new();
+        localGeometry.Children.Add(Field("Paste local GeoJSON or WKT", geometry, palette));
+        localGeometry.Children.Add(browseGeometry);
+        localGeometry.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.EntryMode)) { Converter = new EntryModeVisibilityConverter(LocationEntryMode.LocalGeometry) });
+        other.Children.Add(localGeometry);
         other.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowOtherAreaOptions)) { Converter = BooleanToVisibilityConverter.Instance });
         panel.Children.Add(other);
         panel.Children.Add(Text("Use Settings to change terrain extension, elevation source, access key, or export defaults.", palette));
@@ -180,7 +191,7 @@ internal sealed class SolidGroundDialog : Window
         map.Click += (_, _) => OpenCoordinateMap();
         panel.Children.Add(map);
         panel.Children.Add(Text("Use this parcel confirms the displayed legal boundary. Nearby parcels are never selected automatically.", palette));
-        panel.Children.Add(new ParcelBoundaryPreview { Margin = new Thickness(0, 12, 0, 0), DataContext = _viewModel });
+        panel.Children.Add(new ParcelBoundaryPreview(palette) { Margin = new Thickness(0, 12, 0, 0), DataContext = _viewModel });
         return panel;
     }
 
@@ -202,11 +213,11 @@ internal sealed class SolidGroundDialog : Window
         ComboBox level = new() { DisplayMemberPath = "Name", Margin = new Thickness(0, 8, 0, 0) };
         level.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.LevelCandidates)));
         level.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedLevel)) { Mode = BindingMode.TwoWay });
-        AutomationProperties.SetName(level, "Level"); panel.Children.Add(level);
+        AutomationProperties.SetName(level, "Level"); panel.Children.Add(Field("Level", level, palette));
         ComboBox type = new() { DisplayMemberPath = "Name", Margin = new Thickness(0, 8, 0, 0) };
         type.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.ToposolidTypeCandidates)));
         type.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedToposolidType)) { Mode = BindingMode.TwoWay });
-        AutomationProperties.SetName(type, "Toposolid type"); panel.Children.Add(type);
+        AutomationProperties.SetName(type, "Toposolid type"); panel.Children.Add(Field("Toposolid type", type, palette));
         CheckBox shared = new() { Content = "Write shared coordinates if none exist", Margin = new Thickness(0, 12, 0, 0) };
         shared.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(SolidGroundDialogViewModel.WriteSharedCoordinatesIfAbsent)) { Mode = BindingMode.TwoWay });
         AutomationProperties.SetName(shared, "Write shared coordinates if none exist"); panel.Children.Add(shared);
@@ -318,8 +329,10 @@ internal sealed class SolidGroundDialog : Window
     private void ClampToWorkingArea()
     {
         Rect workArea = SystemParameters.WorkArea;
-        MaxWidth = Math.Max(MinWidth, workArea.Width - 16d);
-        MaxHeight = Math.Max(MinHeight, workArea.Height - 16d);
+        MaxWidth = Math.Max(1d, workArea.Width - 16d);
+        MaxHeight = Math.Max(1d, workArea.Height - 16d);
+        MinWidth = Math.Min(640d, MaxWidth);
+        MinHeight = Math.Min(480d, MaxHeight);
         Width = Math.Min(Width, MaxWidth); Height = Math.Min(Height, MaxHeight);
     }
 
@@ -333,6 +346,11 @@ internal sealed class SolidGroundDialog : Window
     {
         internal static readonly TextPresenceVisibilityConverter Instance = new();
         public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is string { Length: > 0 } ? Visibility.Visible : Visibility.Collapsed;
+        public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
+    }
+    private sealed class EntryModeVisibilityConverter(LocationEntryMode mode) : IValueConverter
+    {
+        public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is LocationEntryMode current && current == mode ? Visibility.Visible : Visibility.Collapsed;
         public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
     }
     private sealed class StepPanelConverter(IReadOnlyDictionary<SolidGroundDialogStep, FrameworkElement> panels) : IValueConverter

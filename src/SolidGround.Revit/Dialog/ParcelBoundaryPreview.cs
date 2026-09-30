@@ -17,11 +17,16 @@ namespace SolidGround.Revit.Dialog;
 internal sealed class ParcelBoundaryPreview : Border
 {
     private readonly Canvas _canvas = new() { Height = 176d, MinWidth = 260d };
+    private readonly DialogPalette _palette;
     private SolidGroundDialogViewModel? _viewModel;
+    private ParcelProximityCandidate? _cachedCandidate;
+    private double _cachedExtensionMeters = double.NaN;
+    private Wgs84BoundingBoxAoi? _cachedRequestEnvelope;
 
-    internal ParcelBoundaryPreview()
+    internal ParcelBoundaryPreview(DialogPalette palette)
     {
-        BorderBrush = SystemColors.ActiveBorderBrush;
+        _palette = palette ?? throw new ArgumentNullException(nameof(palette));
+        BorderBrush = palette.ActiveBorder;
         BorderThickness = new Thickness(1);
         Padding = new Thickness(8);
         Child = _canvas;
@@ -56,20 +61,19 @@ internal sealed class ParcelBoundaryPreview : Border
 
         PolygonalRegion legal = selected.Candidate.Boundary;
         double extensionMeters = _viewModel?.EffectiveSettings?.TerrainExtensionMeters ?? 0d;
-        Wgs84BoundingBoxAoi fetchEnvelope = ClipRegionFactory.BuildFetchEnvelope(
-            ParcelBoundaryAoiFactory.FromCandidate(selected.Candidate, LinearDistance.Meters(extensionMeters))).Envelope;
-        PlanarEnvelope envelope = Union(legal.Envelope, fetchEnvelope);
+        Wgs84BoundingBoxAoi? requestEnvelope = GetRequestEnvelope(selected, extensionMeters);
+        PlanarEnvelope envelope = requestEnvelope is null ? legal.Envelope : Union(legal.Envelope, requestEnvelope);
         double width = Math.Max(1d, _canvas.ActualWidth == 0d ? 260d : _canvas.ActualWidth);
         double height = Math.Max(1d, _canvas.ActualHeight == 0d ? 176d : _canvas.ActualHeight);
         const double inset = 18d;
         double scale = Math.Min((width - 2d * inset) / Math.Max(envelope.MaxX - envelope.MinX, double.Epsilon), (height - 2d * inset) / Math.Max(envelope.MaxY - envelope.MinY, double.Epsilon));
 
-        if (extensionMeters > 0d)
+        if (requestEnvelope is not null && extensionMeters > 0d)
         {
-            Rectangle terrain = new() { Width = (fetchEnvelope.EastLongitude - fetchEnvelope.WestLongitude) * scale, Height = (fetchEnvelope.NorthLatitude - fetchEnvelope.SouthLatitude) * scale, Stroke = SystemColors.GrayTextBrush, StrokeThickness = 1.5d, StrokeDashArray = [4d, 3d] };
-            Canvas.SetLeft(terrain, X(fetchEnvelope.WestLongitude));
-            Canvas.SetTop(terrain, Y(fetchEnvelope.NorthLatitude));
-            _canvas.Children.Add(terrain);
+            Rectangle request = new() { Width = (requestEnvelope.EastLongitude - requestEnvelope.WestLongitude) * scale, Height = (requestEnvelope.NorthLatitude - requestEnvelope.SouthLatitude) * scale, Stroke = _palette.GrayText, StrokeThickness = 1.5d, StrokeDashArray = [4d, 3d] };
+            Canvas.SetLeft(request, X(requestEnvelope.WestLongitude));
+            Canvas.SetTop(request, Y(requestEnvelope.NorthLatitude));
+            _canvas.Children.Add(request);
         }
 
         foreach (PolygonRings polygon in legal.Polygons)
@@ -80,18 +84,19 @@ internal sealed class ParcelBoundaryPreview : Border
 
         if (_viewModel?.SelectedGeocodeCandidate is { } location)
         {
-            Ellipse point = new() { Width = 8d, Height = 8d, Fill = SystemColors.ControlTextBrush, Stroke = SystemColors.WindowBrush, StrokeThickness = 1d };
+            Ellipse point = new() { Width = 8d, Height = 8d, Fill = _palette.ControlText, Stroke = _palette.Window, StrokeThickness = 1d };
             Canvas.SetLeft(point, X(location.Longitude) - 4d); Canvas.SetTop(point, Y(location.Latitude) - 4d); _canvas.Children.Add(point);
         }
 
         string geometry = legal.PolygonCount > 1 ? $"{legal.PolygonCount.ToString(CultureInfo.InvariantCulture)} legal parts" : "one legal part";
         string holes = legal.HoleCount == 0 ? "no holes" : $"{legal.HoleCount.ToString(CultureInfo.InvariantCulture)} holes";
-        AutomationProperties.SetHelpText(this, $"Solid blue outline is the legal parcel ({geometry}, {holes}); black dot is the selected location" + (extensionMeters > 0d ? "; dashed rectangle is the terrain fetch envelope." : "."));
-        AddText("Solid: legal parcel  •  Dot: location" + (extensionMeters > 0d ? "  •  Dashed: terrain envelope" : string.Empty), 4d, height - 18d);
+        AutomationProperties.SetHelpText(this, $"Solid outline is the legal parcel ({geometry}, {holes}); dot is the selected location" + (requestEnvelope is not null && extensionMeters > 0d ? "; dashed rectangle is the source request envelope, not the projected terrain-buffer boundary." : "."));
+        AddText("Solid: legal parcel  •  Dot: location" + (requestEnvelope is not null && extensionMeters > 0d ? "  •  Dashed: source request envelope" : string.Empty), 4d, height - 18d);
+        AddText("N ↑", width - 30d, 2d);
 
         void AddRing(IReadOnlyList<Coordinate2D> ring, bool hole)
         {
-            Polyline outline = new() { Stroke = SystemColors.HighlightBrush, StrokeThickness = hole ? 1.5d : 2d, StrokeDashArray = hole ? [2d, 2d] : null };
+            Polyline outline = new() { Stroke = _palette.Highlight, StrokeThickness = hole ? 1.5d : 2d, StrokeDashArray = hole ? [2d, 2d] : null };
             foreach (Coordinate2D point in ring) outline.Points.Add(new Point(X(point.X), Y(point.Y)));
             _canvas.Children.Add(outline);
         }
@@ -101,9 +106,19 @@ internal sealed class ParcelBoundaryPreview : Border
 
     private void AddText(string value, double left, double top)
     {
-        TextBlock text = new() { Text = value, TextWrapping = TextWrapping.Wrap, FontSize = 11d, Foreground = SystemColors.ControlTextBrush };
+        TextBlock text = new() { Text = value, TextWrapping = TextWrapping.Wrap, FontSize = 11d, Foreground = _palette.ControlText };
         Canvas.SetLeft(text, left); Canvas.SetTop(text, top); _canvas.Children.Add(text);
     }
 
     private static PlanarEnvelope Union(PlanarEnvelope legal, Wgs84BoundingBoxAoi terrain) => new(Math.Min(legal.MinX, terrain.WestLongitude), Math.Min(legal.MinY, terrain.SouthLatitude), Math.Max(legal.MaxX, terrain.EastLongitude), Math.Max(legal.MaxY, terrain.NorthLatitude));
+
+    private Wgs84BoundingBoxAoi? GetRequestEnvelope(ParcelProximityCandidate selected, double extensionMeters)
+    {
+        if (ReferenceEquals(_cachedCandidate, selected) && extensionMeters.Equals(_cachedExtensionMeters)) return _cachedRequestEnvelope;
+        _cachedCandidate = selected;
+        _cachedExtensionMeters = extensionMeters;
+        try { _cachedRequestEnvelope = ParcelFetchEnvelopePlanner.Build(ParcelBoundaryAoiFactory.FromCandidate(selected.Candidate, LinearDistance.Zero), LinearDistance.Meters(extensionMeters)); }
+        catch (ParcelFetchEnvelopePlanningException) { _cachedRequestEnvelope = null; }
+        return _cachedRequestEnvelope;
+    }
 }

@@ -58,13 +58,16 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("ParcelBoundaryAoiFactory.FromCandidate", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
         Assert.Contains("StrokeDashArray", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
         Assert.Contains("SelectedGeocodeCandidate", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("DialogPalette palette", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("source request envelope, not the projected terrain-buffer boundary", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
+        Assert.Contains("N ↑", Read("ParcelBoundaryPreview.cs"), StringComparison.Ordinal);
     }
 
     [Fact]
     public void WindowUsesVisibleLabelsDetailedParcelRowsAndOperatorInitiatedStatelessLinks()
     {
         string source = Read("SolidGroundDialog.cs");
-        Assert.Contains("Label(\"Street address\"", source, StringComparison.Ordinal);
+        Assert.Contains("Field(\"Street address\"", source, StringComparison.Ordinal);
         Assert.Contains("Field(\"Latitude\"", source, StringComparison.Ordinal);
         Assert.Contains("Field(\"West longitude\"", source, StringComparison.Ordinal);
         Assert.Contains("Browse GeoJSON or WKT", source, StringComparison.Ordinal);
@@ -89,6 +92,10 @@ public sealed class RevitInteractiveDialogTests
         Assert.Contains("_useParcelButton.IsDefault = _useParcelButton.Visibility == Visibility.Visible", source, StringComparison.Ordinal);
         Assert.Contains("_createButton.IsDefault = _createButton.Visibility == Visibility.Visible", source, StringComparison.Ordinal);
         Assert.Contains("ClampToWorkingArea", source, StringComparison.Ordinal);
+        Assert.Contains("MinWidth = Math.Min(640d, MaxWidth)", source, StringComparison.Ordinal);
+        Assert.Contains("EntryModeVisibilityConverter(LocationEntryMode.BoundingBox)", source, StringComparison.Ordinal);
+        Assert.Contains("EntryModeVisibilityConverter(LocationEntryMode.Radius)", source, StringComparison.Ordinal);
+        Assert.Contains("EntryModeVisibilityConverter(LocationEntryMode.LocalGeometry)", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -97,6 +104,7 @@ public sealed class RevitInteractiveDialogTests
         string estimate = File.ReadAllText(Path.Combine(Root, "src", "SolidGround.Core", "Workflow", "PreFetchEstimate.cs"));
         string reachability = File.ReadAllText(Path.Combine(Root, "src", "SolidGround.Core", "Workflow", "ReachabilityProbe.cs"));
         Assert.Contains("ClipRegionFactory.BuildFetchEnvelope", estimate, StringComparison.Ordinal);
+        Assert.Contains("ParcelFetchEnvelopePlanner.Build(parcel, terrainMargin)", estimate, StringComparison.Ordinal);
         Assert.Contains("FromProcessAreaOfInterest", estimate, StringComparison.Ordinal);
         Assert.Contains("openTopographyRequestCount: 0", estimate, StringComparison.Ordinal);
         Assert.Contains("new(HttpMethod.Get, endpoint)", reachability, StringComparison.Ordinal);
