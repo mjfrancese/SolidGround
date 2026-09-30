@@ -10,9 +10,10 @@ using SolidGround.Core.Units;
 namespace SolidGround.Core.Processing;
 
 /// <summary>
-/// Builds a conservative WGS 84 request envelope for a legal parcel before source-grid CRS metadata is
-/// available. It derives the union from the same terrain-only projected buffers for every verified NAD83
-/// UTM candidate; it does not issue an acquisition request or select a source CRS.
+/// Builds a bounded, numerically conservative WGS 84 request envelope for a legal parcel before source-grid
+/// CRS metadata is available. It derives the union from the same terrain-only projected buffers for every
+/// verified NAD83 UTM candidate; it does not issue an acquisition request or select a source CRS. It is not
+/// a formal unbounded coverage proof; post-grid complete-coverage validation remains authoritative.
 /// </summary>
 public static class ParcelFetchEnvelopePlanner
 {
@@ -20,9 +21,9 @@ public static class ParcelFetchEnvelopePlanner
     public static readonly LinearDistance MaximumProjectedSampleSpacing = LinearDistance.Meters(5d);
 
     /// <summary>
-    /// Explicit numerical allowance applied around the union of inverse-transformed samples. It covers the
-    /// bounded sampling interval and floating-point transform residual; it is fetch coverage allowance, not
-    /// a legal-boundary or terrain-buffer edit.
+    /// Explicit numerical allowance applied around the union of inverse-transformed samples. Its adequacy is
+    /// independently exercised at one-metre spacing for the supported candidates; it is a fetch coverage
+    /// allowance, not a legal-boundary or terrain-buffer edit, and does not establish a formal global guarantee.
     /// </summary>
     public static readonly LinearDistance NumericalPadding = LinearDistance.Meters(10d);
 
@@ -31,6 +32,11 @@ public static class ParcelFetchEnvelopePlanner
 
     private static readonly VerticalReference PlanningPlaceholderVerticalReference = new("Planning placeholder", LengthUnit.Meter);
 
+    /// <summary>
+    /// Builds the validated numerical request envelope for an unbuffered canonical WGS 84 legal parcel and
+    /// its separate projected terrain margin. The result remains subject to post-grid complete-coverage
+    /// validation once the source CRS and grid are known.
+    /// </summary>
     public static Wgs84BoundingBoxAoi Build(ParcelGeometryAoi legalParcel, LinearDistance terrainMargin)
     {
         ArgumentNullException.ThrowIfNull(legalParcel);
