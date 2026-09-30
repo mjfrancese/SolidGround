@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 
@@ -40,6 +41,9 @@ internal static class DialogControlStyles
         resources[typeof(ListBoxItem)] = SelectorItemStyle(typeof(ListBoxItem), palette);
         resources[typeof(CheckBox)] = CheckBoxStyle(palette);
         resources[typeof(RadioButton)] = CheckBoxStyle(typeof(RadioButton), palette);
+        resources[typeof(TabControl)] = TabControlStyle(palette);
+        resources[typeof(TabItem)] = TabItemStyle(palette);
+        resources[typeof(ToolTip)] = ToolTipStyle(palette);
 
         // These keys keep an active Windows High Contrast scheme dynamic after the window opens.
         // SystemColors brushes are system-owned resources rather than SolidGround brand colors.
@@ -173,6 +177,46 @@ internal static class DialogControlStyles
         return style;
     }
 
+    private static Style TabControlStyle(DialogPalette palette)
+    {
+        Style style = new(typeof(TabControl));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, palette.ControlBackground));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, palette.ControlText));
+        style.Setters.Add(new Setter(Control.BorderBrushProperty, palette.ActiveBorder));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+        style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, FocusVisualStyle(palette)));
+        style.Setters.Add(new Setter(Control.TemplateProperty, TabControlTemplate()));
+        return style;
+    }
+
+    private static Style TabItemStyle(DialogPalette palette)
+    {
+        Style style = new(typeof(TabItem));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, palette.SurfaceRaised));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, palette.ControlText));
+        style.Setters.Add(new Setter(Control.BorderBrushProperty, palette.ActiveBorder));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+        style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 7, 12, 7)));
+        style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, FocusVisualStyle(palette)));
+        style.Setters.Add(new Setter(Control.TemplateProperty, TabItemTemplate()));
+        style.Triggers.Add(new Trigger { Property = UIElement.IsMouseOverProperty, Value = true, Setters = { new Setter(Control.BackgroundProperty, palette.Selection), new Setter(Control.BorderBrushProperty, palette.Focus) } });
+        style.Triggers.Add(new Trigger { Property = TabItem.IsSelectedProperty, Value = true, Setters = { new Setter(Control.BackgroundProperty, palette.ControlBackground), new Setter(Control.ForegroundProperty, palette.ControlText), new Setter(Control.BorderBrushProperty, palette.Focus), new Setter(Control.BorderThicknessProperty, new Thickness(2)) } });
+        style.Triggers.Add(new Trigger { Property = UIElement.IsEnabledProperty, Value = false, Setters = { new Setter(Control.BackgroundProperty, palette.DisabledSurface), new Setter(Control.ForegroundProperty, palette.DisabledText) } });
+        return style;
+    }
+
+    private static Style ToolTipStyle(DialogPalette palette)
+    {
+        Style style = new(typeof(ToolTip));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, palette.SurfaceRaised));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, palette.ControlText));
+        style.Setters.Add(new Setter(Control.BorderBrushProperty, palette.ActiveBorder));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+        style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 5, 8, 5)));
+        style.Setters.Add(new Setter(Control.TemplateProperty, ToolTipTemplate()));
+        return style;
+    }
+
     private static void AddInputTriggers(Style style, DialogPalette palette)
     {
         style.Triggers.Add(new Trigger { Property = UIElement.IsMouseOverProperty, Value = true, Setters = { new Setter(Control.BorderBrushProperty, palette.Focus) } });
@@ -219,6 +263,18 @@ internal static class DialogControlStyles
         FrameworkElementFactory root = new(typeof(Grid));
         FrameworkElementFactory border = ControlBorder("Border");
         FrameworkElementFactory row = new(typeof(DockPanel));
+        row.SetValue(DockPanel.LastChildFillProperty, true);
+        FrameworkElementFactory toggle = new(typeof(ToggleButton)) { Name = "DropDownToggle" };
+        toggle.SetValue(DockPanel.DockProperty, Dock.Right);
+        toggle.SetValue(ToggleButton.ContentProperty, "⌄");
+        toggle.SetValue(Control.BackgroundProperty, Brushes.Transparent);
+        toggle.SetValue(Control.BorderThicknessProperty, new Thickness(0));
+        toggle.SetValue(Control.PaddingProperty, new Thickness(7, 0, 7, 0));
+        toggle.SetValue(UIElement.FocusableProperty, false);
+        toggle.SetValue(KeyboardNavigation.IsTabStopProperty, false);
+        toggle.SetBinding(Control.ForegroundProperty, TemplateBinding(Control.ForegroundProperty));
+        toggle.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(ComboBox.IsDropDownOpen)) { RelativeSource = TemplatedParent(), Mode = BindingMode.TwoWay });
+        row.AppendChild(toggle);
         FrameworkElementFactory selection = new(typeof(ContentPresenter));
         selection.SetBinding(ContentPresenter.ContentProperty, TemplateBinding(ComboBox.SelectionBoxItemProperty));
         selection.SetBinding(ContentPresenter.ContentTemplateProperty, TemplateBinding(ComboBox.SelectionBoxItemTemplateProperty));
@@ -226,14 +282,6 @@ internal static class DialogControlStyles
         selection.SetBinding(ContentPresenter.MarginProperty, TemplateBinding(Control.PaddingProperty));
         selection.SetBinding(ContentPresenter.VerticalAlignmentProperty, TemplateBinding(Control.VerticalContentAlignmentProperty));
         row.AppendChild(selection);
-        FrameworkElementFactory toggle = new(typeof(ToggleButton)) { Name = "DropDownToggle" };
-        toggle.SetValue(DockPanel.DockProperty, Dock.Right);
-        toggle.SetValue(ToggleButton.ContentProperty, "⌄");
-        toggle.SetValue(Control.BackgroundProperty, Brushes.Transparent);
-        toggle.SetValue(Control.BorderThicknessProperty, new Thickness(0));
-        toggle.SetValue(Control.PaddingProperty, new Thickness(7, 0, 7, 0));
-        toggle.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(ComboBox.IsDropDownOpen)) { RelativeSource = TemplatedParent(), Mode = BindingMode.TwoWay });
-        row.AppendChild(toggle);
         border.AppendChild(row);
         root.AppendChild(border);
 
@@ -246,7 +294,8 @@ internal static class DialogControlStyles
         popupBorder.SetValue(Border.BackgroundProperty, palette.ControlBackground);
         popupBorder.SetValue(Border.BorderBrushProperty, palette.ActiveBorder);
         popupBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-        popupBorder.SetBinding(FrameworkElement.MinWidthProperty, TemplateBinding(FrameworkElement.ActualWidthProperty));
+        popupBorder.SetBinding(FrameworkElement.WidthProperty, TemplateBinding(FrameworkElement.ActualWidthProperty));
+        popupBorder.SetBinding(FrameworkElement.MaxHeightProperty, TemplateBinding(ComboBox.MaxDropDownHeightProperty));
         FrameworkElementFactory scroll = new(typeof(ScrollViewer));
         scroll.SetValue(ScrollViewer.CanContentScrollProperty, true);
         scroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
@@ -267,6 +316,49 @@ internal static class DialogControlStyles
         scroll.AppendChild(new FrameworkElementFactory(typeof(ItemsPresenter)));
         border.AppendChild(scroll);
         return new ControlTemplate(typeof(ListBox)) { VisualTree = border };
+    }
+
+    private static ControlTemplate TabControlTemplate()
+    {
+        FrameworkElementFactory border = ControlBorder("Border");
+        FrameworkElementFactory layout = new(typeof(DockPanel));
+        FrameworkElementFactory headers = new(typeof(TabPanel)) { Name = "HeaderPanel" };
+        headers.SetValue(DockPanel.DockProperty, Dock.Top);
+        headers.SetValue(Panel.IsItemsHostProperty, true);
+        layout.AppendChild(headers);
+        FrameworkElementFactory content = new(typeof(ContentPresenter)) { Name = "PART_SelectedContentHost" };
+        content.SetBinding(ContentPresenter.ContentProperty, TemplateBinding(TabControl.SelectedContentProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateProperty, TemplateBinding(TabControl.SelectedContentTemplateProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateSelectorProperty, TemplateBinding(TabControl.SelectedContentTemplateSelectorProperty));
+        content.SetBinding(ContentPresenter.MarginProperty, TemplateBinding(Control.PaddingProperty));
+        layout.AppendChild(content);
+        border.AppendChild(layout);
+        return new ControlTemplate(typeof(TabControl)) { VisualTree = border };
+    }
+
+    private static ControlTemplate TabItemTemplate()
+    {
+        FrameworkElementFactory border = ControlBorder("TabBorder");
+        FrameworkElementFactory content = new(typeof(ContentPresenter));
+        content.SetBinding(ContentPresenter.ContentProperty, TemplateBinding(ContentControl.ContentProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateProperty, TemplateBinding(ContentControl.ContentTemplateProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateSelectorProperty, TemplateBinding(ContentControl.ContentTemplateSelectorProperty));
+        content.SetBinding(ContentPresenter.HorizontalAlignmentProperty, TemplateBinding(Control.HorizontalContentAlignmentProperty));
+        content.SetBinding(ContentPresenter.VerticalAlignmentProperty, TemplateBinding(Control.VerticalContentAlignmentProperty));
+        content.SetBinding(ContentPresenter.MarginProperty, TemplateBinding(Control.PaddingProperty));
+        border.AppendChild(content);
+        return new ControlTemplate(typeof(TabItem)) { VisualTree = border };
+    }
+
+    private static ControlTemplate ToolTipTemplate()
+    {
+        FrameworkElementFactory border = ControlBorder("ToolTipBorder");
+        FrameworkElementFactory content = new(typeof(ContentPresenter));
+        content.SetBinding(ContentPresenter.ContentProperty, TemplateBinding(ContentControl.ContentProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateProperty, TemplateBinding(ContentControl.ContentTemplateProperty));
+        content.SetBinding(ContentPresenter.MarginProperty, TemplateBinding(Control.PaddingProperty));
+        border.AppendChild(content);
+        return new ControlTemplate(typeof(ToolTip)) { VisualTree = border };
     }
 
     private static ControlTemplate SelectorItemTemplate(Type targetType, DialogPalette palette)
