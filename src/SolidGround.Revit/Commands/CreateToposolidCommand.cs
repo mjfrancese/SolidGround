@@ -1136,7 +1136,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // while reporting success (writing the placement record, the orphan check, showing the dialog) must
         // never re-derive Result from TransactionStatus.RolledBack/HasEnded() -- the model change is already
         // durable. ReportSuccess is itself defensive (never lets a reporting failure escape) for the same reason.
-        return ReportSuccess(context, draft!, toposolid!, projection);
+        return ReportSuccess(context, draft!, toposolid!, projection, outcome.Payload.Provenance.Source.Attribution);
     }
 
     private static PlacementRecordDraft BuildPlacementDraft(
@@ -1275,7 +1275,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
     /// derive a Cancelled/Failed result for a run that actually succeeded (error catalogue row 22's
     /// principle, generalized to every post-commit step, not only the placement-record write).
     /// </summary>
-    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid, ProjectionCharacteristicsMeasurement? projection)
+    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid, ProjectionCharacteristicsMeasurement? projection, string? sourceAttribution)
     {
         long elementId = toposolid.Id.Value;
 
@@ -1339,6 +1339,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 $"ToposolidType: {context.ToposolidType.Name}",
                 $"Points retained: {draft.PointCounts.Retained.ToString(CultureInfo.InvariantCulture)} of {draft.PointCounts.Original.ToString(CultureInfo.InvariantCulture)} (budget {draft.PointCounts.Budget.ToString(CultureInfo.InvariantCulture)})",
                 propertyLineStatement,
+                sourceAttribution is not null
+                    ? $"Elevation source attribution: {sourceAttribution}"
+                    : "Elevation source attribution was not supplied in the local source metadata.",
                 projection is { } characteristics
                     ? $"Authoritative grid: convergence {characteristics.GridConvergenceRadians:R} rad ({(characteristics.GridConvergenceRadians * 180d / Math.PI):R} deg); point scale {characteristics.PointScaleFactor:R}."
                     : "Authoritative grid projection characteristics were unavailable (see log).",
