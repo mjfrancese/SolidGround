@@ -19,6 +19,10 @@ internal sealed class SettingsDialog : Window
     private readonly TextBox extension;
     private readonly TextBox exportDirectory;
     private readonly TextBox exportBaseName;
+    private readonly TextBox timeout;
+    private readonly TextBox nearbyRadius;
+    private readonly TextBox coverageFloor;
+    private readonly ComboBox simplificationMethod;
     private readonly ComboBox outputUnit;
     private readonly ComboBox displayFormat;
     private readonly ComboBox acquisitionMode;
@@ -104,7 +108,11 @@ internal sealed class SettingsDialog : Window
         exportDirectory = Text(current.Request.Output.Directory);
         exportBaseName = Text(current.Request.Output.BaseName);
         pages.Items.Add(Page("Files", Panel(Label("Export folder"), FolderField(exportDirectory), Label("Base name"), exportBaseName)));
-        pages.Items.Add(Page("Advanced", Panel(new TextBlock { Text = "Network timeout, nearby parcel distance, local origin, and sampler coverage retain their validated values. Save validates the complete settings document.", TextWrapping = TextWrapping.Wrap })));
+        timeout = Text(current.Request.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
+        nearbyRadius = Text(current.AddressAndParcel.NearbySearchRadiusMeters?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty);
+        coverageFloor = Text(current.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture));
+        simplificationMethod = Choice(new[] { SimplificationMethod.CurvatureAware, SimplificationMethod.UniformSampler }, current.Request.Simplification.Method);
+        pages.Items.Add(Page("Advanced", Panel(Label("Simplification method"), simplificationMethod, Label("Network timeout (seconds)"), timeout, Label("Nearby parcel search distance (metres; blank uses default)"), nearbyRadius, Label("Sampler coverage fraction (0 through 1)"), coverageFloor, new TextBlock { Text = "The local-origin policy and full process metadata are preserved unless changed by a dedicated source workflow.", TextWrapping = TextWrapping.Wrap })));
         shell.Children.Add(pages);
 
         error = new TextBlock { Foreground = colors.Error, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 6) };
@@ -141,17 +149,31 @@ internal sealed class SettingsDialog : Window
             error.Text = "Terrain extension must be a finite nonnegative value in the selected display format."; extension.Focus(); return;
         }
         TerrainAcquisitionMode mode = (TerrainAcquisitionMode)acquisitionMode.SelectedItem;
+        if (!int.TryParse(timeout.Text, NumberStyles.None, CultureInfo.InvariantCulture, out int timeoutSeconds) || timeoutSeconds <= 0)
+        {
+            error.Text = "Network timeout must be a positive whole number of seconds."; timeout.Focus(); return;
+        }
+        if (!double.TryParse(coverageFloor.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double coverage) || !double.IsFinite(coverage) || coverage is < 0d or > 1d)
+        {
+            error.Text = "Sampler coverage fraction must be between 0 and 1."; coverageFloor.Focus(); return;
+        }
+        double? nearby = null;
+        if (!string.IsNullOrWhiteSpace(nearbyRadius.Text) && (!double.TryParse(nearbyRadius.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsedNearby) || !double.IsFinite(parsedNearby) || parsedNearby <= 0d))
+        {
+            error.Text = "Nearby parcel search distance must be a positive number of metres or blank."; nearbyRadius.Focus(); return;
+        }
+        else if (!string.IsNullOrWhiteSpace(nearbyRadius.Text)) nearby = double.Parse(nearbyRadius.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
         ProcessInputSettings? process = mode == TerrainAcquisitionMode.Process
             ? (current.Request.Process ?? new ProcessInputSettings { Asc = ascPath.Text }) with { Asc = ascPath.Text, Prj = BlankAsNull(prjPath.Text), SourceJson = BlankAsNull(sidecarPath.Text) }
             : null;
         RevitAddressAndParcelSettings address = current.AddressAndParcel with
         {
-            GeocoderProvider = (AddressGeocoderProvider)geocoderProvider.SelectedItem,
+            GeocoderProvider = (AddressGeocoderProvider)geocoderProvider.SelectedItem, NearbySearchRadiusMeters = nearby,
             CountyRegistryPath = BlankAsNull(countyRegistryPath.Text), CountyServiceAuthorizedUseAcknowledged = countyAuthorization.IsChecked == true, LocalParcelFilePath = BlankAsNull(localParcelPath.Text), LocalParcelFileSourceLabel = BlankAsNull(localParcelLabel.Text), LocalParcelFileLicenseDisclaimerText = BlankAsNull(localParcelLicense.Text),
         };
         RevitSettings proposed = current with
         {
-            Request = current.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, Simplification = current.Request.Simplification with { PointBudget = budget }, Output = current.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
+            Request = current.Request with { Mode = mode, Process = process, OutputUnit = (LengthUnit)outputUnit.SelectedItem, NetworkTimeoutSeconds = timeoutSeconds, Simplification = current.Request.Simplification with { PointBudget = budget, CoverageFloorFraction = coverage, Method = (SimplificationMethod)simplificationMethod.SelectedItem }, Output = current.Request.Output with { Directory = exportDirectory.Text, BaseName = exportBaseName.Text } },
             AddressAndParcel = address, TerrainExtensionMeters = extensionMeters, DistanceDisplayFormat = (DistanceDisplayFormat)displayFormat.SelectedItem,
         };
         try
