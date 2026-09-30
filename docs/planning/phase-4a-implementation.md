@@ -1,6 +1,6 @@
 # Phase 4A combined implementation plan
 
-Date: 2026-09-30  
+Date: 2026-09-30
 Status: approved implementation plan for #40, #43–#54, #60, and linked #36/#38. Source implementation and automated verification are in progress. The public-reference benchmark is recorded; native Revit acceptance remains pending.
 
 ## Purpose and boundaries
