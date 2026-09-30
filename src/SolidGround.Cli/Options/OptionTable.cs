@@ -37,6 +37,7 @@ internal static class OptionTable
     internal const string Verify = "verify";
     internal const string Geocode = "geocode";
     internal const string Parcel = "parcel";
+    internal const string Score = "score";
 
     // ---- options reused, byte-for-byte or with a small variant, across more than one verb ------------
 
@@ -288,6 +289,22 @@ internal static class OptionTable
         TimeoutForOnlineLookup,
     ];
 
+    private static readonly IReadOnlyList<OptionSpec> ScoreOptions =
+    [
+        new("reference-asc", OptionKind.Value, true, "<file>", "The full-resolution reference AAIGrid (.asc)."),
+        new("reference-prj", OptionKind.Value, true, "<file>", "The reference grid's coordinate-reference sidecar (.prj)."),
+        new("reference-vertical-datum", OptionKind.Value, true, "<text>", "The reference grid's declared vertical datum."),
+        new("reference-vertical-unit", OptionKind.Value, true, LengthUnitTokens.Syntax, "The reference grid's declared vertical unit."),
+        new("bundle", OptionKind.Value, false, "<document>", "A SolidGround export document; its paired points CSV is read and reconstructed through its local frame."),
+        new("points", OptionKind.Value, false, "<file>", "An external CSV with x,y,z header. Requires every external declaration below."),
+        new("external-epsg", OptionKind.Value, false, "<EPSG:n>", "The external CSV's declared projected CRS; must equal the reference CRS in this release."),
+        new("external-axis-order", OptionKind.Value, false, "easting-northing|northing-easting", "The declared order of the external CSV's x,y ordinates."),
+        new("external-horizontal-unit", OptionKind.Value, false, LengthUnitTokens.Syntax, "The external CSV's declared horizontal linear unit."),
+        new("external-vertical-unit", OptionKind.Value, false, LengthUnitTokens.Syntax, "The external CSV's declared vertical unit."),
+        new("external-vertical-datum", OptionKind.Value, false, "<text>", "The external CSV's vertical datum. Omit only to score as-is; the result labels it undeclared and not aligned."),
+        Unit,
+    ];
+
     private static readonly IReadOnlyList<VerbSpec> AllVerbs =
     [
         new(Process, "OFFLINE. Process a local AAIGrid (.asc) raster into a terrain export bundle.", ProcessOptions),
@@ -299,6 +316,7 @@ internal static class OptionTable
             "ONLINE, unless --offline with --source local-file. Resolves a parcel boundary -- a cadastral/assessor representation, not a survey -- " +
             "from a point or a geocoded address, against a county registry or a local file; prints deterministic JSON.",
             ParcelOptions),
+        new(Score, "OFFLINE. Scores a SolidGround bundle or declared external x,y,z CSV against a full-resolution AAIGrid reference.", ScoreOptions),
     ];
 
     /// <summary>Every verb, in a fixed, deterministic display order.</summary>
