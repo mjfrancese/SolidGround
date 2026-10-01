@@ -340,9 +340,9 @@ internal static class DialogControlStyles
     {
         FrameworkElementFactory border = ControlBorder("TabBorder");
         FrameworkElementFactory content = new(typeof(ContentPresenter));
-        content.SetBinding(ContentPresenter.ContentProperty, TemplateBinding(ContentControl.ContentProperty));
-        content.SetBinding(ContentPresenter.ContentTemplateProperty, TemplateBinding(ContentControl.ContentTemplateProperty));
-        content.SetBinding(ContentPresenter.ContentTemplateSelectorProperty, TemplateBinding(ContentControl.ContentTemplateSelectorProperty));
+        content.SetBinding(ContentPresenter.ContentProperty, TemplateBinding(HeaderedContentControl.HeaderProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateProperty, TemplateBinding(HeaderedContentControl.HeaderTemplateProperty));
+        content.SetBinding(ContentPresenter.ContentTemplateSelectorProperty, TemplateBinding(HeaderedContentControl.HeaderTemplateSelectorProperty));
         content.SetBinding(ContentPresenter.HorizontalAlignmentProperty, TemplateBinding(Control.HorizontalContentAlignmentProperty));
         content.SetBinding(ContentPresenter.VerticalAlignmentProperty, TemplateBinding(Control.VerticalContentAlignmentProperty));
         content.SetBinding(ContentPresenter.MarginProperty, TemplateBinding(Control.PaddingProperty));

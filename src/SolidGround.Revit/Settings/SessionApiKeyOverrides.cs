@@ -18,6 +18,8 @@ internal static class SessionApiKeyOverrides
     private static long revision;
 
     internal static bool HasOpenTopography => openTopography is not null;
+    internal static bool HasGeocodio => geocodio is not null;
+    internal static bool HasEsri => esri is not null;
     /// <summary>Monotonic, non-secret identity used to invalidate lookup snapshots after a session-key edit.</summary>
     internal static long Revision => Interlocked.Read(ref revision);
     internal static void UseOpenTopography(string value) { openTopography = RequireValue(value); BumpRevision(); }

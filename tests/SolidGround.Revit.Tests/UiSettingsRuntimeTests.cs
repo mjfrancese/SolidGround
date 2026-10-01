@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using SolidGround.Core.Configuration;
+using SolidGround.Core.Processing;
 using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit.Tests;
@@ -8,6 +9,19 @@ namespace SolidGround.Revit.Tests;
 [Collection(SessionApiKeyOverrideTestGroup.Name)]
 public sealed class UiSettingsRuntimeTests
 {
+    [Fact]
+    public void NewSettingsCenterTheLegalParcelButLoadingRetainsAnExplicitPlacementChoice()
+    {
+        RevitSettings defaults = UiSettingsStore.CreateDefault();
+        Assert.Equal(LocalOriginKind.AreaCentroid, defaults.Request.LocalOrigin.Kind);
+        using SettingsSandbox sandbox = new();
+        LocalOriginRequest explicitOrigin = new(LocalOriginKind.Explicit, 123d, 456d, 789d);
+        RevitSettings chosen = defaults with { Request = defaults.Request with { LocalOrigin = explicitOrigin } };
+        _ = UiSettingsStore.Save(new UiSettingsDraft(chosen, SettingsFileVersion.Missing, sandbox.Path), chosen);
+        Assert.True(UiSettingsStore.TryLoad(sandbox.Path, out UiSettingsDraft? reloaded, out _));
+        Assert.Equal(explicitOrigin, reloaded!.Settings.Request.LocalOrigin);
+    }
+
     [Fact]
     public void TryLoadRejectsStrictMalformedInputsWithoutChangingTheOriginalBytes()
     {
@@ -83,9 +97,13 @@ public sealed class UiSettingsRuntimeTests
             Assert.Equal("[REDACTED]", SessionApiKeyOverrides.GeocodioProvider().GetApiKey()!.ToString());
             Assert.Equal("[REDACTED]", SessionApiKeyOverrides.EsriProvider().GetApiKey()!.ToString());
             Assert.True(SessionApiKeyOverrides.HasOpenTopography);
+            Assert.True(SessionApiKeyOverrides.HasGeocodio);
+            Assert.True(SessionApiKeyOverrides.HasEsri);
 
             SessionApiKeyOverrides.ClearAll();
             Assert.False(SessionApiKeyOverrides.HasOpenTopography);
+            Assert.False(SessionApiKeyOverrides.HasGeocodio);
+            Assert.False(SessionApiKeyOverrides.HasEsri);
         }
         finally
         {

@@ -95,7 +95,7 @@ internal static class UiSettingsStore
                 Kind = AreaOfInterestKind.BoundingBox,
                 BoundingBox = new BoundingBoxAoiSettings { West = -1d, South = -1d, East = 1d, North = 1d },
             },
-            LocalOrigin = new LocalOriginRequest(LocalOriginKind.Southwest, 0d, 0d, 0d),
+            LocalOrigin = new LocalOriginRequest(LocalOriginKind.AreaCentroid, 0d, 0d, 0d),
             OutputUnit = LengthUnit.UsSurveyFoot,
             Simplification = new SimplificationSettings { Method = SimplificationMethod.CurvatureAware, PointBudget = 15000, CoverageFloorFraction = 0.2d },
             Output = new OutputSettings { Directory = exports, BaseName = "terrain" },

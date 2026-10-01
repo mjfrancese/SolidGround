@@ -329,6 +329,36 @@ public sealed class TerrainProcessingPipelineTests
         }
     }
 
+    [Fact]
+    public async Task RunAsyncWithParcelAreaCentroidKeepsTheLegalFrameReversibleAcrossTerrainExtensions()
+    {
+        Fixture fixture = BuildSyntheticEdgeFixture();
+        PolygonalRegion legalParcel = Region(fixture.ProjectedReference,
+            (8d, 8d), (14d, 8d), (14d, 10d), (10d, 10d), (10d, 14d), (8d, 14d));
+        LocalOriginRequest origin = new(LocalOriginKind.AreaCentroid, 0d, 0d, 0d);
+
+        foreach (double margin in new[] { 0d, 1d })
+        {
+            TerrainProcessingOutcome outcome = await RunPipelineAsync(
+                fixture, null, origin, TestContext.Current.CancellationToken,
+                pointBudget: 8,
+                parcelExtentGeometry: new ParcelExtentGeometry(legalParcel, LinearDistance.Meters(margin)));
+            TerrainExtentPlan plan = Assert.IsType<TerrainExtentPlan>(outcome.TerrainExtentPlan);
+            LocalCoordinateFrame frame = outcome.Payload.Provenance.LocalFrame;
+
+            Assert.Equal(new Coordinate3D(10.2d, 10.2d, 0d), frame.Origin);
+            Assert.Equal(168d, plan.LegalPlaneZ);
+            LocalCoordinate2D firstLocalVertex = Assert.Single(plan.LegalLocalBoundary.Polygons).Shell.Vertices[0];
+            Assert.Equal(-2.2d, firstLocalVertex.X, 9);
+            Assert.Equal(-2.2d, firstLocalVertex.Y, 9);
+
+            Coordinate3D restored = frame.ToSource(new LocalCoordinate(-2.2d, -2.2d, plan.LegalPlaneZ));
+            Assert.Equal(8d, restored.X, 9);
+            Assert.Equal(8d, restored.Y, 9);
+            Assert.Equal(168d, restored.Elevation, 9);
+        }
+    }
+
     private static LocalOriginRequest LocalSouthwestOrigin() => new(LocalOriginKind.Southwest, 0, 0, 0);
 
     private static Task<TerrainProcessingOutcome> RunPipelineAsync(

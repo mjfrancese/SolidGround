@@ -16,7 +16,9 @@ namespace SolidGround.Revit.Dialog;
 /// <summary>A managed-vector confirmation preview; text remains the authoritative legal-boundary description.</summary>
 internal sealed class ParcelBoundaryPreview : Border
 {
-    private readonly Canvas _canvas = new() { Height = 176d, MinWidth = 260d };
+    private readonly Canvas _canvas = new() { Height = 176d, ClipToBounds = true };
+    private readonly TextBlock _legend;
+    private readonly TextBlock _details;
     private readonly DialogPalette _palette;
     private SolidGroundDialogViewModel? _viewModel;
     private ParcelProximityCandidate? _cachedCandidate;
@@ -29,7 +31,19 @@ internal sealed class ParcelBoundaryPreview : Border
         BorderBrush = palette.ActiveBorder;
         BorderThickness = new Thickness(1);
         Padding = new Thickness(8);
-        Child = _canvas;
+        _legend = LegendText();
+        _details = LegendText();
+        Grid content = new();
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(_canvas, 0);
+        Grid.SetRow(_legend, 1);
+        Grid.SetRow(_details, 2);
+        content.Children.Add(_canvas);
+        content.Children.Add(_legend);
+        content.Children.Add(_details);
+        Child = content;
         AutomationProperties.SetName(this, "Parcel boundary preview");
         DataContextChanged += OnDataContextChanged;
         SizeChanged += (_, _) => Render();
@@ -51,10 +65,12 @@ internal sealed class ParcelBoundaryPreview : Border
     private void Render()
     {
         _canvas.Children.Clear();
+        _legend.Text = string.Empty;
+        _details.Text = string.Empty;
         ParcelProximityCandidate? selected = _viewModel?.SelectedParcelCandidate;
         if (selected is null)
         {
-            AddText("Select a parcel to preview its legal outline.", 4d, 4d);
+            AddPlotMessage("Select a parcel to preview its legal outline.");
             AutomationProperties.SetHelpText(this, "No parcel is selected.");
             return;
         }
@@ -63,7 +79,7 @@ internal sealed class ParcelBoundaryPreview : Border
         ParcelTerrainPreview? preview = GetPreview(selected, extensionMeters);
         if (preview is null)
         {
-            AddText("The terrain-extension preview is unavailable for this boundary.", 4d, 4d);
+            AddPlotMessage("The terrain-extension preview is unavailable for this boundary.");
             AutomationProperties.SetHelpText(this, "The selected legal boundary remains available, but its display-only terrain extension could not be drawn.");
             return;
         }
@@ -74,7 +90,11 @@ internal sealed class ParcelBoundaryPreview : Border
         double width = Math.Max(1d, _canvas.ActualWidth == 0d ? 260d : _canvas.ActualWidth);
         double height = Math.Max(1d, _canvas.ActualHeight == 0d ? 176d : _canvas.ActualHeight);
         const double inset = 18d;
-        double scale = Math.Min((width - 2d * inset) / Math.Max(envelope.MaxX - envelope.MinX, double.Epsilon), (height - 2d * inset) / Math.Max(envelope.MaxY - envelope.MinY, double.Epsilon));
+        double envelopeWidth = Math.Max(envelope.MaxX - envelope.MinX, double.Epsilon);
+        double envelopeHeight = Math.Max(envelope.MaxY - envelope.MinY, double.Epsilon);
+        double scale = Math.Min(Math.Max(1d, width - 2d * inset) / envelopeWidth, Math.Max(1d, height - 2d * inset) / envelopeHeight);
+        double offsetX = (width - (envelopeWidth * scale)) / 2d;
+        double offsetY = (height - (envelopeHeight * scale)) / 2d;
 
         if (extensionMeters > 0d)
         {
@@ -100,9 +120,8 @@ internal sealed class ParcelBoundaryPreview : Border
 
         string counts = $"Legal: {preview.LegalPolygonCount.ToString(CultureInfo.InvariantCulture)} parts, {preview.LegalHoleCount.ToString(CultureInfo.InvariantCulture)} holes; terrain: {preview.TerrainPolygonCount.ToString(CultureInfo.InvariantCulture)} parts, {preview.TerrainHoleCount.ToString(CultureInfo.InvariantCulture)} holes" + (preview.TopologyChangeCount > 0 ? $"; {preview.TopologyChangeCount.ToString(CultureInfo.InvariantCulture)} topology count changes" : string.Empty);
         AutomationProperties.SetHelpText(this, "Solid outline is the legal parcel; dot is the selected location. " + counts + (extensionMeters > 0d ? "; dashed outline is an approximate terrain extension. The exact edge follows the raster CRS after download." : "."));
-        AddText("Solid: legal parcel  •  Dot: location" + (extensionMeters > 0d ? "  •  Dashed: approximate terrain extension" : string.Empty), 4d, height - 32d);
-        AddText(counts, 4d, height - 18d);
-        AddText("N ↑", width - 30d, 2d);
+        _legend.Text = "Solid: legal parcel; dot: location" + (extensionMeters > 0d ? "; dashed: approximate terrain extension" : string.Empty) + "; north N ↑";
+        _details.Text = counts;
 
         void AddRing(IReadOnlyList<Coordinate2D> ring, Brush brush, bool dashed)
         {
@@ -110,14 +129,31 @@ internal sealed class ParcelBoundaryPreview : Border
             foreach (Coordinate2D point in ring) outline.Points.Add(new Point(X(point.X), Y(point.Y)));
             _canvas.Children.Add(outline);
         }
-        double X(double longitude) => inset + ((longitude - envelope.MinX) * scale);
-        double Y(double latitude) => height - inset - ((latitude - envelope.MinY) * scale);
+        double X(double coordinate) => offsetX + ((coordinate - envelope.MinX) * scale);
+        double Y(double coordinate) => offsetY + ((envelope.MaxY - coordinate) * scale);
     }
 
-    private void AddText(string value, double left, double top)
+    private TextBlock LegendText() => new()
     {
-        TextBlock text = new() { Text = value, TextWrapping = TextWrapping.Wrap, FontSize = 11d, Foreground = _palette.ControlText };
-        Canvas.SetLeft(text, left); Canvas.SetTop(text, top); _canvas.Children.Add(text);
+        TextWrapping = TextWrapping.Wrap,
+        FontSize = 11d,
+        Foreground = _palette.ControlText,
+        Margin = new Thickness(0, 4, 0, 0),
+    };
+
+    private void AddPlotMessage(string value)
+    {
+        TextBlock text = new()
+        {
+            Text = value,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11d,
+            Foreground = _palette.ControlText,
+            Width = Math.Max(0d, _canvas.ActualWidth - 8d),
+        };
+        Canvas.SetLeft(text, 4d);
+        Canvas.SetTop(text, 4d);
+        _canvas.Children.Add(text);
     }
 
     private ParcelTerrainPreview? GetPreview(ParcelProximityCandidate selected, double extensionMeters)

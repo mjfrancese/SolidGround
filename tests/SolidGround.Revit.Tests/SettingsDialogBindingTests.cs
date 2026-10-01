@@ -29,12 +29,16 @@ public sealed class SettingsDialogBindingTests
 
             SettingsDialog conflictDialog = CreateCountyDialog(draft, initial);
             StageCountyRegistration(conflictDialog);
+            Assert.Equal(Visibility.Collapsed, conflictDialog.AutomationElements["reloadSavedSettings"].Visibility);
+            Assert.Equal(Visibility.Collapsed, conflictDialog.AutomationElements["reapplyDraft"].Visibility);
             RevitSettings external = WithPointBudget(initial, 23_456);
             _ = UiSettingsStore.Save(draft, external);
             string externalBytes = File.ReadAllText(sandbox.Path);
             FindButton(conflictDialog, "Save settings").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal(externalBytes, File.ReadAllText(sandbox.Path));
             Assert.Empty(OwnedCountySnapshots(sandbox));
+            Assert.Equal(Visibility.Visible, conflictDialog.AutomationElements["reloadSavedSettings"].Visibility);
+            Assert.Equal(Visibility.Visible, conflictDialog.AutomationElements["reapplyDraft"].Visibility);
         });
     }
 

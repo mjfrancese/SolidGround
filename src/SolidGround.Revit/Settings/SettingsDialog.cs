@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Interop;
 using Microsoft.Win32;
 using SolidGround.Core.Configuration;
@@ -76,8 +77,18 @@ internal sealed class SettingsDialog : Window
     private readonly PasswordBox geocodioKey;
     private readonly PasswordBox esriKey;
     private readonly TextBlock sessionKeyStatus;
+    private readonly TextBlock geocoderKeyStatus;
     private readonly TextBlock error;
+    private readonly TabControl pages;
     private readonly Button saveCountyRegistration;
+    private readonly Button reloadSavedSettings;
+    private readonly Button reapplyDraft;
+    private readonly Expander localParcelDisclosure;
+    private readonly Expander explicitOriginDisclosure;
+    private readonly StackPanel keyedGeocoderKeySection;
+    private readonly StackPanel geocodioKeySection;
+    private readonly StackPanel esriKeySection;
+    private readonly Expander localRasterDisclosure;
     private readonly Func<SettingsRecoveryAction, bool>? confirmRecovery;
     private DistanceDisplayFormat extensionFormat;
     private double canonicalExtensionMeters;
@@ -106,6 +117,8 @@ internal sealed class SettingsDialog : Window
         Title = "SolidGround settings";
         Width = 720;
         Height = 580;
+        MinWidth = 600;
+        MinHeight = 480;
         WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner;
         ClampSettingsWorkArea();
 
@@ -120,22 +133,34 @@ internal sealed class SettingsDialog : Window
         shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         shell.Children.Add(new TextBlock { Text = "Preferences and source setup", FontSize = 20, Margin = new Thickness(0, 0, 0, 12) });
 
-        TabControl pages = new();
+        pages = new TabControl();
         Grid.SetRow(pages, 1);
         pointBudget = Text(current.Request.Simplification.PointBudget.ToString(CultureInfo.InvariantCulture));
         extensionFormat = current.DistanceDisplayFormat;
         canonicalExtensionMeters = current.TerrainExtensionMeters;
         extension = Text(DistanceDisplayConverter.FormatMeters(canonicalExtensionMeters, extensionFormat));
         extension.TextChanged += (_, _) => { if (!updatingExtensionText) extensionEdited = true; };
-        outputUnit = Choice([LengthUnit.UsSurveyFoot, LengthUnit.InternationalFoot, LengthUnit.Meter], current.Request.OutputUnit);
-        displayFormat = Choice(Enum.GetValues<DistanceDisplayFormat>(), current.DistanceDisplayFormat);
+        outputUnit = FriendlyChoice([LengthUnit.UsSurveyFoot, LengthUnit.InternationalFoot, LengthUnit.Meter], current.Request.OutputUnit);
+        displayFormat = FriendlyChoice(Enum.GetValues<DistanceDisplayFormat>(), current.DistanceDisplayFormat);
         displayFormat.SelectionChanged += (_, _) => ChangeExtensionFormat();
+        originKind = OriginChoice(current.Request.LocalOrigin.Kind);
+        originX = Text(current.Request.LocalOrigin.X.ToString("R", CultureInfo.InvariantCulture));
+        originY = Text(current.Request.LocalOrigin.Y.ToString("R", CultureInfo.InvariantCulture));
+        originZ = Text(current.Request.LocalOrigin.Z.ToString("R", CultureInfo.InvariantCulture));
         pages.Items.Add(Page("Terrain", Panel(
+            SectionHeading("Terrain extent"),
+            new TextBlock { Text = "Optional. The default is 0, which keeps terrain at the parcel extent.", TextWrapping = TextWrapping.Wrap },
+            Label("Terrain beyond property line (optional; selected display units)"), extension,
+            new TextBlock { Text = "This expands terrain only. The legal parcel boundary remains unchanged.", TextWrapping = TextWrapping.Wrap },
+            new Separator { Margin = new Thickness(0, 12, 0, 8) },
+            SectionHeading("Terrain output"),
             Label("Output unit"), outputUnit, Label("Distance display"), displayFormat,
-            Label("Maximum terrain points"), pointBudget, Label("Terrain beyond property line (selected display units)"), extension,
-            new TextBlock { Text = "The extension affects terrain only; the legal parcel boundary remains unchanged.", TextWrapping = TextWrapping.Wrap })));
+            Label("Model position"), originKind,
+            new TextBlock { Text = "Centered on the parcel or terrain is recommended. A legal parcel uses its area centroid; other areas use the center of the clipped terrain grid.", TextWrapping = TextWrapping.Wrap },
+            Label("Maximum terrain points"), pointBudget,
+            new TextBlock { Text = "Default: 15,000. Set a positive whole-number budget within the machine limit shown before creation.", TextWrapping = TextWrapping.Wrap })));
 
-        acquisitionMode = Choice([TerrainAcquisitionMode.Fetch, TerrainAcquisitionMode.Process], current.Request.Mode);
+        acquisitionMode = FriendlyChoice([TerrainAcquisitionMode.Fetch, TerrainAcquisitionMode.Process], current.Request.Mode);
         ascPath = Text(current.Request.Process?.Asc ?? string.Empty);
         prjPath = Text(current.Request.Process?.Prj ?? string.Empty);
         sidecarPath = Text(current.Request.Process?.SourceJson ?? string.Empty);
@@ -168,36 +193,65 @@ internal sealed class SettingsDialog : Window
         fetchCountyMetadata.Click += async (_, _) => await FetchCountyMetadataAsync();
         saveCountyRegistration = new Button { Content = "Use this county source", Margin = new Thickness(0, 4, 6, 4), IsEnabled = false };
         saveCountyRegistration.Click += (_, _) => SaveCountyRegistration();
-        geocoderProvider = Choice(Enum.GetValues<AddressGeocoderProvider>(), current.AddressAndParcel.GeocoderProvider);
+        geocoderProvider = FriendlyChoice(Enum.GetValues<AddressGeocoderProvider>(), current.AddressAndParcel.GeocoderProvider);
         openTopographyKey = new PasswordBox { MinWidth = 360 };
         geocodioKey = new PasswordBox { MinWidth = 360 };
         esriKey = new PasswordBox { MinWidth = 360 };
-        sessionKeyStatus = new TextBlock { Text = SessionApiKeyOverrides.HasOpenTopography ? "A session key is active until Revit exits or you clear it." : "No session key is active; an environment key may still be available.", TextWrapping = TextWrapping.Wrap };
+        sessionKeyStatus = new TextBlock { Text = OpenTopographyKeyStatus(), TextWrapping = TextWrapping.Wrap };
         Button useKey = new() { Content = "Use key for this Revit session", Margin = new Thickness(0, 4, 6, 4) };
         useKey.Click += (_, _) => UseSessionKey();
         Button clearKey = new() { Content = "Clear session key", Margin = new Thickness(0, 4, 6, 4) };
-        clearKey.Click += (_, _) => { SessionApiKeyOverrides.ClearOpenTopography(); openTopographyKey.Password = string.Empty; sessionKeyStatus.Text = "No session key is active; an environment key may still be available."; };
+        clearKey.Click += (_, _) => { SessionApiKeyOverrides.ClearOpenTopography(); openTopographyKey.Password = string.Empty; sessionKeyStatus.Text = OpenTopographyKeyStatus(); };
+        geocoderKeyStatus = new TextBlock { Text = GeocoderKeyStatus(), TextWrapping = TextWrapping.Wrap };
+        geocodioKeySection = Panel(
+            Label("Geocodio session key (required only when Geocodio is selected)"), geocodioKey, KeyButtons(geocodioKey, SessionApiKeyOverrides.UseGeocodio, SessionApiKeyOverrides.ClearGeocodio));
+        esriKeySection = Panel(
+            Label("Esri session key (required only when Esri is selected)"), esriKey, KeyButtons(esriKey, SessionApiKeyOverrides.UseEsri, SessionApiKeyOverrides.ClearEsri));
+        keyedGeocoderKeySection = Panel(geocodioKeySection, esriKeySection);
+        geocoderProvider.SelectionChanged += (_, _) => UpdateGeocoderKeyVisibility();
+        UpdateGeocoderKeyVisibility();
+        localRasterDisclosure = Disclosure(
+            "Use a local elevation raster (required only for Local raster mode)",
+            "Live USGS 1 m is the default. Select Local raster only when you already have authorized local data.",
+            Panel(Label("Local raster (.asc; required in Local raster mode)"), FileField(ascPath, "AAIGrid (*.asc)|*.asc|All files|*.*"),
+                Label("Projection sidecar (.prj; optional when the raster carries its reference)"), FileField(prjPath, "Projection (*.prj)|*.prj|All files|*.*"),
+                Label("Source metadata sidecar (.source.json; optional)"), FileField(sidecarPath, "Source metadata (*.json)|*.json|All files|*.*")),
+            current.Request.Mode == TerrainAcquisitionMode.Process);
+        acquisitionMode.SelectionChanged += (_, _) =>
+        {
+            if ((TerrainAcquisitionMode)acquisitionMode.SelectedItem == TerrainAcquisitionMode.Process) localRasterDisclosure.IsExpanded = true;
+        };
+        localParcelDisclosure = Disclosure(
+            "Add a local parcel file (optional)",
+            "When a file is selected, its source label and license or disclaimer are required and shown to the operator.",
+            Panel(Label("Local parcel file (GeoJSON or WKT)"), FileField(localParcelPath, "Parcel data (*.geojson;*.json;*.wkt)|*.geojson;*.json;*.wkt|All files|*.*"),
+                Label("Local source label (required with a local parcel file)"), localParcelLabel,
+                Label("Local license or disclaimer (required with a local parcel file)"), localParcelLicense),
+            !string.IsNullOrWhiteSpace(current.AddressAndParcel.LocalParcelFilePath));
+        Expander countyService = Disclosure(
+            "Register an authorized county parcel service (optional)",
+            "Fetch the county's advertised metadata, choose its parcel layer and fields, then save a local registration. No county configuration requires JSON editing.",
+            Panel(Label("County registry file (optional)"), FileField(countyRegistryPath, "County registry (*.json)|*.json|All files|*.*"),
+                Label("County source identity"), countyName, Label("County GEOID (five digits)"), countyGeoid,
+                Label("ArcGIS FeatureServer or MapServer URL"), countyServiceUrl, fetchCountyMetadata, countyMetadataStatus,
+                Label("Parcel layer"), countyLayer, Label("Parcel ID field"), countyParcelIdField,
+                Label("Situs address field"), countySitusAddressField, Label("Legal-description field (optional)"), countyLegalDescriptionField,
+                Label("County attribution (shown with parcel results)"), countyAttribution,
+                Label("County license/disclaimer (shown verbatim with parcel results)"), countyLicense,
+                countyAuthorization, saveCountyRegistration),
+            !string.IsNullOrWhiteSpace(current.AddressAndParcel.CountyRegistryPath));
         pages.Items.Add(Page("Sources", Panel(
-            Label("Elevation mode"), acquisitionMode, Label("Local raster (.asc)"), FileField(ascPath, "AAIGrid (*.asc)|*.asc|All files|*.*"),
-            Label("Projection sidecar (.prj)"), FileField(prjPath, "Projection (*.prj)|*.prj|All files|*.*"), Label("Source metadata sidecar (.source.json)"), FileField(sidecarPath, "Source metadata (*.json)|*.json|All files|*.*"),
-            Label("Local parcel file (GeoJSON or WKT)"), FileField(localParcelPath, "Parcel data (*.geojson;*.json;*.wkt)|*.geojson;*.json;*.wkt|All files|*.*"), Label("Local source label"), localParcelLabel,
-            Label("Local license or disclaimer"), localParcelLicense,
-            Label("County registry file"), FileField(countyRegistryPath, "County registry (*.json)|*.json|All files|*.*"),
+            SectionHeading("Elevation source"), Label("Elevation mode"), acquisitionMode,
+            new TextBlock { Text = "Default: live USGS 1 m. Local raster is an intentional offline alternative.", TextWrapping = TextWrapping.Wrap },
+            localRasterDisclosure,
             new Separator { Margin = new Thickness(0, 12, 0, 8) },
-            new TextBlock { Text = "County ArcGIS parcel service", FontWeight = FontWeights.SemiBold },
-            new TextBlock { Text = "Fetch the county's advertised metadata, choose the parcel layer and fields, then save a local registration. No county configuration requires JSON editing.", TextWrapping = TextWrapping.Wrap },
-            Label("County source identity"), countyName, Label("County GEOID (five digits)"), countyGeoid,
-            Label("ArcGIS FeatureServer or MapServer URL"), countyServiceUrl, fetchCountyMetadata, countyMetadataStatus,
-            Label("Parcel layer"), countyLayer, Label("Parcel ID field"), countyParcelIdField,
-            Label("Situs address field"), countySitusAddressField, Label("Legal-description field"), countyLegalDescriptionField,
-            Label("County attribution (shown with parcel results)"), countyAttribution,
-            Label("County license/disclaimer (shown verbatim with parcel results)"), countyLicense,
-            countyAuthorization, saveCountyRegistration,
-            Label("OpenTopography session key"), openTopographyKey, sessionKeyStatus, Horizontal(useKey, clearKey),
-            Label("Geocoder provider"), geocoderProvider,
-            Label("Geocodio session key"), geocodioKey, KeyButtons(geocodioKey, SessionApiKeyOverrides.UseGeocodio, SessionApiKeyOverrides.ClearGeocodio),
-            Label("Esri session key"), esriKey, KeyButtons(esriKey, SessionApiKeyOverrides.UseEsri, SessionApiKeyOverrides.ClearEsri),
-            new TextBlock { Text = "Keys are available only until this Revit session ends and are never written to settings, logs, exports, or provenance.", TextWrapping = TextWrapping.Wrap })));
+            SectionHeading("Parcel source"), localParcelDisclosure, countyService,
+            new Separator { Margin = new Thickness(0, 12, 0, 8) },
+            SectionHeading("Session-only access keys"),
+            new TextBlock { Text = "Optional. Keys are available only until this Revit session ends and are never written to settings, logs, exports, or provenance.", TextWrapping = TextWrapping.Wrap },
+            Label("OpenTopography session key (enter only when no environment key is available)"), openTopographyKey, sessionKeyStatus, Horizontal(useKey, clearKey),
+            Label("Geocoder provider"), geocoderProvider, geocoderKeyStatus,
+            keyedGeocoderKeySection)));
 
         exportDirectory = Text(current.Request.Output.Directory);
         exportBaseName = Text(current.Request.Output.BaseName);
@@ -205,14 +259,15 @@ internal sealed class SettingsDialog : Window
         timeout = Text(current.Request.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
         nearbyRadius = Text(current.AddressAndParcel.NearbySearchRadiusMeters?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty);
         coverageFloor = Text(current.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture));
-        simplificationMethod = Choice(new[] { SimplificationMethod.CurvatureAware, SimplificationMethod.UniformSampler }, current.Request.Simplification.Method);
-        originKind = Choice(Enum.GetValues<LocalOriginKind>(), current.Request.LocalOrigin.Kind);
-        originX = Text(current.Request.LocalOrigin.X.ToString("R", CultureInfo.InvariantCulture));
-        originY = Text(current.Request.LocalOrigin.Y.ToString("R", CultureInfo.InvariantCulture));
-        originZ = Text(current.Request.LocalOrigin.Z.ToString("R", CultureInfo.InvariantCulture));
+        simplificationMethod = FriendlyChoice(new[] { SimplificationMethod.CurvatureAware, SimplificationMethod.UniformSampler }, current.Request.Simplification.Method);
+        explicitOriginDisclosure = Disclosure(
+            "Set raw X/Y/Z model-position coordinates (only for Explicit)",
+            "These source-unit coordinates apply only when Model position is Explicit raw X/Y/Z. They are stored at full precision.",
+            Panel(Label("Explicit origin X (source horizontal units)"), originX, Label("Explicit origin Y (source horizontal units)"), originY, Label("Explicit origin Z (source elevation units)"), originZ),
+            current.Request.LocalOrigin.Kind == LocalOriginKind.Explicit);
+        originKind.SelectionChanged += (_, _) => UpdateExplicitOriginDisclosure();
         pages.Items.Add(Page("Advanced", Panel(Label("Simplification method"), simplificationMethod, Label("Network timeout (seconds)"), timeout, Label("Nearby parcel search distance (metres; blank uses default)"), nearbyRadius, Label("Sampler coverage fraction (0 through 1)"), coverageFloor,
-            new Separator { Margin = new Thickness(0, 12, 0, 8) }, new TextBlock { Text = "Local origin", FontWeight = FontWeights.SemiBold }, Label("Origin kind"), originKind, Label("Explicit origin X (source horizontal units)"), originX, Label("Explicit origin Y (source horizontal units)"), originY, Label("Explicit origin Z (source elevation units)"), originZ,
-            new TextBlock { Text = "Explicit coordinates are used only when Origin kind is Explicit; they are stored at full precision in source units.", TextWrapping = TextWrapping.Wrap },
+            new Separator { Margin = new Thickness(0, 12, 0, 8) }, SectionHeading("Explicit model position"), explicitOriginDisclosure,
             new Separator { Margin = new Thickness(0, 12, 0, 8) }, new TextBlock { Text = "Local process source metadata", FontWeight = FontWeights.SemiBold }, new TextBlock { Text = "Used for a local .asc input when a source sidecar does not provide these details.", TextWrapping = TextWrapping.Wrap },
             Label("Source name"), processSourceName, Label("Dataset"), processDataset, Label("Vertical datum"), processVerticalDatum, Label("Vertical unit"), processVerticalUnit, Label("Geoid model"), processGeoid, Label("Collection start (yyyy-MM-dd)"), processCollectionStart, Label("Collection end (yyyy-MM-dd)"), processCollectionEnd, Label("Quality level"), processQualityLevel)));
         Register("pointBudget", pointBudget); Register("terrainExtension", extension); Register("outputUnit", outputUnit); Register("distanceDisplayFormat", displayFormat);
@@ -235,9 +290,9 @@ internal sealed class SettingsDialog : Window
         WrapPanel footer = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         Button restoreDefaults = new() { Content = "Restore defaults", MinWidth = 108, Margin = new Thickness(6) };
         restoreDefaults.Click += (_, _) => RestoreDefaults();
-        Button reloadSavedSettings = new() { Content = "Reload saved", MinWidth = 104, Margin = new Thickness(6) };
+        reloadSavedSettings = new Button { Content = "Reload saved", MinWidth = 104, Margin = new Thickness(6), Visibility = Visibility.Collapsed };
         reloadSavedSettings.Click += (_, _) => ReloadSavedSettings();
-        Button reapplyDraft = new() { Content = "Reapply draft", MinWidth = 104, Margin = new Thickness(6) };
+        reapplyDraft = new Button { Content = "Reapply draft", MinWidth = 104, Margin = new Thickness(6), Visibility = Visibility.Collapsed };
         reapplyDraft.Click += (_, _) => ReapplyDraft();
         Button startNewSettings = new() { Content = "Start new settings", MinWidth = 132, Margin = new Thickness(6), Visibility = savingBlockedUntilStartNew ? Visibility.Visible : Visibility.Collapsed };
         startNewSettings.Click += (_, _) => StartNewSettings();
@@ -305,6 +360,15 @@ internal sealed class SettingsDialog : Window
             error.Text = "Terrain extension must be a finite nonnegative value in the selected display format."; extension.Focus(); return false;
         }
         TerrainAcquisitionMode mode = (TerrainAcquisitionMode)acquisitionMode.SelectedItem;
+        if (mode == TerrainAcquisitionMode.Process && string.IsNullOrWhiteSpace(ascPath.Text))
+        {
+            pages.SelectedIndex = 1;
+            localRasterDisclosure.IsExpanded = true;
+            pages.UpdateLayout();
+            error.Text = "A local raster (.asc) is required in Local raster mode.";
+            ascPath.Focus();
+            return false;
+        }
         if (!int.TryParse(timeout.Text, NumberStyles.None, CultureInfo.InvariantCulture, out int timeoutSeconds) || timeoutSeconds <= 0)
         {
             error.Text = "Network timeout must be a positive whole number of seconds."; timeout.Focus(); return false;
@@ -338,6 +402,9 @@ internal sealed class SettingsDialog : Window
         string? configuredLocalParcelLicense = BlankAsNull(localParcelLicense.Text);
         if (configuredLocalParcelPath is not null && configuredLocalParcelLabel is null)
         {
+            pages.SelectedIndex = 1;
+            localParcelDisclosure.IsExpanded = true;
+            pages.UpdateLayout();
             error.Text = "Local source label is required when a local parcel file is selected.";
             localParcelLabel.Focus();
             return false;
@@ -345,6 +412,9 @@ internal sealed class SettingsDialog : Window
 
         if (configuredLocalParcelPath is not null && configuredLocalParcelLicense is null)
         {
+            pages.SelectedIndex = 1;
+            localParcelDisclosure.IsExpanded = true;
+            pages.UpdateLayout();
             error.Text = "Local license or disclaimer is required when a local parcel file is selected.";
             localParcelLicense.Focus();
             return false;
@@ -404,6 +474,7 @@ internal sealed class SettingsDialog : Window
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
         {
             if (stagedRegistryWritten) DiscardStagedCountyRegistryFile();
+            if (ex is SettingsFileConflictException) ShowConflictRecoveryActions();
             error.Text = ex is SettingsFileConflictException
                 ? ex.Message + " Use Reload saved to discard this draft, or Reapply draft to save these controls over the latest file."
                 : ex.Message;
@@ -451,6 +522,7 @@ internal sealed class SettingsDialog : Window
         DiscardStagedCountyRegistry();
         current = RevitSettingsIo.RebaseInputPaths(draft.Settings, draft.Path);
         savingBlockedUntilStartNew = false;
+        HideConflictRecoveryActions();
         ApplySettings(current);
         error.Text = "Saved settings reloaded. Unsaved changes in this dialog were discarded.";
     }
@@ -496,6 +568,14 @@ internal sealed class SettingsDialog : Window
 
     private static TabItem Page(string header, UIElement content) => new() { Header = header, Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } };
     private static StackPanel Panel(params UIElement[] children) { StackPanel panel = new() { Margin = new Thickness(12) }; foreach (UIElement child in children) panel.Children.Add(child); return panel; }
+    private static TextBlock SectionHeading(string text) => new() { Text = text, FontWeight = FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 4, 0, 4) };
+    private static Expander Disclosure(string heading, string guidance, UIElement content, bool isExpanded) => new()
+    {
+        Header = new TextBlock { Text = heading, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, MaxWidth = 520 },
+        Content = Panel(new TextBlock { Text = guidance, TextWrapping = TextWrapping.Wrap }, content),
+        IsExpanded = isExpanded,
+        Margin = new Thickness(0, 6, 0, 2),
+    };
     private static TextBlock Label(string text) => new() { Text = text, Margin = new Thickness(0, 8, 0, 2) };
     private static TextBox Text(string text, bool multiline = false)
     {
@@ -506,6 +586,22 @@ internal sealed class SettingsDialog : Window
         return box;
     }
     private static ComboBox Choice<T>(IEnumerable<T> values, T selected) { ComboBox box = new() { ItemsSource = values.ToArray(), SelectedItem = selected, MinWidth = 240 }; return box; }
+    private static ComboBox FriendlyChoice<T>(IEnumerable<T> values, T selected)
+    {
+        ComboBox box = Choice(values, selected);
+        FrameworkElementFactory text = new(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new Binding { Converter = new SettingsEnumDisplayConverter() });
+        box.ItemTemplate = new DataTemplate { VisualTree = text };
+        return box;
+    }
+    private static ComboBox OriginChoice(LocalOriginKind selected)
+    {
+        ComboBox box = Choice(Enum.GetValues<LocalOriginKind>(), selected);
+        FrameworkElementFactory text = new(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new Binding { Converter = new LocalOriginKindDisplayConverter() });
+        box.ItemTemplate = new DataTemplate { VisualTree = text };
+        return box;
+    }
     private static StackPanel Horizontal(params UIElement[] children) { StackPanel panel = new() { Orientation = Orientation.Horizontal }; foreach (UIElement child in children) panel.Children.Add(child); return panel; }
     private static StackPanel FileField(TextBox box, string filter)
     {
@@ -519,15 +615,65 @@ internal sealed class SettingsDialog : Window
         browse.Click += (_, _) => { OpenFolderDialog dialog = new(); if (dialog.ShowDialog() == true) box.Text = dialog.FolderName; };
         return Horizontal(box, browse);
     }
-    private static StackPanel KeyButtons(PasswordBox key, Action<string> use, Action clear)
+    private StackPanel KeyButtons(PasswordBox key, Action<string> use, Action clear)
     {
         Button useButton = new() { Content = "Use for this Revit session", Margin = new Thickness(0, 4, 6, 4) };
-        useButton.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(key.Password)) { use(key.Password); key.Password = string.Empty; } };
+        useButton.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(key.Password)) { use(key.Password); key.Password = string.Empty; UpdateGeocoderKeyVisibility(); } };
         Button clearButton = new() { Content = "Clear session key", Margin = new Thickness(0, 4, 6, 4) };
-        clearButton.Click += (_, _) => { clear(); key.Password = string.Empty; };
+        clearButton.Click += (_, _) => { clear(); key.Password = string.Empty; UpdateGeocoderKeyVisibility(); };
         return Horizontal(useButton, clearButton);
     }
     private static string? BlankAsNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private void ShowConflictRecoveryActions()
+    {
+        reloadSavedSettings.Visibility = Visibility.Visible;
+        reapplyDraft.Visibility = Visibility.Visible;
+    }
+
+    private void HideConflictRecoveryActions()
+    {
+        reloadSavedSettings.Visibility = Visibility.Collapsed;
+        reapplyDraft.Visibility = Visibility.Collapsed;
+    }
+
+    private void UpdateExplicitOriginDisclosure()
+    {
+        if (originKind.SelectedItem is LocalOriginKind kind) explicitOriginDisclosure.IsExpanded = kind == LocalOriginKind.Explicit;
+    }
+
+    private void UpdateGeocoderKeyVisibility()
+    {
+        AddressGeocoderProvider provider = (AddressGeocoderProvider)geocoderProvider.SelectedItem;
+        keyedGeocoderKeySection.Visibility = provider == AddressGeocoderProvider.Census ? Visibility.Collapsed : Visibility.Visible;
+        geocodioKeySection.Visibility = provider == AddressGeocoderProvider.Geocodio ? Visibility.Visible : Visibility.Collapsed;
+        esriKeySection.Visibility = provider == AddressGeocoderProvider.Esri ? Visibility.Visible : Visibility.Collapsed;
+        geocoderKeyStatus.Text = GeocoderKeyStatus();
+    }
+
+    private static string OpenTopographyKeyStatus()
+    {
+        if (SessionApiKeyOverrides.HasOpenTopography) return "A session key is active until Revit exits or you clear it.";
+        return string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENTOPOGRAPHY_API_KEY"))
+            ? "No environment key is available to this Revit process. Enter a session key to use live USGS 1 m."
+            : "An environment key is available to this Revit process.";
+    }
+
+    private string GeocoderKeyStatus() => geocoderProvider.SelectedItem is AddressGeocoderProvider provider
+        ? provider switch
+        {
+            AddressGeocoderProvider.Census => "Census is keyless; no geocoder key is needed.",
+            AddressGeocoderProvider.Geocodio => ProviderKeyStatus("Geocodio", SessionApiKeyOverrides.HasGeocodio, "GEOCODIO_API_KEY"),
+            AddressGeocoderProvider.Esri => ProviderKeyStatus("Esri", SessionApiKeyOverrides.HasEsri, "ARCGIS_API_KEY"),
+            _ => string.Empty,
+        }
+        : string.Empty;
+
+    private static string ProviderKeyStatus(string provider, bool hasSessionKey, string environmentVariable) => hasSessionKey
+        ? $"A {provider} session key is active until Revit exits or you clear it. Access is not verified."
+        : string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(environmentVariable))
+            ? $"No {provider} key is available to this Revit process. Enter a session key to use {provider}."
+            : $"A {provider} environment key is available to this Revit process. Access is not verified.";
 
     private bool ConfirmRecovery(SettingsRecoveryAction action)
     {
@@ -569,6 +715,7 @@ internal sealed class SettingsDialog : Window
         countyAuthorization.IsChecked = settings.AddressAndParcel.CountyServiceAuthorizedUseAcknowledged;
         countyGeoid.Text = settings.AddressAndParcel.CountyGeoidOverride ?? string.Empty;
         geocoderProvider.SelectedItem = settings.AddressAndParcel.GeocoderProvider;
+        UpdateGeocoderKeyVisibility();
         exportDirectory.Text = settings.Request.Output.Directory;
         exportBaseName.Text = settings.Request.Output.BaseName;
         timeout.Text = settings.Request.NetworkTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
@@ -576,6 +723,7 @@ internal sealed class SettingsDialog : Window
         coverageFloor.Text = settings.Request.Simplification.CoverageFloorFraction.ToString("R", CultureInfo.InvariantCulture);
         simplificationMethod.SelectedItem = settings.Request.Simplification.Method;
         originKind.SelectedItem = settings.Request.LocalOrigin.Kind;
+        UpdateExplicitOriginDisclosure();
         originX.Text = settings.Request.LocalOrigin.X.ToString("R", CultureInfo.InvariantCulture);
         originY.Text = settings.Request.LocalOrigin.Y.ToString("R", CultureInfo.InvariantCulture);
         originZ.Text = settings.Request.LocalOrigin.Z.ToString("R", CultureInfo.InvariantCulture);
@@ -592,10 +740,12 @@ internal sealed class SettingsDialog : Window
     private void ClampSettingsWorkArea()
     {
         Rect workArea = SystemParameters.WorkArea;
-        MaxWidth = workArea.Width;
-        MaxHeight = workArea.Height;
-        Width = Math.Min(Width, MaxWidth);
-        Height = Math.Min(Height, MaxHeight);
+        MaxWidth = Math.Max(1d, workArea.Width - 16d);
+        MaxHeight = Math.Max(1d, workArea.Height - 16d);
+        MinWidth = Math.Min(MinWidth, MaxWidth);
+        MinHeight = Math.Min(MinHeight, MaxHeight);
+        Width = Math.Clamp(Width, MinWidth, MaxWidth);
+        Height = Math.Clamp(Height, MinHeight, MaxHeight);
     }
 
     private void UseSessionKey()
@@ -894,7 +1044,7 @@ internal sealed class SettingsDialog : Window
         "nearbyRadius" => "Nearby parcel search distance in metres",
         "coverageFloor" => "Sampler coverage fraction",
         "simplificationMethod" => "Simplification method",
-        "originKind" => "Local origin kind",
+        "originKind" => "Model position",
         "originX" => "Explicit local origin X in source horizontal units",
         "originY" => "Explicit local origin Y in source horizontal units",
         "originZ" => "Explicit local origin Z in source elevation units",
@@ -934,7 +1084,7 @@ internal sealed class SettingsDialog : Window
         "networkTimeout" => "Sets the network request timeout in seconds.",
         "nearbyRadius" => "Sets the distance searched when a geocoded point misses its parcel.",
         "coverageFloor" => "Reserves this fraction of the point budget for broad terrain coverage.",
-        "originKind" => "Chooses how the reversible local coordinate origin is determined.",
+        "originKind" => "Chooses the horizontal local origin. Centered on parcel or terrain is recommended: a legal parcel uses its area centroid, while other areas use the center of the clipped terrain grid. Explicit raw X/Y/Z exposes source-unit coordinates in Advanced settings.",
         "originX" => "Sets the explicit origin X coordinate in the source horizontal unit.",
         "originY" => "Sets the explicit origin Y coordinate in the source horizontal unit.",
         "originZ" => "Sets the explicit origin Z elevation in the source elevation unit.",
@@ -944,4 +1094,44 @@ internal sealed class SettingsDialog : Window
         "startNewSettings" => "Explicitly permits replacing an unreadable settings file when this draft is saved.",
         _ => AccessibleName(name),
     };
+}
+
+internal sealed class LocalOriginKindDisplayConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => value switch
+    {
+        LocalOriginKind.AreaCentroid => "Centered on parcel or terrain (recommended)",
+        LocalOriginKind.Centroid => "Centered on terrain grid envelope",
+        LocalOriginKind.Southwest => "Southwest of terrain grid",
+        LocalOriginKind.Explicit => "Explicit raw X/Y/Z",
+        _ => string.Empty,
+    };
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
+}
+
+internal sealed class SettingsEnumDisplayConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => value switch
+    {
+        TerrainAcquisitionMode.Fetch => "Live USGS 1 m",
+        TerrainAcquisitionMode.Process => "Local raster (.asc)",
+        LengthUnit.UsSurveyFoot => "U.S. survey foot",
+        LengthUnit.InternationalFoot => "International foot",
+        LengthUnit.Meter => "Metres",
+        DistanceDisplayFormat.UsSurveyFeet => "U.S. survey feet",
+        DistanceDisplayFormat.InternationalFeet => "International feet",
+        DistanceDisplayFormat.InternationalInches => "International inches",
+        DistanceDisplayFormat.FeetAndInches => "Feet and inches",
+        DistanceDisplayFormat.Metres => "Metres",
+        SimplificationMethod.CurvatureAware => "Curvature-aware (recommended)",
+        SimplificationMethod.TinError => "TIN error",
+        SimplificationMethod.UniformSampler => "Simple sampling",
+        AddressGeocoderProvider.Census => "Census (keyless default)",
+        AddressGeocoderProvider.Geocodio => "Geocodio",
+        AddressGeocoderProvider.Esri => "Esri",
+        _ => value?.ToString() ?? string.Empty,
+    };
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 }

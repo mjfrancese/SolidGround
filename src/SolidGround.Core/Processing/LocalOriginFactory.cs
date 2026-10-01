@@ -11,14 +11,16 @@ namespace SolidGround.Core.Processing;
 /// docs/architecture/cli-workflow.md's "Local origin selection and its consequences" section: `southwest`
 /// and `centroid` read the clipped grid's own cell-corner envelope through
 /// <see cref="ElevationGrid.GetCornerEnvelope"/> -- the one member Issue #9 adds to Core -- rather than this
-/// type re-deriving the grid's anchor-convention semantics itself. Lifted into <c>SolidGround.Core</c> for
-/// SolidGround Issue #15; body unchanged.
+/// type re-deriving the grid's anchor-convention semantics itself. <see cref="LocalOriginKind.AreaCentroid"/>
+/// is an opt-in precise midpoint for a grid and the true area centroid for an unbuffered legal parcel.
+/// Lifted into <c>SolidGround.Core</c> for SolidGround Issue #15.
 /// </summary>
 public static class LocalOriginFactory
 {
     /// <summary>
-    /// Computes the southwest or centroid origin from an unbuffered legal parcel envelope. This is used only
-    /// by the opted-in parcel workflow so the legal PropertyLine frame cannot move when terrain context grows.
+    /// Computes the historic southwest or centroid origin from an unbuffered legal parcel envelope, or the
+    /// exact unsnapped area centroid for <see cref="LocalOriginKind.AreaCentroid"/>. This is used only by the
+    /// opted-in parcel workflow so the legal PropertyLine frame cannot move when terrain context grows.
     /// Explicit origins remain exactly explicit.
     /// </summary>
     public static Coordinate3D ComputeOrigin(
@@ -27,10 +29,19 @@ public static class LocalOriginFactory
         HorizontalReference projectedReference,
         VerticalReference verticalReference)
     {
+        ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(legalParcelRegion);
+        ArgumentNullException.ThrowIfNull(projectedReference);
+        ArgumentNullException.ThrowIfNull(verticalReference);
         if (legalParcelRegion.HorizontalReference != projectedReference)
         {
             throw new ArgumentException("The legal parcel region's horizontal reference must equal the projected reference.", nameof(legalParcelRegion));
+        }
+
+        if (selection.Kind == LocalOriginKind.AreaCentroid)
+        {
+            NetTopologySuite.Geometries.Coordinate centroid = legalParcelRegion.Geometry.Centroid.Coordinate;
+            return new Coordinate3D(centroid.X, centroid.Y, 0d);
         }
 
         return ComputeOrigin(selection, legalParcelRegion.Envelope, projectedReference, verticalReference);
@@ -73,6 +84,9 @@ public static class LocalOriginFactory
                 return LocalOriginSnapping.SnapToWholeSourceUnit(
                     new Coordinate3D((envelope.MinX + envelope.MaxX) / 2d, (envelope.MinY + envelope.MaxY) / 2d, 0d), projectedReference, verticalReference);
             }
+
+            case LocalOriginKind.AreaCentroid:
+                return new Coordinate3D((envelope.MinX + envelope.MaxX) / 2d, (envelope.MinY + envelope.MaxY) / 2d, 0d);
 
             case LocalOriginKind.Explicit:
                 return new Coordinate3D(selection.X, selection.Y, selection.Z);

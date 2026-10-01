@@ -29,6 +29,7 @@ internal sealed class SolidGroundDialog : Window
     /// <summary>Actual panel and shell roots used only by the local WPF binding lane.</summary>
     internal IEnumerable<FrameworkElement> BindingRootsForTesting => _panels.Values.Append((FrameworkElement)Content);
     private readonly List<Grid> _parcelLayouts = [];
+    private readonly Dictionary<Grid, bool> _parcelLayoutModes = [];
 
     /// <summary>
     /// Constructs from a caller-resolved palette. This constructor deliberately contains no Revit UI type
@@ -52,8 +53,11 @@ internal sealed class SolidGroundDialog : Window
         Foreground = palette.WindowText;
         BorderBrush = palette.ActiveBorder;
         DialogControlStyles.Apply(this, palette);
-        Loaded += (_, _) => ClampToWorkingArea();
-        SizeChanged += (_, _) => UpdateParcelLayouts();
+        Loaded += (_, _) =>
+        {
+            ClampToWorkingArea();
+            UpdateParcelLayouts();
+        };
 
         _panels = new()
         {
@@ -102,9 +106,18 @@ internal sealed class SolidGroundDialog : Window
         busy.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.IsBusy)) { Converter = BooleanToVisibilityConverter.Instance });
         AutomationProperties.SetLiveSetting(busy, AutomationLiveSetting.Polite);
 
-        ContentControl content = new() { Margin = new Thickness(24, 8, 24, 8) };
+        ContentControl content = new()
+        {
+            Margin = new Thickness(24, 8, 24, 8),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
         content.SetBinding(ContentControl.ContentProperty, new Binding(nameof(SolidGroundDialogViewModel.CurrentStep)) { Converter = new StepPanelConverter(_panels) });
-        ScrollViewer scroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = content };
+        ScrollViewer scroll = new()
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = content,
+        };
 
         Grid root = new();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -130,11 +143,10 @@ internal sealed class SolidGroundDialog : Window
         StackPanel addressField = Field("Street address", address, palette);
         addressField.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowAddress)) { Converter = BooleanToVisibilityConverter.Instance });
         panel.Children.Add(addressField);
-        StackPanel coordinates = new() { Orientation = Orientation.Horizontal };
         TextBox latitude = Input("Latitude", nameof(SolidGroundDialogViewModel.LatitudeText), palette);
         TextBox longitude = Input("Longitude", nameof(SolidGroundDialogViewModel.LongitudeText), palette);
-        coordinates.Children.Add(Field("Latitude", latitude, palette));
-        coordinates.Children.Add(Field("Longitude", longitude, palette));
+        StackPanel coordinates = new();
+        coordinates.Children.Add(FieldRow(Field("Latitude", latitude, palette), Field("Longitude", longitude, palette)));
         coordinates.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowCoordinates)) { Converter = BooleanToVisibilityConverter.Instance });
         panel.Children.Add(coordinates);
 
@@ -148,10 +160,10 @@ internal sealed class SolidGroundDialog : Window
         boundingBox.Children.Add(Field("North latitude", Input("North latitude", nameof(SolidGroundDialogViewModel.NorthText), palette), palette));
         boundingBox.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.EntryMode)) { Converter = new EntryModeVisibilityConverter(LocationEntryMode.BoundingBox) });
         other.Children.Add(boundingBox);
-        StackPanel radius = new() { Orientation = Orientation.Horizontal };
-        radius.Children.Add(Field("Center latitude", Input("Center latitude", nameof(SolidGroundDialogViewModel.LatitudeText), palette), palette));
-        radius.Children.Add(Field("Center longitude", Input("Center longitude", nameof(SolidGroundDialogViewModel.LongitudeText), palette), palette));
-        radius.Children.Add(BoundField(nameof(SolidGroundDialogViewModel.RadiusLabel), Input("Radius", nameof(SolidGroundDialogViewModel.RadiusMetersText), palette), palette));
+        Grid radius = FieldRow(
+            Field("Center latitude", Input("Center latitude", nameof(SolidGroundDialogViewModel.LatitudeText), palette), palette),
+            Field("Center longitude", Input("Center longitude", nameof(SolidGroundDialogViewModel.LongitudeText), palette), palette),
+            BoundField(nameof(SolidGroundDialogViewModel.RadiusLabel), Input("Radius", nameof(SolidGroundDialogViewModel.RadiusMetersText), palette), palette));
         radius.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.EntryMode)) { Converter = new EntryModeVisibilityConverter(LocationEntryMode.Radius) });
         other.Children.Add(radius);
         TextBox geometry = Input("Local GeoJSON or WKT", nameof(SolidGroundDialogViewModel.LocalGeometryText), palette);
@@ -177,7 +189,7 @@ internal sealed class SolidGroundDialog : Window
         nearby.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.NearbyTierNoticeText)) { Converter = TextPresenceVisibilityConverter.Instance });
         panel.Children.Add(nearby);
 
-        ListBox locations = new() { DisplayMemberPath = nameof(AddressGeocodeCandidate.MatchedAddress), MinHeight = 70, Margin = new Thickness(0, 8, 0, 8) };
+        ListBox locations = new() { DisplayMemberPath = nameof(AddressGeocodeCandidate.MatchedAddress), MinHeight = 70, MaxHeight = 120, Margin = new Thickness(0, 8, 0, 8) };
         locations.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.GeocodeCandidates)));
         locations.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedGeocodeCandidate)) { Mode = BindingMode.TwoWay });
         locations.SetBinding(IsEnabledProperty, new Binding(nameof(SolidGroundDialogViewModel.CanSelectLocation)));
@@ -186,7 +198,7 @@ internal sealed class SolidGroundDialog : Window
 
         StackPanel parcelDetails = new();
         parcelDetails.Children.Add(Text("Select a parcel", palette, FontWeights.SemiBold));
-        ListBox parcels = new() { MinHeight = 130, Margin = new Thickness(0, 8, 0, 8), ItemTemplate = ParcelCandidateTemplate(palette) };
+        ListBox parcels = new() { MinHeight = 130, MaxHeight = 180, Margin = new Thickness(0, 8, 0, 8), ItemTemplate = ParcelCandidateTemplate(palette) };
         parcels.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.ParcelCandidates)));
         parcels.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedParcelCandidate)) { Mode = BindingMode.TwoWay });
         AutomationProperties.SetName(parcels, "Parcel candidates");
@@ -201,11 +213,12 @@ internal sealed class SolidGroundDialog : Window
         map.Click += (_, _) => OpenCoordinateMap();
         parcelDetails.Children.Add(map);
         parcelDetails.Children.Add(Text("Use this parcel confirms the displayed legal boundary. Nearby parcels are never selected automatically.", palette));
-        ParcelBoundaryPreview preview = new(palette) { Margin = new Thickness(16, 12, 0, 0), DataContext = _viewModel };
+        ParcelBoundaryPreview preview = new(palette) { Margin = new Thickness(0, 12, 0, 0), DataContext = _viewModel };
         Grid parcelContent = new() { Margin = new Thickness(0, 8, 0, 0) };
         parcelContent.Children.Add(parcelDetails);
         parcelContent.Children.Add(preview);
         _parcelLayouts.Add(parcelContent);
+        parcelContent.SizeChanged += (_, _) => UpdateParcelLayout(parcelContent);
         panel.Children.Add(parcelContent);
         return panel;
     }
@@ -269,7 +282,7 @@ internal sealed class SolidGroundDialog : Window
 
     private static TextBox Input(string name, string path, DialogPalette palette)
     {
-        TextBox input = new() { Margin = new Thickness(0, 4, 8, 4), MinWidth = 170 };
+        TextBox input = new() { Margin = new Thickness(0, 4, 8, 4), MinWidth = 0 };
         input.SetBinding(TextBox.TextProperty, new Binding(path) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
         AutomationProperties.SetName(input, name); return input;
     }
@@ -322,6 +335,18 @@ internal sealed class SolidGroundDialog : Window
         return field;
     }
 
+    private static Grid FieldRow(params StackPanel[] fields)
+    {
+        Grid row = new();
+        for (int index = 0; index < fields.Length; index++)
+        {
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1d, GridUnitType.Star) });
+            Grid.SetColumn(fields[index], index);
+            row.Children.Add(fields[index]);
+        }
+        return row;
+    }
+
     private static Label Label(string caption, Control target, DialogPalette palette) => new() { Content = caption, Target = target, Foreground = palette.WindowText, Margin = new Thickness(0, 4, 0, 2) };
 
     private static DataTemplate ParcelCandidateTemplate(DialogPalette palette)
@@ -368,28 +393,40 @@ internal sealed class SolidGroundDialog : Window
 
     private void UpdateParcelLayouts()
     {
-        bool wide = ActualWidth >= 700d;
         foreach (Grid layout in _parcelLayouts)
         {
-            if (layout.Children.Count != 2) continue;
-            layout.ColumnDefinitions.Clear(); layout.RowDefinitions.Clear();
-            if (wide)
-            {
-                layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(55d, GridUnitType.Star) });
-                layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(45d, GridUnitType.Star) });
-                layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                Grid.SetRow(layout.Children[0], 0); Grid.SetColumn(layout.Children[0], 0);
-                Grid.SetRow(layout.Children[1], 0); Grid.SetColumn(layout.Children[1], 1);
-            }
-            else
-            {
-                layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1d, GridUnitType.Star) });
-                layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                Grid.SetRow(layout.Children[0], 0); Grid.SetColumn(layout.Children[0], 0);
-                Grid.SetRow(layout.Children[1], 1); Grid.SetColumn(layout.Children[1], 0);
-            }
+            UpdateParcelLayout(layout);
         }
+    }
+
+    private void UpdateParcelLayout(Grid layout)
+    {
+        if (layout.Children.Count != 2) return;
+        const double detailsAndPreviewWidth = 660d;
+        bool wide = layout.ActualWidth >= detailsAndPreviewWidth;
+        if (_parcelLayoutModes.TryGetValue(layout, out bool previousWide) && previousWide == wide) return;
+
+        _parcelLayoutModes[layout] = wide;
+        layout.ColumnDefinitions.Clear();
+        layout.RowDefinitions.Clear();
+        FrameworkElement preview = (FrameworkElement)layout.Children[1];
+        if (wide)
+        {
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(55d, GridUnitType.Star) });
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(45d, GridUnitType.Star) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(layout.Children[0], 0); Grid.SetColumn(layout.Children[0], 0);
+            Grid.SetRow(preview, 0); Grid.SetColumn(preview, 1);
+            preview.Margin = new Thickness(16, 12, 0, 0);
+            return;
+        }
+
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1d, GridUnitType.Star) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(layout.Children[0], 0); Grid.SetColumn(layout.Children[0], 0);
+        Grid.SetRow(preview, 1); Grid.SetColumn(preview, 0);
+        preview.Margin = new Thickness(0, 12, 0, 0);
     }
 
     private sealed class BooleanToVisibilityConverter : IValueConverter
