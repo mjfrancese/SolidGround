@@ -14,6 +14,8 @@ The automatic fetch is location disclosure. Before it runs, the dialog must say 
 
 ## Recommended operator flow
 
+The owner accepted this direction and required cohesive, approachable interaction throughout the tool. The [ground-selection UX requirements](../design-specs/revit-60-usability.md#11-owner-directed-ground-selection-ux-requirements--2026-10-01) specify the shared-shell interaction, loading, reversible pin selection, measurement disclosure, keyboard alternatives, and human acceptance tasks. The sequence below describes the data/physical-reference contract; it is not a requirement for five separate screens.
+
 1. After address and parcel confirmation, show a north-up plan with the confirmed parcel, terrain context, and muted building outlines. Show source, release/vintage where known, licence/attribution, and: "Outlines are approximate visual context, not legal or surveyed building boundaries."
 2. Ask the operator to put a **front-door ground pin** outside the outline, beside the actual doorway. A pin inside an outline gives a non-blocking warning and can be moved. Typed coordinates are an equal alternative.
 3. Sample SolidGround's bare-earth DEM at the pin. Ask for measured vertical rise from exterior ground to the **unfinished first-floor datum**, the owner's requested default. Describe the physical reference as top of the subfloor or structural slab. An explicit alternative may identify a different reference, but the product must never silently substitute a finished surface or door threshold. Show:

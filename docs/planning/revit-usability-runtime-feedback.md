@@ -39,6 +39,12 @@ Recommended next implementation:
 
 Vertical behavior is not changed by the layout/centering fix. The current source-height and explicit-origin modes retain their existing meaning while this design is completed and validated.
 
+### Cohesive ground-selection experience
+
+The owner's subsequent acceptance explicitly requires that ground selection feel comfortable to a human and that the whole tool remain cohesive and approachable. The [ground-selection UX requirements](../design-specs/revit-60-usability.md#11-owner-directed-ground-selection-ux-requirements--2026-10-01) make that requirement observable: a focused floor-reference task within the same Review shell, automatic placement readiness after an explicitly requested ground preview, an adjustable unsnapped pin, one clearly required measurement, visible provisional status, and a return to the final summary without stacked wizards or generic Next clicks. Preferences remain in Settings; this property's point and measurement remain run data.
+
+Acceptance includes keyboard/coordinate alternatives, pan/zoom/resize stability, no-outline recovery, loading/cancellation without stale results, and novice observation of point correction and measurement interpretation. Existing first-use, repeat-use, theme, scaling, and Settings tasks remain part of the same formative round. The new UX criteria do not substitute for the acquisition/provenance design review or the native datum/annotation matrix, and this update implements no vertical or outline behavior.
+
 ## Terrain extension and subdivision
 
 The extension changes only terrain acquisition, support, and its outer profile. The legal property line is invariant. Automatic subdivision and hiding have not shipped: the owner's manual method remains a separate native experiment. Validate whether hiding the host preserves the subdivision, whether view-specific hiding survives save/reopen, and whether subdivision changes the retained terrain surface before exposing a one-click parcel-only display option.

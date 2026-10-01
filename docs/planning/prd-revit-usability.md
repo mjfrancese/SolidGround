@@ -313,3 +313,9 @@ Planning validation: the existing personal-information guard passed all 48 tests
 ### Independent plan review ? approved
 
 On 2026-09-30, a separate GPT-6-Luna reviewer cleared the revised PRD, visual specification, and combined Phase 4A plan after two review rounds and their corrections. No critical or significant findings remained. Source implementation may proceed; Revit runtime and formative-user evidence remain required before the corresponding issue/release acceptance claims.
+
+### Owner-directed UX follow-up — 2026-10-01
+
+The owner accepted the provisional floor-reference direction and required the entrance-adjacent ground selection, and the rest of SolidGround, to feel cohesive and approachable. The [ground-selection UX requirements](../design-specs/revit-60-usability.md#11-owner-directed-ground-selection-ux-requirements--2026-10-01) and [follow-up plan](revit-usability-runtime-feedback.md#cohesive-ground-selection-experience) extend the design with concrete interaction and human-verification criteria. They retain the shared Location/Parcel/Review shell, separate persistent Settings, reversible selection, visible required inputs and provisional status, and progressive disclosure of technical detail. The optional floor-reference task adds an actual domain decision; the existing AC02 three-action count continues to describe the original configured path without that task.
+
+This is a requirements update for proposed vertical/building-context behavior. It does not mark that feature implemented, supersede native acceptance, or claim the earlier plan review cleared its new acquisition, sampling, datum-correction, provenance, or annotation contracts. Those contracts require a complete implementation plan and the applicable review before source changes.
