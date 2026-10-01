@@ -143,7 +143,8 @@ public sealed record PlacementRecord(
     PlacementPointCountsRecord PointCounts,
     PlacementExtensibleStorageRecord ExtensibleStorage,
     PlacementPropertyLineRecord PropertyLine,
-    PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite);
+    PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite,
+    BuildingFloorReference? FloorReference = null);
 
 /// <summary>
 /// Every placement-record value computed before <c>transaction.Commit()</c> (design record §5): the created
@@ -169,18 +170,19 @@ public sealed record PlacementRecordDraft(
     PlacementPointCountsRecord PointCounts,
     PlacementExtensibleStorageRecord ExtensibleStorage,
     PlacementPropertyLineRecord PropertyLine,
-    PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite)
+    PlacementSharedCoordinatesWriteRecord SharedCoordinatesWrite,
+    BuildingFloorReference? FloorReference = null)
 {
     public const string Schema = "solidground.revit-placement";
 
     /// <summary>
-    /// Bumped 2 -> 3 for SolidGround Issue #30 (PH3-3): the record's required shape changed with the addition
-    /// of <see cref="PlacementPropertyLineRecord"/>/<see cref="PlacementSharedCoordinatesWriteRecord"/>. A
+    /// Bumped 3 -> 4 for the building-floor reference. A null retains the explicit historical meaning that no
+    /// building-floor datum was selected. A
     /// counter independent of <c>TerrainProvenance.CurrentSchemaVersion</c> and of the Extensible Storage
     /// schema's own version -- three separate counters that share a field name. See
     /// docs/architecture/revit-property-line-and-shared-coordinates.md's "Placement record schema" section.
     /// </summary>
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
 
     public PlacementRecord ToRecord(long confirmedElementId, DateTime createdUtc) => new(
         Schema,
@@ -197,5 +199,6 @@ public sealed record PlacementRecordDraft(
         PointCounts,
         ExtensibleStorage,
         PropertyLine,
-        SharedCoordinatesWrite);
+        SharedCoordinatesWrite,
+        FloorReference);
 }

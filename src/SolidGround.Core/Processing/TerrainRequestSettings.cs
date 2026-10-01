@@ -208,6 +208,10 @@ public sealed record TerrainRequestSettings
         {
             problems.Add("localOrigin is required.");
         }
+        else if (!Enum.IsDefined(LocalOrigin.Kind))
+        {
+            problems.Add("localOrigin.kind has an unrecognized value.");
+        }
         else if (!double.IsFinite(LocalOrigin.X) || !double.IsFinite(LocalOrigin.Y) || !double.IsFinite(LocalOrigin.Z))
         {
             problems.Add("localOrigin.x, localOrigin.y, and localOrigin.z must all be finite.");

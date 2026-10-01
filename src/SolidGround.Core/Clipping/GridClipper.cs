@@ -179,7 +179,7 @@ public static class GridClipper
                 "the region into the grid's reference first (SolidGround Issue #6).");
         }
 
-        PolygonalRegion effectiveRegion = BuildEffectiveRegion(region);
+        PolygonalRegion effectiveRegion = ResolveEffectiveRegion(region);
         GeometryFactory factory = effectiveRegion.Geometry.Factory;
         IPreparedGeometry prepared = PreparedGeometryFactory.Prepare(effectiveRegion.Geometry);
 
@@ -255,8 +255,9 @@ public static class GridClipper
     /// converted into the region's own linear unit, and re-validates the result through
     /// <see cref="PolygonalRegion.FromGeometry"/>.
     /// </summary>
-    private static PolygonalRegion BuildEffectiveRegion(ClipRegion region)
+    public static PolygonalRegion ResolveEffectiveRegion(ClipRegion region)
     {
+        ArgumentNullException.ThrowIfNull(region);
         if (region.Buffer.Value == 0d)
         {
             return region.Region;

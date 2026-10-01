@@ -7,6 +7,7 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.BuildingOutlines;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
@@ -109,14 +110,14 @@ public static class TerrainExportBundleReader
             }
 
             int schemaVersion = RequireInt(top["schemaVersion"], "$.schemaVersion");
-            if (schemaVersion != TerrainProvenance.CurrentSchemaVersion)
+            if (schemaVersion is not 4 and not 5 and not TerrainProvenance.CurrentSchemaVersion)
             {
                 throw new TerrainExportException(
                     $"'$.schemaVersion' is {schemaVersion.ToString(CultureInfo.InvariantCulture)}, but this reader " +
-                    $"implements only schema version {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}.");
+                    $"implements schema versions 4, 5, and {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}.");
             }
 
-            TerrainProvenance provenance = ParseProvenance(top["provenance"], "$.provenance");
+            TerrainProvenance provenance = ParseProvenance(top["provenance"], "$.provenance", schemaVersion);
             ValidateUnitDefinitions(top["unitDefinitions"], "$.unitDefinitions", TerrainExportBundleRenderer.CollectDistinctUnitsInEnumOrder(provenance));
             string pointsSha256 = ParsePoints(top["points"], "$.points", provenance);
 
@@ -124,32 +125,51 @@ public static class TerrainExportBundleReader
         }
     }
 
-    private static TerrainProvenance ParseProvenance(JsonElement obj, string path)
+    private static TerrainProvenance ParseProvenance(JsonElement obj, string path, int schemaVersion)
     {
         RequireObject(obj, path);
         Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path,
-            [
-                "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
-                "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
-                "addressParcel",
-            ]);
+            schemaVersion == TerrainProvenance.CurrentSchemaVersion
+                ? [
+                    "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                    "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                    "addressParcel", "floorReference", "buildingOutline",
+                ]
+                : [
+                    "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                    "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                    "addressParcel",
+                ]);
 
-        ElevationSourceMetadata source = ParseSource(props["source"], $"{path}.source");
+        ElevationSourceMetadata source = ParseSource(props["source"], $"{path}.source", schemaVersion);
         HorizontalTransformationDefinition horizontalTransformation = ParseHorizontalTransformation(props["horizontalTransformation"], $"{path}.horizontalTransformation");
         VerticalReference sourceVerticalReference = ParseVerticalReference(props["sourceVerticalReference"], $"{path}.sourceVerticalReference");
         ReferenceOrigin sourceHorizontalReferenceOrigin = RequireEnum<ReferenceOrigin>(props["sourceHorizontalReferenceOrigin"], $"{path}.sourceHorizontalReferenceOrigin");
         ReferenceOrigin sourceVerticalReferenceOrigin = RequireEnum<ReferenceOrigin>(props["sourceVerticalReferenceOrigin"], $"{path}.sourceVerticalReferenceOrigin");
         LocalCoordinateFrame localFrame = ParseLocalFrame(props["localFrame"], $"{path}.localFrame");
-        SimplificationRequest simplification = ParseSimplificationRequest(props["simplification"], $"{path}.simplification");
+        SimplificationRequest simplification = ParseSimplificationRequest(props["simplification"], $"{path}.simplification", schemaVersion);
         int originalPointCount = RequireInt(props["originalPointCount"], $"{path}.originalPointCount");
         int retainedPointCount = RequireInt(props["retainedPointCount"], $"{path}.retainedPointCount");
         ElevationRange elevationRange = ParseElevationRange(props["elevationRange"], $"{path}.elevationRange");
         AddressParcelProvenance? addressParcel = ParseAddressParcelProvenance(props["addressParcel"], $"{path}.addressParcel");
+        BuildingFloorReference? floorReference = schemaVersion == TerrainProvenance.CurrentSchemaVersion
+            ? ParseBuildingFloorReference(props["floorReference"], $"{path}.floorReference")
+            : null;
+        BuildingOutlineProvenance? buildingOutline = schemaVersion == TerrainProvenance.CurrentSchemaVersion
+            ? ParseBuildingOutlineProvenance(props["buildingOutline"], $"{path}.buildingOutline")
+            : null;
+
+        if (floorReference?.BuildingOutline is { } embeddedOutline &&
+            !BuildingOutlineProvenanceJson.HasSameValue(embeddedOutline, buildingOutline))
+        {
+            throw new TerrainExportException(
+                $"'{path}.buildingOutline' must exactly match the building-outline context embedded in '{path}.floorReference'.");
+        }
 
         try
         {
             return new TerrainProvenance(
-                TerrainProvenance.CurrentSchemaVersion,
+                schemaVersion,
                 source,
                 horizontalTransformation,
                 sourceVerticalReference,
@@ -160,18 +180,49 @@ public static class TerrainExportBundleReader
                 originalPointCount,
                 retainedPointCount,
                 elevationRange,
-                addressParcel);
+                addressParcel,
+                floorReference,
+                buildingOutline);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is ArgumentException or FormatException)
         {
             throw new TerrainExportException($"'{path}' is not a valid provenance record.", ex);
         }
     }
 
-    private static ElevationSourceMetadata ParseSource(JsonElement obj, string path)
+    private static BuildingFloorReference? ParseBuildingFloorReference(JsonElement obj, string path)
+    {
+        try
+        {
+            return BuildingFloorReferenceJson.Deserialize(obj.GetRawText());
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException or JsonException)
+        {
+            throw new TerrainExportException($"'{path}' is not a valid building floor reference.", ex);
+        }
+    }
+
+    private static BuildingOutlineProvenance? ParseBuildingOutlineProvenance(JsonElement obj, string path)
+    {
+        try
+        {
+            return BuildingOutlineProvenanceJson.Deserialize(obj.GetRawText());
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException or JsonException)
+        {
+            throw new TerrainExportException($"'{path}' is not valid building-outline provenance.", ex);
+        }
+    }
+
+    private static ElevationSourceMetadata ParseSource(JsonElement obj, string path, int schemaVersion)
     {
         RequireObject(obj, path);
-        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path, ["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel", "attribution"]);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(
+            obj,
+            path,
+            schemaVersion == 4
+                ? ["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel", "attribution"]
+                : ["sourceName", "datasetIdentifier", "collectionPeriod", "collectionPeriodAvailability", "qualityLevel", "attribution"]);
 
         string sourceName = RequireString(props["sourceName"], $"{path}.sourceName");
         string datasetIdentifier = RequireString(props["datasetIdentifier"], $"{path}.datasetIdentifier");
@@ -186,7 +237,14 @@ public static class TerrainExportBundleReader
 
         try
         {
-            return new ElevationSourceMetadata(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, attribution);
+            if (schemaVersion == 4)
+            {
+                return ElevationSourceMetadata.FromLegacy(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, attribution);
+            }
+
+            CollectionPeriodAvailability availability = RequireEnum<CollectionPeriodAvailability>(
+                props["collectionPeriodAvailability"], $"{path}.collectionPeriodAvailability");
+            return new ElevationSourceMetadata(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, attribution, availability);
         }
         catch (ArgumentException ex)
         {
@@ -362,17 +420,25 @@ public static class TerrainExportBundleReader
         }
     }
 
-    private static SimplificationRequest ParseSimplificationRequest(JsonElement obj, string path)
+    private static SimplificationRequest ParseSimplificationRequest(JsonElement obj, string path, int schemaVersion)
     {
         RequireObject(obj, path);
-        Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path, ["pointBudget", "method"]);
+        Dictionary<string, JsonElement> props = ReadObjectProperties(
+            obj,
+            path,
+            schemaVersion == 4
+                ? ["pointBudget", "method"]
+                : ["pointBudget", "method", "coverageFloorFraction"]);
 
         int pointBudget = RequireInt(props["pointBudget"], $"{path}.pointBudget");
         SimplificationMethod method = RequireEnum<SimplificationMethod>(props["method"], $"{path}.method");
 
         try
         {
-            return new SimplificationRequest(pointBudget, method);
+            double? coverageFloorFraction = schemaVersion == 4
+                ? null
+                : RequireFiniteDouble(props["coverageFloorFraction"], $"{path}.coverageFloorFraction");
+            return new SimplificationRequest(pointBudget, method, coverageFloorFraction);
         }
         catch (ArgumentException ex)
         {

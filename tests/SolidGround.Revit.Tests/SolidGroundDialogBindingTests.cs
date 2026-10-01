@@ -1,0 +1,171 @@
+using System.Runtime.ExceptionServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using SolidGround.Core.Hosting;
+using SolidGround.Core.Processing;
+using SolidGround.Core.Sources;
+using SolidGround.Core.Units;
+using SolidGround.Revit.Dialog;
+
+namespace SolidGround.Revit.Tests;
+
+public sealed class SolidGroundDialogBindingTests
+{
+    private static readonly string[] DialogBindingPaths = [nameof(SolidGroundDialogViewModel.FindCommand), nameof(SolidGroundDialogViewModel.UseLocationCommand), nameof(SolidGroundDialogViewModel.UseParcelCommand), nameof(SolidGroundDialogViewModel.CreateCommand), nameof(SolidGroundDialogViewModel.ChangeFloorReferenceCommand), nameof(SolidGroundDialogViewModel.FloorReferencePrimaryCommand), nameof(SolidGroundDialogViewModel.StageAnnouncement), nameof(SolidGroundDialogViewModel.EditSettingsCommand), nameof(SolidGroundDialogViewModel.ErrorText), nameof(SolidGroundDialogViewModel.IsBusy), nameof(SolidGroundDialogViewModel.CurrentStep), nameof(SolidGroundDialogViewModel.EntryMode), nameof(SolidGroundDialogViewModel.AddressText), nameof(SolidGroundDialogViewModel.ShowAddress), nameof(SolidGroundDialogViewModel.LatitudeText), nameof(SolidGroundDialogViewModel.LongitudeText), nameof(SolidGroundDialogViewModel.ShowCoordinates), nameof(SolidGroundDialogViewModel.WestText), nameof(SolidGroundDialogViewModel.SouthText), nameof(SolidGroundDialogViewModel.EastText), nameof(SolidGroundDialogViewModel.NorthText), nameof(SolidGroundDialogViewModel.RadiusMetersText), nameof(SolidGroundDialogViewModel.LocalGeometryText), nameof(SolidGroundDialogViewModel.ShowOtherAreaOptions), nameof(SolidGroundDialogViewModel.NearbyTierNoticeText), nameof(SolidGroundDialogViewModel.GeocodeCandidates), nameof(SolidGroundDialogViewModel.SelectedGeocodeCandidate), nameof(SolidGroundDialogViewModel.ParcelCandidates), nameof(SolidGroundDialogViewModel.SelectedParcelCandidate), nameof(SolidGroundDialogViewModel.ContainmentLabel), nameof(SolidGroundDialogViewModel.SettingsSummary), nameof(SolidGroundDialogViewModel.ExtensionSummary), nameof(SolidGroundDialogViewModel.EstimateSummary), nameof(SolidGroundDialogViewModel.SourceSummary), nameof(SolidGroundDialogViewModel.AccuracyDisclaimer), nameof(SolidGroundDialogViewModel.LevelCandidates), nameof(SolidGroundDialogViewModel.SelectedLevel), nameof(SolidGroundDialogViewModel.ToposolidTypeCandidates), nameof(SolidGroundDialogViewModel.SelectedToposolidType), nameof(SolidGroundDialogViewModel.WriteSharedCoordinatesIfAbsent), nameof(SolidGroundDialogViewModel.CanWriteSharedCoordinates), nameof(SolidGroundDialogViewModel.EstimatedSharedCoordinatesAcknowledged), nameof(SolidGroundDialogViewModel.RequiresEstimatedSharedCoordinatesAcknowledgement), nameof(SolidGroundDialogViewModel.ShowReviewDetails), nameof(SolidGroundDialogViewModel.ShowFloorReferenceSummary), nameof(SolidGroundDialogViewModel.FloorReferenceSummary), nameof(SolidGroundDialogViewModel.FloorReferencePrimaryLabel), nameof(SolidGroundDialogViewModel.NeedsFloorReferenceConfirmation), nameof(SolidGroundDialogViewModel.CancelCommand), nameof(SolidGroundDialogViewModel.BackCommand),];
+    [Fact]
+    public void EveryActualDialogBindingPathResolvesAndReceivesViewModelNotifications()
+    {
+        StaTestHost.Run(() =>
+        {
+            SolidGroundDialogViewModel viewModel = CreateViewModel();
+            Dictionary<string, TextBlock> targets = DialogBindingPaths.ToDictionary(path => path, _ => new TextBlock());
+            foreach ((string path, TextBlock target) in targets)
+            {
+                BindingOperations.SetBinding(target, FrameworkElement.TagProperty, new Binding(path) { Source = viewModel });
+            }
+
+            WpfTestSupport.DrainDataBindingQueue();
+            foreach ((string path, TextBlock target) in targets)
+            {
+                BindingExpression binding = Assert.IsType<BindingExpression>(BindingOperations.GetBindingExpression(target, FrameworkElement.TagProperty));
+                Assert.True(binding.Status == BindingStatus.Active && !binding.HasError, $"{path} status was {binding.Status}.");
+            }
+
+            viewModel.EntryMode = LocationEntryMode.Coordinates;
+            viewModel.AddressText = "Synthetic notification address";
+            WpfTestSupport.DrainDataBindingQueue();
+            Assert.False(Assert.IsType<bool>(targets[nameof(SolidGroundDialogViewModel.ShowAddress)].Tag));
+            Assert.True(Assert.IsType<bool>(targets[nameof(SolidGroundDialogViewModel.ShowCoordinates)].Tag));
+            Assert.Equal("Synthetic notification address", Assert.IsType<string>(targets[nameof(SolidGroundDialogViewModel.AddressText)].Tag));
+        });
+    }
+
+    [Fact]
+    public void WpfRejectsTheActualInternalComputedPropertyButResolvesAPublicBinding()
+    {
+        StaTestHost.Run(() =>
+        {
+            SolidGroundDialogViewModel viewModel = CreateViewModel();
+            TextBlock target = new();
+            Assert.Equal(string.Empty, viewModel.BindingPathErrorDiagnostic);
+            BindingOperations.SetBinding(target, FrameworkElement.TagProperty, new Binding(nameof(SolidGroundDialogViewModel.BindingPathErrorDiagnostic)) { Source = viewModel });
+            WpfTestSupport.DrainDataBindingQueue();
+            BindingExpression inaccessibleBinding = Assert.IsType<BindingExpression>(BindingOperations.GetBindingExpression(target, FrameworkElement.TagProperty));
+            Assert.Equal(BindingStatus.PathError, inaccessibleBinding.Status);
+            Assert.Null(target.Tag);
+            BindingOperations.SetBinding(target, FrameworkElement.TagProperty, new Binding(nameof(SolidGroundDialogViewModel.CurrentStep)) { Source = viewModel });
+            WpfTestSupport.DrainDataBindingQueue();
+            BindingExpression publicBinding = Assert.IsType<BindingExpression>(BindingOperations.GetBindingExpression(target, FrameworkElement.TagProperty));
+            Assert.Equal(BindingStatus.Active, publicBinding.Status);
+            Assert.False(publicBinding.HasError);
+            Assert.Equal(SolidGroundDialogStep.Location, Assert.IsType<SolidGroundDialogStep>(target.Tag));
+        });
+    }
+
+    [Fact]
+    public void ErrorBindingRecoversAfterTheRealFindCommandAcceptsCorrectedInput()
+    {
+        StaTestHost.Run(() =>
+        {
+            SolidGroundDialogViewModel viewModel = CreateViewModel();
+            TextBlock target = new();
+            BindingOperations.SetBinding(target, FrameworkElement.TagProperty, new Binding(nameof(SolidGroundDialogViewModel.ErrorText)) { Source = viewModel });
+            viewModel.EntryMode = LocationEntryMode.LocalGeometry;
+            viewModel.FindCommand.Execute(null);
+            WpfTestSupport.DrainDataBindingQueue();
+            Assert.Equal("Paste GeoJSON or WKT geometry before using this area.", Assert.IsType<string>(target.Tag));
+            viewModel.LocalGeometryText = "POLYGON ((0 0, 0 1, 1 1, 0 0))";
+            viewModel.FindCommand.Execute(null);
+            WpfTestSupport.DrainDataBindingQueue();
+            Assert.Null(target.Tag);
+            Assert.Null(viewModel.ErrorText);
+        });
+    }
+
+    [Fact]
+    public void PaletteInjectedDialogCanShowAndArrangeWithoutRevitUiThemeAccess()
+    {
+        StaTestHost.Run(() =>
+        {
+            SolidGroundDialog dialog = new(CreateViewModel(), WpfTestSupport.CreatePalette());
+            try
+            {
+                dialog.Show();
+                dialog.UpdateLayout();
+                Assert.True(dialog.ActualWidth > 0d && dialog.ActualHeight > 0d);
+            }
+            finally
+            {
+                dialog.Close();
+            }
+        });
+    }
+
+    [Fact]
+    public void RealViewModelRejectsANonCooperativeStaleGeocodeCompletionAfterCancellation()
+    {
+        StaTestHost.Run(() =>
+        {
+            DelayedGeocoder geocoder = new();
+            SolidGroundDialogViewModel viewModel = CreateViewModel(geocoder);
+            viewModel.AddressText = "Synthetic stale address";
+            viewModel.FindCommand.Execute(null);
+            Assert.Single(geocoder.Pending);
+            viewModel.AddressText = "Synthetic current address";
+            viewModel.FindCancelCommand.Execute(null);
+            geocoder.CompleteNext("Synthetic stale result");
+            PumpDispatcherUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
+            Assert.Empty(viewModel.GeocodeCandidates);
+            Assert.False(viewModel.IsBusy);
+            viewModel.FindCommand.Execute(null);
+            Assert.Single(geocoder.Pending);
+            geocoder.CompleteNext("Synthetic current result");
+            PumpDispatcherUntil(() => viewModel.FindCommand.ExecutionTask?.IsCompleted == true);
+            AddressGeocodeCandidate candidate = Assert.Single(viewModel.GeocodeCandidates);
+            Assert.Equal("Synthetic current result", candidate.MatchedAddress);
+        });
+    }
+
+    internal static SolidGroundDialogViewModel CreateViewModel(IAddressGeocoder? geocoder = null) => new(new SolidGroundDialogInputs(Geocoder: geocoder ?? null!, GeocoderProvider: AddressGeocoderProvider.Census, ParcelSource: null, LevelCandidates: [new NamedElevationCandidate(1, "Synthetic level", 0d)], ToposolidTypeCandidates: [new NamedCandidate(2, "Synthetic toposolid")], ConfiguredLevelName: null, ConfiguredToposolidTypeName: null, PrefilledOutputUnit: LengthUnit.UsSurveyFoot, PrefilledPointBudget: 15_000, PrefilledWriteSharedCoordinatesIfAbsent: false, DocumentAlreadyHasSharedCoordinates: false, RevitIniThresholds: new RevitIniToposolidThresholds.Thresholds(null, null), RevitIniPath: "synthetic-revit.ini", NetworkTimeoutSeconds: 1, ConfiguredAreaOfInterest: new AoiSettings { Kind = AreaOfInterestKind.BoundingBox, BoundingBox = new BoundingBoxAoiSettings { West = -100d, South = 40d, East = -99d, North = 41d, }, }, NearbySearchRadiusMeters: 30d, Mode: TerrainAcquisitionMode.Fetch));
+    private static void PumpDispatcherUntil(Func<bool> completion)
+    {
+        DispatcherFrame frame = new();
+        DispatcherTimer timer = new(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(10),
+        };
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        timer.Tick += (_, _) =>
+        {
+            if (completion() || DateTime.UtcNow >= deadline)
+            {
+                frame.Continue = false;
+            }
+        };
+        timer.Start();
+        Dispatcher.PushFrame(frame);
+        timer.Stop();
+        Assert.True(completion(), "The real dialog command did not finish within two seconds.");
+    }
+
+    private sealed class DelayedGeocoder : IAddressGeocoder
+    {
+        internal Queue<TaskCompletionSource<AddressGeocodeAcquisition>> Pending { get; } = new();
+
+        public ValueTask<AddressGeocodeAcquisition> GeocodeAsync(AddressGeocodeRequest request, CancellationToken cancellationToken = default)
+        {
+            TaskCompletionSource<AddressGeocodeAcquisition> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Pending.Enqueue(completion);
+            return new ValueTask<AddressGeocodeAcquisition>(completion.Task);
+        }
+
+        internal void CompleteNext(string matchedAddress)
+        {
+            Pending.Dequeue().SetResult(new AddressGeocodeAcquisition([new AddressGeocodeCandidate(40d, -100d, matchedAddress, "Synthetic attribution")]));
+        }
+    }
+}

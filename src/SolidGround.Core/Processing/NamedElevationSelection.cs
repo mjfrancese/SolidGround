@@ -7,7 +7,7 @@ namespace SolidGround.Core.Processing;
 /// <c>Level</c> into one of these (<c>ElementId.Value</c>, <c>Name</c>, <c>Elevation</c>) and maps the winning
 /// <see cref="Id"/> back to the real element.
 /// </summary>
-public sealed record NamedElevationCandidate(long Id, string Name, double Elevation);
+public sealed record NamedElevationCandidate(long Id, string Name, double Elevation, string UniqueId = "");
 
 /// <summary>
 /// Selects a <see cref="NamedElevationCandidate"/> for SolidGround Issue #15's `level` selection rule

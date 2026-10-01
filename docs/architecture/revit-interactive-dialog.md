@@ -1195,3 +1195,12 @@ this note's own sections plus this session:
   `AoiSource`, so it is unaffected and still shows on that same settings-file path whenever `Mode` is `Fetch`.
   See `docs/architecture/source-licensing-and-attribution.md`'s "Dialog: attribution shown once per run"
   section.
+# Issue #60 guided-creation revision (2026-09-30)
+
+The former eleven-page interaction is superseded by **Location → Parcel → Review**. Location defaults to a street address; coordinates are an explicit mode with separate latitude/longitude fields and still accept a pasted pair. Bounding box, radius, and pasted local GeoJSON/WKT are run choices, so the dialog never asks an operator to type a JSON settings-file path.
+
+`SolidGround.Core.Workflow.LocationParcelFlow` owns the Revit-free state contract. Each lookup begins with immutable input/source revisions. A cancelled, stale, or non-cooperative late completion is ignored unless both revisions match. A successful Find advances to Parcel. A sole geocode result starts parcel lookup automatically but does not confirm a parcel; ambiguity requires **Use this location**, and every parcel, especially a nearby candidate, requires **Use this parcel**. Back changes only the visible stage and preserves still-valid results.
+
+The dialog performs no elevation acquisition. Review shows source/accuracy text, effective settings, the read-only terrain-extension statement, an estimate limitation, document Level/Toposolid type choices, exports through the effective settings, and the current-run shared-coordinate decision, initialized false. It returns an optional `EffectiveSettings` snapshot for the command to make the final request and run its authoritative Preflight.
+
+`ParcelBoundaryPreview` is managed WPF vector content derived only from the selected candidate's legal geometry. It is a confirmation aid, not a basemap: there is no browser, WebView, tiles, or unvalidated simulated terrain offset. The `SolidGroundDialog` constructor accepts an optional `DialogPalette`; tests can supply it without reading `UIThemeManager` or launching Revit. Runtime theme, keyboard, scaling, parcel-preview, Settings-resume, and source-rebuild evidence remains pending the documented Revit 2027 manual validation path.

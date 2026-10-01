@@ -16,6 +16,7 @@ using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Terrain;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
+using SolidGround.Core.Workflow;
 using SolidGround.Revit.Diagnostics;
 using SolidGround.Revit.Dialog;
 using SolidGround.Revit.Elements;
@@ -23,6 +24,7 @@ using SolidGround.Revit.Geometry;
 using SolidGround.Revit.Provenance;
 using SolidGround.Revit.Settings;
 using SolidGround.Revit.Transactions;
+using SolidGround.Revit.Processing;
 using CoreLengthUnit = SolidGround.Core.Units.LengthUnit;
 
 namespace SolidGround.Revit.Commands;
@@ -57,8 +59,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
 {
     private const string DialogTitle = "SolidGround";
 
-    /// <summary>Mirrors <c>SolidGround.Cli.Rasters.RasterSetIo.SourceFileExtension</c>'s value: this project cannot reference the CLI assembly (AGENTS.md architecture rule), so the one literal is duplicated here instead.</summary>
-    private const string DefaultSourceJsonExtension = ".source.json";
+
 
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
@@ -87,6 +88,10 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // docs/architecture/revit-toposolid-creation.md's "Command flow" and
         // docs/architecture/revit-interactive-dialog.md's "Result-code mapping".
         LoadResult loaded = LoadDocumentAndSettings(commandData);
+        if (loaded.Cancelled)
+        {
+            return Result.Cancelled;
+        }
         if (loaded.Document is null || loaded.Settings is null || loaded.Problems.Count > 0)
         {
             ShowProblemList("SolidGround Preflight found a problem.", "Nothing changed. Correct every problem below and run this command again.", loaded.Problems);
@@ -95,7 +100,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
 
         // ==== Stage 0.5: interactive dialog (SolidGround Issue #31, PH3-4) =====================================
         SolidGroundDialogResult? dialogResult = SolidGroundDialogHost.ShowModal(
-            commandData, loaded.Document, loaded.Settings, loaded.VertexToleranceInternal);
+            commandData, loaded.Document, loaded.Settings, loaded.VertexToleranceInternal,
+            (draft, token) => PrepareTerrainAsync(commandData, loaded, draft, token));
         if (dialogResult is null)
         {
             // Operator cancelled (window X button, Esc, or the Cancel button) -- no TaskDialog, they already know.
@@ -107,21 +113,13 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // override"). RevitSettings/TerrainRequestSettings/SimplificationSettings/RevitSharedCoordinatesSettings
         // are all already sealed records with init-only properties, so these `with` expressions are ordinary,
         // already-idiomatic C#.
-        RevitSettings effectiveSettings = loaded.Settings with
-        {
-            Request = loaded.Settings.Request with
-            {
-                OutputUnit = dialogResult.OutputUnit,
-                Simplification = loaded.Settings.Request.Simplification with { PointBudget = dialogResult.PointBudget },
-            },
-            SharedCoordinates = new RevitSharedCoordinatesSettings(dialogResult.WriteSharedCoordinatesIfAbsent),
-        };
+        RevitSettings effectiveSettings = MergeRunSettings(loaded.Settings, dialogResult);
 
         // Re-validate the dialog-merged settings (review fix, SolidGround Issue #31, PH3-4, Stage D): the
         // dialog's own Point Budget step only enforces PointBudget > 0
         // (docs/architecture/revit-interactive-dialog.md's "Settings interaction: prefill, not override"), so a
         // dialog-supplied override could otherwise bypass the 1-50000 bound TerrainRequestSettings.Validate()
-        // already enforces for every settings-file-sourced value (RevitSettingsIo.TryLoad's own call, above, at
+        // already enforces for every settings-file-sourced value (the Stage 0 settings reader above, at
         // Stage 0). Reusing that exact rule here -- rather than duplicating a second literal bound into the
         // dialog/WPF layer -- keeps this a single source of truth and restores the invariant that every
         // TerrainRequestSettings reaching Stage 2 satisfies Validate(), regardless of which of the two paths
@@ -152,14 +150,55 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 "second(s) while SolidGround requests OpenTopography.");
         }
 
-        (ElevationGrid Grid, TerrainProcessingOutcome Outcome) acquisition;
+        PreparedTerrainSnapshot acquisition;
         try
         {
             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(context.Settings.Request.NetworkTimeoutSeconds));
-            acquisition = Task.Run(
-                    () => RunPipelineAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, dialogResult.AddressParcel, cts.Token),
-                    cts.Token)
-                .GetAwaiter().GetResult();
+            // Revit's UnitUtils is host API; convert this scalar before the Core/I/O Task.Run boundary.
+            LinearDistance minimumLegalEdgeLength = LinearDistance.Meters(
+                UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, UnitTypeId.Meters));
+            if (dialogResult.PreparedTerrain is { } prepared)
+            {
+                string currentSignature = ComputePreparationSignature(context, dialogResult.AddressParcel);
+                if (!string.Equals(prepared.InputSignature, currentSignature, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("The ground preview no longer matches the area, source files, settings, credentials, or selected level. Return to the floor reference and load a fresh preview.");
+                }
+                acquisition = prepared;
+            }
+            else
+            {
+                if (dialogResult.FloorReference is not null)
+                {
+                    throw new InvalidOperationException("A floor reference requires a current ground preview. Load the preview and confirm the reference before creating terrain.");
+                }
+                acquisition = Task.Run(
+                        () => TerrainPreparationService.PrepareAsync(context.Settings.Request, context.Wgs84Reference, context.Aoi, dialogResult.AddressParcel, context.Settings.TerrainExtensionMeters,
+                            minimumLegalEdgeLength, cts.Token), cts.Token)
+                    .GetAwaiter().GetResult();
+            }
+            if (dialogResult.FloorReference is { } floorReference)
+            {
+                ValidatePreparedReference(acquisition, floorReference);
+                acquisition = acquisition with
+                {
+                    Outcome = TerrainPlacementReframer.Reframe(acquisition.Outcome, acquisition.Grid, floorReference),
+                };
+            }
+            if (dialogResult.BuildingOutlineContext is { } outlineContext)
+            {
+                TerrainProvenance provenance = acquisition.Outcome.Payload.Provenance;
+                TerrainProvenance contextual = new(provenance.SchemaVersion, provenance.Source,
+                    provenance.HorizontalTransformation, provenance.SourceVerticalReference,
+                    provenance.SourceHorizontalReferenceOrigin, provenance.SourceVerticalReferenceOrigin,
+                    provenance.LocalFrame, provenance.SimplificationRequest, provenance.OriginalPointCount,
+                    provenance.RetainedPointCount, provenance.ElevationRange, provenance.AddressParcel,
+                    provenance.FloorReference, outlineContext);
+                acquisition = acquisition with
+                {
+                    Outcome = acquisition.Outcome with { Payload = new TerrainExportPayload(acquisition.Outcome.Payload.Samples, contextual) },
+                };
+            }
         }
         catch (Exception ex) when (IsAcquisitionFailure(ex))
         {
@@ -179,7 +218,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
             $"{LengthConverter.MetersPerUnit(context.Settings.Request.OutputUnit).ToString("R", CultureInfo.InvariantCulture)} m/unit.");
 
         LocalCoordinateFrame localFrame = acquisition.Outcome.Payload.Provenance.LocalFrame;
-        LocalBoundary rawBoundary = acquisition.Outcome.ClipResult is { } clipResult
+        LocalBoundary rawBoundary = acquisition.Outcome.TerrainExtentPlan is { } extentPlan
+            ? LocalBoundaryFactory.FromPolygonalRegion(extentPlan.TerrainClipRegion, localFrame)
+            : acquisition.Outcome.ClipResult is { } clipResult
             ? LocalBoundaryFactory.FromPolygonalRegion(clipResult.EffectiveRegion, localFrame)
             : LocalBoundaryFactory.FromGridEnvelope(acquisition.Grid, localFrame);
 
@@ -212,6 +253,50 @@ public sealed class CreateToposolidCommand : IExternalCommand
         if (!boundaryValidation.IsValid)
         {
             ShowProblemList("SolidGround could not build a valid boundary.", "Nothing changed. Correct every problem below and run this command again.", boundaryValidation.Problems);
+            return Result.Cancelled;
+        }
+
+        // Identity scanning is deliberately after final payload hashing and before export/transaction, so an
+        // exact repeat cannot overwrite an export or mutate the document before the guard decides.
+        TerrainIdentity terrainIdentity = TerrainRunComposition.BuildIdentity(
+            acquisition.Outcome.Payload, context.Aoi, acquisition.Outcome.TerrainExtentPlan, context.Settings.TerrainExtensionMeters);
+        (IReadOnlyList<ExistingTerrainRecord> V2, IReadOnlyList<string> LegacyV1) existing;
+        try
+        {
+            existing = ExistingTerrainScanner.Scan(context.Document);
+        }
+        catch (ExistingTerrainScanException ex)
+        {
+            ShowSingleCancelledProblem("SolidGround could not safely inspect existing terrain provenance.", ex.Message);
+            return Result.Cancelled;
+        }
+
+        if (acquisition.Projection is { } projection)
+        {
+            AddInLog.Info($"Authoritative grid CRS '{acquisition.Outcome.Payload.Provenance.LocalFrame.ProjectedHorizontalReference.CoordinateReferenceSystem}': convergence={projection.GridConvergenceRadians:R} rad ({(projection.GridConvergenceRadians * 180d / Math.PI):R} deg), pointScale={projection.PointScaleFactor:R}.");
+        }
+
+        if (acquisition.Outcome.TerrainExtentPlan?.Warnings is { Count: > 0 } warnings && !AcknowledgeTerrainWarnings(warnings))
+        {
+            return Result.Cancelled;
+        }
+        ExistingTerrainDecision decision = ExistingTerrainDecision.Decide(
+            terrainIdentity, context.Document.CreationGUID.ToString("D", CultureInfo.InvariantCulture), existing.V2, existing.LegacyV1);
+        if (decision.Kind == ExistingTerrainDecisionKind.RequiresLegacyAcknowledgement)
+        {
+            if (!AcknowledgeLegacyV1Terrain(decision.ElementIds))
+            {
+                return Result.Cancelled;
+            }
+
+            // A legacy acknowledgement only removes the legacy ambiguity for this one run. Re-decide v2
+            // records with an empty legacy list so a matching/copy/stale v2 record still refuses creation.
+            decision = ExistingTerrainDecision.AfterLegacyAcknowledgement(
+                terrainIdentity, context.Document.CreationGUID.ToString("D", CultureInfo.InvariantCulture), existing.V2);
+        }
+        if (decision.Kind != ExistingTerrainDecisionKind.Create)
+        {
+            ShowProblemList("SolidGround refused to create duplicate or ambiguous terrain.", decision.Detail, decision.ElementIds);
             return Result.Cancelled;
         }
 
@@ -264,9 +349,15 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // longer names every reachable run's real AOI type -- context.Aoi always does, on both dialog paths.
         bool isParcelAoi = context.Aoi is ParcelGeometryAoi;
         IList<CurveLoop>? propertyLineProfiles = null;
-        if (isParcelAoi) // a second, independent CurveLoop list -- never `profiles`, already consumed below.
+        if (isParcelAoi) // legal parcel geometry is validated losslessly in Core; never clean it here.
         {
-            propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(boundary, constantZInternal, revitUnit);
+            if (acquisition.Outcome.TerrainExtentPlan is not { } legalPlan)
+            {
+                ShowSingleCancelledProblem("SolidGround could not resolve the legal parcel boundary.", "The terrain pipeline did not return the required legal parcel extent.");
+                return Result.Cancelled;
+            }
+            double legalZInternal = UnitUtils.ConvertToInternalUnits(legalPlan.LegalPlaneZ, revitUnit);
+            propertyLineProfiles = BoundaryGeometryBuilder.BuildProfiles(legalPlan.LegalLocalBoundary, legalZInternal, revitUnit);
             if (!PostCreationVerification.BoundaryIsValidPropertyLine(propertyLineProfiles, out string? propertyLineProblem))
             {
                 ShowSingleCancelledProblem("SolidGround could not build a valid boundary.", propertyLineProblem!);
@@ -279,12 +370,103 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // ==== Stage 5: Transaction (the only stage that mutates Document) ==================================
         return RunTransaction(
             context, acquisition.Outcome, profiles, points, expected, revitUnit, constantZInternal, toleranceInternal,
-            exportDocumentFileName, exportPointsFileName, propertyLineProfiles);
+            exportDocumentFileName, exportPointsFileName, propertyLineProfiles, terrainIdentity, acquisition.Projection);
     }
 
     // -------------------------------------------------------------------------------------------------------
     // Stage 1
     // -------------------------------------------------------------------------------------------------------
+
+    private static RevitSettings MergeRunSettings(RevitSettings defaults, SolidGroundDialogResult choices)
+    {
+        RevitSettings basis = choices.EffectiveSettings ?? defaults;
+        return basis with
+        {
+            Request = basis.Request with
+            {
+                OutputUnit = choices.OutputUnit,
+                Simplification = basis.Request.Simplification with { PointBudget = choices.PointBudget },
+            },
+            SharedCoordinates = new RevitSharedCoordinatesSettings(choices.WriteSharedCoordinatesIfAbsent),
+        };
+    }
+
+    /// <summary>Captures all host values before asynchronous I/O. No transaction or document write occurs.</summary>
+    private static async Task<PreparedTerrainSnapshot> PrepareTerrainAsync(
+        ExternalCommandData commandData, LoadResult loaded, SolidGroundDialogResult draft, CancellationToken token)
+    {
+        RevitSettings settings = MergeRunSettings(loaded.Settings!, draft);
+        IReadOnlyList<string> requestProblems = settings.Request.Validate();
+        if (requestProblems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, requestProblems));
+        DocumentContext? context = RunDocumentPreflight(commandData, loaded.Document!, settings, loaded.SettingsPath,
+            draft, loaded.ShortCurveToleranceInternal, loaded.VertexToleranceInternal, out List<string> problems);
+        if (context is null || problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
+        LinearDistance minimumLegalEdgeLength = LinearDistance.Meters(
+            UnitUtils.ConvertFromInternalUnits(context.ShortCurveToleranceInternal, UnitTypeId.Meters));
+        // Capture SDK values on the owning thread; source-file hashing remains off that thread.
+        Func<string> signatureFactory = CapturePreparationSignature(context, draft.AddressParcel);
+        string signature = await Task.Run(signatureFactory, token);
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(settings.Request.NetworkTimeoutSeconds));
+        PreparedTerrainSnapshot prepared;
+        try
+        {
+            prepared = await Task.Run(
+                () => TerrainPreparationService.PrepareAsync(settings.Request, context.Wgs84Reference, context.Aoi,
+                    draft.AddressParcel, settings.TerrainExtensionMeters, minimumLegalEdgeLength, timeout.Token), timeout.Token);
+        }
+        catch (OperationCanceledException exception) when (!token.IsCancellationRequested)
+        {
+            throw new TimeoutException("Ground preview timed out. Check the connection or increase the network timeout in Settings, then try again.", exception);
+        }
+        catch (OpenTopographyException exception)
+        {
+            // This source guarantees redacted actionable messages; keys/server payloads are never copied.
+            throw new InvalidOperationException(exception.Message + " Open Settings to review the terrain source and session key.", exception);
+        }
+        // Await resumes on the dialog dispatcher; the repeated binding rejects input changes during I/O.
+        token.ThrowIfCancellationRequested();
+        string finalSignature = await Task.Run(CapturePreparationSignature(context, draft.AddressParcel), token);
+        if (!string.Equals(signature, finalSignature, StringComparison.Ordinal))
+            throw new InvalidOperationException("The terrain inputs changed while loading. Load a fresh ground preview.");
+        return prepared with { InputSignature = signature };
+    }
+
+    private static string ComputePreparationSignature(DocumentContext context, AddressParcelProvenance? addressParcel) =>
+        Task.Run(CapturePreparationSignature(context, addressParcel)).GetAwaiter().GetResult();
+
+    private static Func<string> CapturePreparationSignature(DocumentContext context, AddressParcelProvenance? addressParcel)
+    {
+        string documentGuid = context.Document.CreationGUID.ToString("D", CultureInfo.InvariantCulture);
+        TargetProjectLevel level = new(context.Level.Id.Value, context.Level.UniqueId, context.Level.Name, context.Level.ProjectElevation);
+        long typeId = context.ToposolidType.Id.Value;
+        long credentialRevision = SessionApiKeyOverrides.Revision;
+        return () => PreparedTerrainBinding.Compute(context.Settings, context.Aoi, addressParcel, documentGuid,
+            level, typeId, context.ShortCurveToleranceInternal, context.VertexToleranceInternal, credentialRevision);
+    }
+
+    private static void ValidatePreparedReference(PreparedTerrainSnapshot prepared, BuildingFloorReference reference)
+    {
+        if (reference.SourceReference != prepared.Grid.VerticalReference)
+            throw new InvalidOperationException("The chosen floor datum differs from the prepared terrain datum. Review the floor reference.");
+        if (reference.Mode == FloorReferenceMode.EstimatedGradeRise)
+        {
+            GroundPoint point = reference.SelectedGroundPoint ?? throw new InvalidOperationException("The selected ground point is missing.");
+            SolidGround.Core.Geometry.Coordinate2D projected = prepared.Transform.Forward(
+                new SolidGround.Core.Geometry.Coordinate2D(point.Wgs84Longitude, point.Wgs84Latitude));
+            if (projected != point.ProjectedPoint) throw new InvalidOperationException("The selected point does not match the terrain projection.");
+            ElevationGridSample sample = ElevationGridSampler.SampleStrictBilinear(prepared.Grid, projected);
+            if (reference.GroundSample is not { } recorded || sample.Elevation != recorded.Elevation ||
+                !sample.Support.SequenceEqual(recorded.Support))
+                throw new InvalidOperationException("The ground sample no longer matches the prepared terrain. Place the pin again.");
+        }
+        else if (reference.Mode == FloorReferenceMode.ProvisionalGround)
+        {
+            ProvisionalGroundReference ground = TerrainPlacementReframer.ResolveProvisionalGroundReference(prepared.Outcome, prepared.Grid);
+            if (reference.ProvisionalGroundElevation != ground.Elevation || reference.ProvisionalPolicy != ground.Policy)
+                throw new InvalidOperationException("The provisional reference no longer matches the legal terrain cells. Review it again.");
+        }
+    }
 
     private sealed record DocumentContext(
         Document Document,
@@ -311,11 +493,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string SettingsPath,
         List<string> Problems,
         double ShortCurveToleranceInternal,
-        double VertexToleranceInternal);
+        double VertexToleranceInternal,
+        bool Cancelled = false);
 
     /// <summary>
     /// Read-only by construction: the document-null/family-document check, <see cref="RevitSettingsLocator.Resolve"/>,
-    /// <see cref="RevitSettingsIo.EnsureTemplateExists"/>/<see cref="RevitSettingsIo.TryLoad"/>, and the
+    /// settings-reader service, and the
     /// read-once geometry-tolerance read (<see cref="LogAndReadGeometryTolerances"/>) -- moved here, hoisted
     /// earlier than <see cref="RunDocumentPreflight"/>, so <c>ExecuteCore</c>'s Stage 0.5 interactive dialog can
     /// read the loaded settings and <see cref="LoadResult.VertexToleranceInternal"/> before Preflight formally
@@ -347,29 +530,28 @@ public sealed class CreateToposolidCommand : IExternalCommand
         }
 
         string settingsPath = RevitSettingsLocator.Resolve();
-        RevitSettingsIo.EnsureTemplateExists(settingsPath, out bool justCreated, out string? writeError);
-        if (justCreated)
-        {
-            problems.Add($"A starting template was written to '{settingsPath}'. Edit it and run this command again.");
-            return new LoadResult(null, null, settingsPath, problems, 0, 0);
-        }
-
-        if (writeError is not null)
-        {
-            problems.Add(writeError);
-            return new LoadResult(null, null, settingsPath, problems, 0, 0);
-        }
-
-        if (!RevitSettingsIo.TryLoad(settingsPath, out RevitSettings? settings, out string? loadError))
-        {
-            problems.AddRange((loadError ?? "The settings file could not be loaded.").Split(Environment.NewLine));
-            return new LoadResult(null, null, settingsPath, problems, 0, 0);
-        }
-
         if (document is null)
         {
-            // The document problem above already explains why nothing further can run.
-            return new LoadResult(null, settings, settingsPath, problems, 0, 0);
+            return new LoadResult(null, null, settingsPath, problems, 0, 0);
+        }
+        RevitSettings? settings;
+        try
+        {
+            settings = RevitSettingsIo.LoadForUi(owner: null);
+        }
+        catch (UiSettingsRepairRequiredException)
+        {
+            DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, System.Windows.SystemParameters.HighContrast);
+            settings = RevitSettingsIo.Edit(commandData.Application.MainWindowHandle, current: null, palette);
+            if (settings is null)
+            {
+                return new LoadResult(null, null, settingsPath, problems, 0, 0, Cancelled: true);
+            }
+        }
+
+        if (settings is null)
+        {
+            return new LoadResult(null, null, settingsPath, problems, 0, 0, Cancelled: true);
         }
 
         (double shortCurveToleranceInternal, double vertexToleranceInternal) = LogAndReadGeometryTolerances(commandData);
@@ -422,9 +604,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
     {
         problems = [];
 
-        if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && new EnvironmentOpenTopographyApiKeyProvider().GetApiKey() is null)
+        if (settings.Request.Mode == TerrainAcquisitionMode.Fetch && SessionApiKeyOverrides.OpenTopographyProvider().GetApiKey() is null)
         {
-            problems.Add("The OPENTOPOGRAPHY_API_KEY environment variable is not set (or is empty). Set it to a valid OpenTopography API key and restart Revit.");
+            problems.Add("Open Settings, select Sources, and enter or use the masked OpenTopography key for this run. USGS 1 m also requires myOpenTopo academic or enterprise entitlement.");
         }
 
         HorizontalReference wgs84Reference = WellKnownTextReferenceParser.Parse(ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText).Horizontal;
@@ -433,7 +615,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // issue, on the UseSettingsFile path (owner decision 1's refinement -- see this method's own doc
         // comment above and docs/architecture/revit-interactive-dialog.md's "AOI and provenance").
         AreaOfInterest? aoi;
-        if (dialogResult.AoiSource == DialogAoiSource.FindParcel)
+        if (dialogResult.Aoi is not null)
         {
             aoi = dialogResult.Aoi;
         }
@@ -507,6 +689,20 @@ public sealed class CreateToposolidCommand : IExternalCommand
         {
             problems.Add("SolidGround could not find the previously selected Level in this document.");
         }
+        if (dialogResult.FloorReference is { } floorReference)
+        {
+            if (level is not null && (floorReference.TargetLevel.Id != level.Id.Value ||
+                floorReference.TargetLevel.UniqueId != level.UniqueId ||
+                floorReference.TargetLevel.ProjectElevationInternal != level.ProjectElevation))
+                problems.Add("The selected first-floor level changed after the preview. Review the floor reference again.");
+            if (SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal))
+                problems.Add("This project already has shared coordinates. Use original source elevations or an uncoordinated site document; a floor height alone cannot establish its horizontal placement.");
+            if (settings.SharedCoordinates.WriteIfAbsent && floorReference.Mode == FloorReferenceMode.ProvisionalGround)
+                problems.Add("A provisional ground preview cannot establish shared coordinates. Leave the coordinate write off until the floor reference is known or measured.");
+            if (settings.SharedCoordinates.WriteIfAbsent && floorReference.Mode == FloorReferenceMode.EstimatedGradeRise &&
+                !dialogResult.EstimatedSharedCoordinatesAcknowledged)
+                problems.Add("A measured ground-rise reference is an estimate. Acknowledge this before using it to establish shared coordinates.");
+        }
 
         ToposolidType? toposolidType = LevelAndTypeResolver.FindToposolidTypeById(document, dialogResult.ToposolidType.Id);
         if (toposolidType is null)
@@ -533,8 +729,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 problems.Add(
                     "sharedCoordinates.writeIfAbsent is enabled, but this model already appears to have shared " +
                     "coordinates set (a non-zero shared project position or angle, a moved survey point, or more than " +
-                    "one project location). SolidGround will not overwrite existing shared coordinates. Set " +
-                    "sharedCoordinates.writeIfAbsent to false to run without writing shared coordinates.");
+                    "one project location). SolidGround will not overwrite existing shared coordinates. Turn " +
+                    "off the shared-coordinate option on Review to run without writing shared coordinates.");
             }
         }
 
@@ -637,201 +833,25 @@ public sealed class CreateToposolidCommand : IExternalCommand
     // Stage 2
     // -------------------------------------------------------------------------------------------------------
 
-    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunPipelineAsync(
-        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
-        AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
-    {
-        return request.Mode == TerrainAcquisitionMode.Fetch
-            ? await RunFetchPipelineAsync(request, wgs84Reference, aoi, addressParcel, cancellationToken).ConfigureAwait(false)
-            : await RunProcessPipelineAsync(request, aoi, addressParcel, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunFetchPipelineAsync(
-        TerrainRequestSettings request, HorizontalReference wgs84Reference, AreaOfInterest aoi,
-        AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
-    {
-        (Wgs84BoundingBoxAoi fetchEnvelope, _) = ClipRegionFactory.BuildFetchEnvelope(aoi);
-
-        using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(request.NetworkTimeoutSeconds) };
-        OpenTopographyUsgs1mSource source = new(httpClient, new EnvironmentOpenTopographyApiKeyProvider());
-
-        OpenTopographyUsgs1mAcquisition acquisition;
-        try
-        {
-            acquisition = await source.AcquireDetailedAsync(
-                new ElevationSourceRequest(fetchEnvelope), cancellationToken).ConfigureAwait(false);
-        }
-        catch (OpenTopographyException ex)
-        {
-            // This failure-path log line is modeled on
-            // SolidGround.Cli.Commands.FetchCommand.PrintAcquisitionEvidence's "request '<uri>'." line -- but
-            // the CLI only prints that line on a successful acquisition, in --verbose mode (it runs only after
-            // AcquireDetailedAsync returns; CliApplication.RunAsync's own top-level catch clauses for
-            // OpenTopographyAuthorizationException/OpenTopographyException print only ex.Message, never a
-            // request URI, on failure). So before this line existed, neither the add-in's log nor the CLI's
-            // --verbose output recorded which request an acquisition failure belonged to (SolidGround Issue
-            // #15's 2026-09-21 end-to-end evidence, Scenario E, needed the add-in's log plus a separate CLI
-            // cross-check to diagnose that session's HTTP 401). Every OpenTopographyException already carries
-            // its own RedactedRequestUri, redacted through OpenTopographyRedaction before the exception was
-            // constructed (see OpenTopographyException's own doc comment), so logging it here is always safe
-            // -- never the unredacted query string.
-            AddInLog.Info($"Fetch mode acquisition request (failed): '{ex.RedactedRequestUri}'.");
-            throw;
-        }
-
-        // Same idea, on the success path: SolidGround.Cli.Commands.FetchCommand.PrintAcquisitionEvidence reads
-        // this identical acquisition.Evidence.RedactedRequestUri value, in --verbose mode.
-        AddInLog.Info($"Fetch mode acquisition request (succeeded): '{acquisition.Evidence.RedactedRequestUri}'.");
-
-        ElevationGrid grid = (ElevationGrid)acquisition.Acquisition.Data;
-        IHorizontalCoordinateTransform transform = ProjNetHorizontalCoordinateTransformFactory.Create(
-            ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText, acquisition.Evidence.WellKnownText);
-
-        if (transform.Definition.TargetReference != grid.HorizontalReference)
-        {
-            throw new InvalidOperationException(
-                "The fetched grid's horizontal reference does not match the coordinate reference the WGS 84 transform was built from.");
-        }
-
-        ElevationSourceMetadata sourceMetadata = new(
-            acquisition.Acquisition.Source.SourceName,
-            acquisition.Acquisition.Source.DatasetIdentifier,
-            acquisition.Acquisition.Source.CollectionPeriod,
-            acquisition.Acquisition.Source.QualityLevel,
-            acquisition.Acquisition.Source.Attribution);
-        ReferenceOrigins referenceOrigins = new(acquisition.Evidence.HorizontalReferenceOrigin, acquisition.Evidence.VerticalReferenceOrigin);
-
-        TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
-                grid, transform, grid.VerticalReference, referenceOrigins, sourceMetadata, aoi,
-                request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
-                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel)
-            .ConfigureAwait(false);
-
-        return (grid, outcome);
-    }
-
-    private static async Task<(ElevationGrid Grid, TerrainProcessingOutcome Outcome)> RunProcessPipelineAsync(
-        TerrainRequestSettings request, AreaOfInterest aoi, AddressParcelProvenance? addressParcel, CancellationToken cancellationToken)
-    {
-        ProcessInputSettings process = request.Process!;
-        string ascPath = process.Asc;
-        string prjPath = process.Prj ?? Path.ChangeExtension(ascPath, ".prj");
-        string? explicitSourceJsonPath = process.SourceJson;
-        string defaultSourceJsonPath = Path.ChangeExtension(ascPath, DefaultSourceJsonExtension);
-
-        string ascText = ReadTextFile(ascPath);
-        string prjText = ReadTextFile(prjPath);
-
-        RasterSourceSidecar? sidecar = null;
-        if (explicitSourceJsonPath is not null)
-        {
-            sidecar = RasterSourceSidecarIo.Read(ReadBytesFile(explicitSourceJsonPath), explicitSourceJsonPath);
-        }
-        else if (File.Exists(defaultSourceJsonPath))
-        {
-            sidecar = RasterSourceSidecarIo.Read(ReadBytesFile(defaultSourceJsonPath), defaultSourceJsonPath);
-        }
-
-        WellKnownTextReference parsedPrj = WellKnownTextReferenceParser.Parse(prjText);
-        IHorizontalCoordinateTransform transform = ProjNetHorizontalCoordinateTransformFactory.Create(
-            ProjNetHorizontalCoordinateTransformFactory.Wgs84WellKnownText, prjText);
-
-        VerticalReferenceResolution.ResolvedVerticalReference resolvedVertical;
-        try
-        {
-            resolvedVertical = VerticalReferenceResolution.Resolve(process.VerticalDatum, process.VerticalUnit, process.Geoid, sidecar, parsedPrj.Vertical);
-        }
-        catch (FormatException)
-        {
-            // Translated at this one call site (design record §6.2/§0.4 item 8): never Resolve's own
-            // CLI-flavored --vertical-datum/--vertical-unit/--source-json message text (error catalogue row 12).
-            throw new FormatException(
-                "SolidGround could not determine this terrain's vertical reference. Set 'process.verticalDatum' " +
-                "and 'process.verticalUnit', provide a 'process.sourceJson' sidecar, or use a compound .prj with a VERT_CS.");
-        }
-
-        VerticalReference verticalReference = resolvedVertical.Reference;
-
-        ElevationGrid grid;
-        using (StringReader ascReader = new(ascText))
-        {
-            grid = AaiGridParser.Parse(ascReader, transform.Definition.TargetReference, verticalReference);
-        }
-
-        string sourceName = process.SourceName ?? sidecar?.SourceName ?? "local-file";
-        string datasetIdentifier = process.Dataset ?? sidecar?.DatasetIdentifier ?? Path.GetFileNameWithoutExtension(ascPath);
-        CollectionPeriod? collectionPeriod = ParseCollectionPeriod(process) ?? sidecar?.CollectionPeriod;
-        string? qualityLevel = process.QualityLevel ?? sidecar?.QualityLevel;
-        ElevationSourceMetadata sourceMetadata = new(sourceName, datasetIdentifier, collectionPeriod, qualityLevel, sidecar?.Attribution);
-
-        ReferenceOrigins referenceOrigins = new(ReferenceOrigin.Operator, resolvedVertical.Origin);
-
-        TerrainProcessingOutcome outcome = await TerrainProcessingPipeline.RunAsync(
-                grid, transform, verticalReference, referenceOrigins, sourceMetadata, aoi,
-                request.LocalOrigin, request.OutputUnit, request.Simplification.Method, request.Simplification.PointBudget,
-                request.Simplification.CoverageFloorFraction, cancellationToken, addressParcel)
-            .ConfigureAwait(false);
-
-        return (grid, outcome);
-    }
-
-    private static CollectionPeriod? ParseCollectionPeriod(ProcessInputSettings process)
-    {
-        if (process.CollectionStart is not { } startText || process.CollectionEnd is not { } endText)
-        {
-            return null;
-        }
-
-        if (!DateOnly.TryParseExact(startText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly start)
-            || !DateOnly.TryParseExact(endText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly end))
-        {
-            // TerrainRequestSettings.Validate() already rejected this before Stage 1 accepted the run.
-            return null;
-        }
-
-        return new CollectionPeriod(start, end);
-    }
-
-    private static string ReadTextFile(string path)
-    {
-        try
-        {
-            return File.ReadAllText(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new IOException($"Could not read '{path}'.", ex);
-        }
-    }
-
-    private static byte[] ReadBytesFile(string path)
-    {
-        try
-        {
-            return File.ReadAllBytes(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new IOException($"Could not read '{path}'.", ex);
-        }
-    }
-
     private static bool IsAcquisitionFailure(Exception ex) =>
-        ex is OpenTopographyException or FormatException or IOException or OperationCanceledException or InvalidOperationException;
+        ex is OpenTopographyException or FormatException or IOException or OperationCanceledException or InvalidOperationException or ReachabilityProbeException;
 
     private static string AcquisitionFailureHeadline(Exception ex, int networkTimeoutSeconds) => ex switch
     {
         OperationCanceledException =>
             $"The request did not complete within {networkTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} seconds.",
+        ReachabilityProbeException => "SolidGround could not reach OpenTopography before terrain fetch.",
         IOException => "Could not read a configured file.",
         _ => "SolidGround could not acquire terrain data.",
     };
 
     private static string AcquisitionFailureDetail(Exception ex) => ex switch
     {
-        OperationCanceledException => "The acquisition timed out. Increase 'networkTimeoutSeconds' in settings.json, or check network connectivity, and try again.",
+        OperationCanceledException => "The acquisition timed out. Open Settings to increase the network timeout, or check network connectivity, and try again.",
         _ => ex.Message,
     };
+
+
 
     // -------------------------------------------------------------------------------------------------------
     // Stage 5 / 6
@@ -848,7 +868,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
         double toleranceInternal,
         string exportDocumentFileName,
         string exportPointsFileName,
-        IList<CurveLoop>? propertyLineProfiles)
+        IList<CurveLoop>? propertyLineProfiles,
+        TerrainIdentity terrainIdentity,
+        ProjectionCharacteristicsMeasurement? projection)
     {
         Document document = context.Document;
         ToposolidCreationFailureLog failureLog = new();
@@ -973,8 +995,13 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 context, outcome, revitUnit, constantZInternal, toposolid, propertyLine, sharedCoordinatesWritten,
                 exportDocumentFileName, exportPointsFileName);
 
-            ToposolidCreatedHook? postCreationHook = ProvenanceEntityWriter.Attach; // Issue #16.
-            postCreationHook?.Invoke(document, toposolid, outcome.Payload, draft);
+            double coverageFloor = outcome.Payload.Provenance.SimplificationRequest.CoverageFloorFraction
+                ?? throw new ProvenanceAttachmentException("The completed terrain payload did not retain its actual coverage floor fraction.");
+            AddInLog.Info($"V2 provenance coverageFloorFraction={coverageFloor.ToString("R", CultureInfo.InvariantCulture)}, collectionPeriodAvailability={(outcome.Payload.Provenance.Source.CollectionPeriod is null ? "notReportedBySource" : "reported")}.");
+            if (outcome.Payload.Provenance.FloorReference is not null || outcome.Payload.Provenance.BuildingOutline is not null)
+                ProvenanceEntityWriterV3.Attach(document, toposolid, outcome.Payload, terrainIdentity, coverageFloor);
+            else
+                ProvenanceEntityWriterV2.Attach(document, toposolid, outcome.Payload, terrainIdentity, coverageFloor);
 
             TransactionStatus commitStatus = transaction.Commit();
             if (commitStatus != TransactionStatus.Committed)
@@ -1048,7 +1075,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         // while reporting success (writing the placement record, the orphan check, showing the dialog) must
         // never re-derive Result from TransactionStatus.RolledBack/HasEnded() -- the model change is already
         // durable. ReportSuccess is itself defensive (never lets a reporting failure escape) for the same reason.
-        return ReportSuccess(context, draft!, toposolid!);
+        return ReportSuccess(context, draft!, toposolid!, projection, outcome.Payload.Provenance.Source.Attribution);
     }
 
     private static PlacementRecordDraft BuildPlacementDraft(
@@ -1084,7 +1111,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
         PlacementBoundaryPlaneElevationRecord boundaryPlaneElevation = new(
             constantZInternal,
             "minimumRetainedSampleElevation",
-            context.Level.Elevation,
+            context.Level.ProjectElevation,
             "Every boundary CurveLoop vertex shares this one internal-unit Z, the minimum of the retained terrain " +
             "samples' own local elevation (not the resolved Level's Elevation, recorded here only for reference); " +
             "terrain shape comes entirely from the points array.");
@@ -1101,8 +1128,9 @@ public sealed class CreateToposolidCommand : IExternalCommand
         PlacementPointCountsRecord pointCounts = new(
             provenance.OriginalPointCount, provenance.RetainedPointCount, context.Settings.Request.Simplification.PointBudget);
 
-        PlacementExtensibleStorageRecord extensibleStorage = new(
-            ExtensibleStorageProvenanceSchema.SchemaGuidText, ExtensibleStorageProvenanceSchema.CurrentVersion);
+        PlacementExtensibleStorageRecord extensibleStorage = provenance.FloorReference is null && provenance.BuildingOutline is null
+            ? new(ExtensibleStorageProvenanceSchemaV2.SchemaGuidText, ExtensibleStorageProvenanceSchemaV2.CurrentVersion)
+            : new(ExtensibleStorageProvenanceSchemaV3.SchemaGuidText, ExtensibleStorageProvenanceSchemaV3.CurrentVersion);
 
         // SolidGround Issue #30 (PH3-3). PropertyLine: created is always present; ElementId/AreaInternal are
         // null exactly when created is false (every non-parcel-AOI run, and structurally the only reachable
@@ -1166,7 +1194,8 @@ public sealed class CreateToposolidCommand : IExternalCommand
             pointCounts,
             extensibleStorage,
             propertyLineRecord,
-            sharedCoordinatesWriteRecord);
+            sharedCoordinatesWriteRecord,
+            provenance.FloorReference);
     }
 
     private static PlacementPointRecord ToPointRecord(XYZ point) => new(point.X, point.Y, point.Z);
@@ -1187,7 +1216,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
     /// derive a Cancelled/Failed result for a run that actually succeeded (error catalogue row 22's
     /// principle, generalized to every post-commit step, not only the placement-record write).
     /// </summary>
-    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid)
+    private static Result ReportSuccess(DocumentContext context, PlacementRecordDraft draft, Toposolid toposolid, ProjectionCharacteristicsMeasurement? projection, string? sourceAttribution)
     {
         long elementId = toposolid.Id.Value;
 
@@ -1251,6 +1280,12 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 $"ToposolidType: {context.ToposolidType.Name}",
                 $"Points retained: {draft.PointCounts.Retained.ToString(CultureInfo.InvariantCulture)} of {draft.PointCounts.Original.ToString(CultureInfo.InvariantCulture)} (budget {draft.PointCounts.Budget.ToString(CultureInfo.InvariantCulture)})",
                 propertyLineStatement,
+                sourceAttribution is not null
+                    ? $"Elevation source attribution: {sourceAttribution}"
+                    : "Elevation source attribution was not supplied in the local source metadata.",
+                projection is { } characteristics
+                    ? $"Authoritative grid: convergence {characteristics.GridConvergenceRadians:R} rad ({(characteristics.GridConvergenceRadians * 180d / Math.PI):R} deg); point scale {characteristics.PointScaleFactor:R}."
+                    : "Authoritative grid projection characteristics were unavailable (see log).",
                 $"Export bundle: {Path.Combine(context.Settings.Request.Output.Directory, draft.ExportDocument)}",
                 placementPath is not null ? $"Placement record: {placementPath}" : "Placement record: could not be written (see log).",
                 $"Log directory: {AddInLog.LogDirectory ?? "(unavailable)"}",
@@ -1261,12 +1296,7 @@ public sealed class CreateToposolidCommand : IExternalCommand
                 "SolidGround is a site-form tool, not a survey instrument. " + draft.SharedCoordinatesStatement);
 
             AddInLog.Info("Showing success dialog.");
-            TaskDialog dialog = new(DialogTitle)
-            {
-                MainInstruction = "SolidGround created the toposolid.",
-                MainContent = body,
-            };
-            dialog.Show();
+            CreationCompletionPresenter.Show(context.Document, toposolid.Id, body, context.Settings.Request.Output.Directory);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -1285,11 +1315,49 @@ public sealed class CreateToposolidCommand : IExternalCommand
         string body = ProblemReportDialog.BuildRejectionBody(bodyHeadline, problems, AddInLog.LogDirectory);
         AddInLog.Info($"Showing rejection dialog: {mainInstruction}");
         TaskDialog dialog = new(DialogTitle) { MainInstruction = mainInstruction, MainContent = body };
+        if (problems.Any(problem => problem.Contains("OpenTopography", StringComparison.OrdinalIgnoreCase)
+            || problem.Contains("OPENTOPOGRAPHY_API_KEY", StringComparison.Ordinal)))
+        {
+            dialog.FooterText = "<a href=\"https://portal.opentopography.org/\">Request an API key through myOpenTopo</a>. " +
+                "USGS 1 m requires academic authorization or enterprise access.";
+        }
         dialog.Show();
     }
 
     private static void ShowSingleCancelledProblem(string mainInstruction, string detail) =>
         ShowProblemList(mainInstruction, "Nothing changed. Correct the problem below and run this command again.", [detail]);
+
+    private static bool AcknowledgeTerrainWarnings(IReadOnlyList<TerrainExtentWarning> warnings)
+    {
+        string text = string.Join(Environment.NewLine, warnings.Select(warning => warning.Kind switch
+        {
+            TerrainExtentWarningKind.LegalParcelHasMultiplePolygons => $"The legal parcel has {warning.Count} polygon(s).",
+            TerrainExtentWarningKind.LegalParcelHasHoles => $"The legal parcel has {warning.Count} hole(s).",
+            TerrainExtentWarningKind.TerrainMarginChangesTopology => $"The terrain extension changed topology in {warning.Count} place(s).",
+            TerrainExtentWarningKind.LegalParcelContainsNoData => $"The legal parcel contains {warning.Count} NODATA cell(s).",
+            TerrainExtentWarningKind.TerrainExtentContainsNoData => $"The terrain extent contains {warning.Count} NODATA cell(s).",
+            _ => $"Terrain extent warning ({warning.Count}).",
+        }));
+        TaskDialogResult result = TaskDialog.Show(DialogTitle, text + Environment.NewLine + Environment.NewLine + "Continue this run?",
+            TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.Cancel, TaskDialogResult.Cancel);
+        return result == TaskDialogResult.Yes;
+    }
+
+    private static bool AcknowledgeLegacyV1Terrain(IReadOnlyList<string> legacyElementIds)
+    {
+        string ids = string.Join(", ", legacyElementIds.Take(ProblemReportDialog.MaxInlineProblems));
+        string omitted = legacyElementIds.Count > ProblemReportDialog.MaxInlineProblems
+            ? $" (and {legacyElementIds.Count - ProblemReportDialog.MaxInlineProblems} more; see the log)"
+            : string.Empty;
+        TaskDialogResult result = TaskDialog.Show(
+            DialogTitle,
+            "Existing SolidGround v1 terrain cannot verify this run's identity or physical content. " +
+            $"Element(s): {ids}{omitted}. Creating another terrain may duplicate existing terrain. " +
+            "Acknowledge this risk for this run only?",
+            TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.Cancel,
+            TaskDialogResult.Cancel);
+        return result == TaskDialogResult.Yes;
+    }
 
     private static void ShowSingleFailed(string mainInstruction)
     {

@@ -164,6 +164,27 @@ public sealed class PersonalInformationGuardTests
     // ------------------------------------------------------------------------------------------------
 
     [Fact]
+    public void WorktreeGitPointerIsExcludedButOrdinaryFilesRemainCandidates()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "solidground-privacy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, ".git"), "gitdir: synthetic-private-worktree-metadata");
+            File.WriteAllText(Path.Combine(root, "ordinary.txt"), "public project content");
+            File.WriteAllText(Path.Combine(root, ".gitkeep"), "public project content");
+
+            string[] candidates = EnumerateCandidateTextFiles(root)
+                .Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToArray()!;
+            Assert.Equal([".gitkeep", "ordinary.txt"], candidates);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void CommittedTrackedFilesContainNoPersonalInformationShapes()
     {
         string repositoryRoot = FindRepositoryRoot();
@@ -438,6 +459,13 @@ public sealed class PersonalInformationGuardTests
 
     private static bool IsSkippedFileName(string fileName)
     {
+        // Linked worktrees use a .git file instead of a directory. Both are local Git metadata,
+        // never project content; keep ordinary names such as .gitkeep in the sweep.
+        if (string.Equals(fileName, ".git", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         // This file itself intentionally contains synthetic bad-shaped strings, in the string literals
         // exercising the detectors above; it must never be a candidate for its own sweep.
         if (string.Equals(fileName, "PersonalInformationGuardTests.cs", StringComparison.Ordinal))

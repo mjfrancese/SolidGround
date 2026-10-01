@@ -1,3 +1,4 @@
+using NetTopologySuite.Geometries;
 using SolidGround.Core.Aois;
 using SolidGround.Core.Geometry;
 using SolidGround.Core.Metadata;
@@ -19,6 +20,15 @@ public sealed class LocalOriginFactoryTests
     // LocalOriginSnapping's flooring cannot change either expected value -- letting the Southwest/Centroid
     // assertions below be exact equality rather than an approximate/floored comparison.
     private static readonly ElevationGrid TestGrid = BuildGrid(rowCount: 4, columnCount: 4, cellSize: 2d, anchor: new Coordinate2D(10d, 20d));
+
+    [Fact]
+    public void LocalOriginKindPreservesThePersistedValuesAndAppendsAreaCentroid()
+    {
+        Assert.Equal(0, (int)LocalOriginKind.Southwest);
+        Assert.Equal(1, (int)LocalOriginKind.Centroid);
+        Assert.Equal(2, (int)LocalOriginKind.Explicit);
+        Assert.Equal(3, (int)LocalOriginKind.AreaCentroid);
+    }
 
     [Fact]
     public void ComputeOriginForSouthwestReturnsTheClippedGridsMinimumCorner()
@@ -44,6 +54,77 @@ public sealed class LocalOriginFactoryTests
         Assert.Equal((envelope.MinX + envelope.MaxX) / 2d, origin.X);
         Assert.Equal((envelope.MinY + envelope.MaxY) / 2d, origin.Y);
         Assert.Equal(0d, origin.Elevation);
+    }
+
+    [Fact]
+    public void ComputeOriginForAreaCentroidReturnsTheExactUnsnappedGridEnvelopeMidpoint()
+    {
+        ElevationGrid grid = BuildGrid(rowCount: 1, columnCount: 1, cellSize: 1d, anchor: new Coordinate2D(10.2d, 20.4d));
+        LocalOriginRequest selection = new(LocalOriginKind.AreaCentroid, 0d, 0d, 0d);
+
+        Coordinate3D origin = LocalOriginFactory.ComputeOrigin(selection, grid, ProjectedReference(), VerticalReference());
+
+        Assert.Equal(new Coordinate3D(10.7d, 20.9d, 0d), origin);
+    }
+
+    [Fact]
+    public void ComputeOriginForAreaCentroidUsesTheUnsnappedAreaCentroidOfAnAsymmetricConcaveLegalParcel()
+    {
+        GeometryFactory geometryFactory = new();
+        PolygonalRegion legalParcel = PolygonalRegion.FromGeometry(
+            geometryFactory.CreatePolygon(
+            [
+                new Coordinate(0d, 0d), new Coordinate(6d, 0d), new Coordinate(6d, 2d), new Coordinate(2d, 2d),
+                new Coordinate(2d, 6d), new Coordinate(0d, 6d), new Coordinate(0d, 0d),
+            ]),
+            ProjectedReference());
+        LocalOriginRequest selection = new(LocalOriginKind.AreaCentroid, 0d, 0d, 0d);
+
+        Coordinate3D origin = LocalOriginFactory.ComputeOrigin(selection, legalParcel, ProjectedReference(), VerticalReference());
+
+        Assert.Equal(new Coordinate3D(2.2d, 2.2d, 0d), origin);
+    }
+
+    [Fact]
+    public void ComputeOriginForAreaCentroidWeightsHolesAndMultipartLegalParcelArea()
+    {
+        GeometryFactory geometryFactory = new();
+        Polygon first = geometryFactory.CreatePolygon(
+            geometryFactory.CreateLinearRing(
+            [
+                new Coordinate(0d, 0d), new Coordinate(10d, 0d), new Coordinate(10d, 10d), new Coordinate(0d, 10d), new Coordinate(0d, 0d),
+            ]),
+            [geometryFactory.CreateLinearRing(
+            [
+                new Coordinate(1d, 1d), new Coordinate(3d, 1d), new Coordinate(3d, 3d), new Coordinate(1d, 3d), new Coordinate(1d, 1d),
+            ])]);
+        Polygon second = geometryFactory.CreatePolygon(
+        [
+            new Coordinate(20d, 0d), new Coordinate(22d, 0d), new Coordinate(22d, 2d), new Coordinate(20d, 2d), new Coordinate(20d, 0d),
+        ]);
+        PolygonalRegion legalParcel = PolygonalRegion.FromGeometry(
+            geometryFactory.CreateMultiPolygon([first, second]), ProjectedReference());
+
+        Coordinate3D origin = LocalOriginFactory.ComputeOrigin(
+            new LocalOriginRequest(LocalOriginKind.AreaCentroid, 0d, 0d, 0d), legalParcel, ProjectedReference(), VerticalReference());
+
+        Assert.Equal(new Coordinate3D(5.76d, 4.96d, 0d), origin);
+    }
+
+    [Fact]
+    public void ComputeOriginForAreaCentroidChecksEveryLegalOverloadArgumentBeforeReadingTheCentroid()
+    {
+        PolygonalRegion legalParcel = PolygonalRegion.FromGeometry(
+            new GeometryFactory().CreatePolygon(
+            [
+                new Coordinate(0d, 0d), new Coordinate(1d, 0d), new Coordinate(1d, 1d), new Coordinate(0d, 1d), new Coordinate(0d, 0d),
+            ]),
+            ProjectedReference());
+        LocalOriginRequest selection = new(LocalOriginKind.AreaCentroid, 0d, 0d, 0d);
+
+        Assert.Throws<ArgumentNullException>(() => LocalOriginFactory.ComputeOrigin(null!, legalParcel, ProjectedReference(), VerticalReference()));
+        Assert.Throws<ArgumentNullException>(() => LocalOriginFactory.ComputeOrigin(selection, legalParcel, null!, VerticalReference()));
+        Assert.Throws<ArgumentNullException>(() => LocalOriginFactory.ComputeOrigin(selection, legalParcel, ProjectedReference(), null!));
     }
 
     [Fact]

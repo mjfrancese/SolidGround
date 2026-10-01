@@ -304,6 +304,7 @@ public static class CliApplication
         OptionTable.Verify => VerifyCommand.RunAsync(invocation, host, cancellationToken),
         OptionTable.Geocode => GeocodeCommand.RunAsync(invocation, host, cancellationToken),
         OptionTable.Parcel => ParcelCommand.RunAsync(invocation, host, cancellationToken),
+        OptionTable.Score => ScoreCommand.RunAsync(invocation, host, cancellationToken),
         _ => throw new InvalidOperationException($"Unhandled verb '{invocation.Verb}'."),
     };
 

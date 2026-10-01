@@ -20,12 +20,12 @@ package reference or a new `AreaOfInterestKind`: a resolved parcel converts into
 
 ## Purpose and boundaries
 
-This design covers the whole `SolidGround.Cli` executable: argument parsing, the six commands, the
+This design covers the whole `SolidGround.Cli` executable: argument parsing, the seven commands, the
 processing pipeline that binds them to Core, raster-set persistence, OpenTopography key resolution, and
 diagnostics.
 
 - **What this adds.** The complete CLI surface: `Program.cs`, the public `CliApplication.RunAsync` entry
-  point, the option table and parser, the six commands, the processing pipeline `process` and `run` both
+  point, the option table and parser, the seven commands, the processing pipeline `process` and `run` both
   call, the `.source.json` raster-set sidecar and its reader and writer, the OpenTopography API key
   resolution chain, and the CLI's own exit-code and diagnostics conventions.
 - **What this does not change.** Every Core contract the earlier design notes describe stays exactly as
@@ -47,6 +47,7 @@ of the six duplicates domain logic Core already owns.
 | `fetch` | Online | Acquires a DEM from OpenTopography for exactly one AOI and writes a raster set (`*.asc` plus `*.prj` plus `*.source.json`) to `--output`. It performs no clipping, no local-origin placement, and no simplification. |
 | `run` | Online | Acquires exactly as `fetch`, then processes the acquired grid exactly as `process` does, writing the export bundle in one invocation. `--save-raster` additionally writes the raster set beside the bundle. |
 | `verify` | Offline | Reads a written export bundle strictly, prints its provenance summary, and confirms that reconstructing every sample's source coordinate and converting it back is bit-exact. |
+| `score` | Offline | Scores a SolidGround bundle or declared external `x,y,z` CSV against a local full-resolution reference grid; see `comparison-benchmark.md` for the coverage and declaration contract. |
 | `geocode` | Online | Resolves a street address to ranked, approximate WGS 84 coordinate candidates (Census by default, or Geocodio/Esri opt-in) and prints deterministic JSON. |
 | `parcel` | Online, unless `--offline` with `--source local-file` | Resolves a parcel boundary from a WGS 84 point or a geocoded address, against a county registry (with an automatic or `--geoid`-overridden GEOID) or a local file, and prints deterministic JSON. |
 | `help [verb]`, `--help`/`-h`, `--version` | Offline | Prints command help (the whole table, or one command's own options) or the CLI's version, and exits without touching any file. |

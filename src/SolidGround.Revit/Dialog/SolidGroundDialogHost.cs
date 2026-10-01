@@ -1,14 +1,21 @@
 using System.Windows.Interop;
+using System.Windows;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using SolidGround.Core.Hosting;
+using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Sources.CountyParcels;
+using SolidGround.Core.Sources.Census;
+using SolidGround.Core.Sources.Esri;
+using SolidGround.Core.Sources.Geocodio;
 using SolidGround.Core.Sources.LocalParcelFile;
 using SolidGround.Revit.Diagnostics;
 using SolidGround.Revit.Elements;
 using SolidGround.Revit.Settings;
 using SolidGround.Revit.Transactions;
+using SolidGround.Revit.Processing;
+using SolidGround.Core.Sources.BuildingOutlines;
 
 namespace SolidGround.Revit.Dialog;
 
@@ -33,7 +40,8 @@ internal static class SolidGroundDialogHost
     /// commits to a "the caller already reads this once" contract.
     /// </summary>
     internal static SolidGroundDialogResult? ShowModal(
-        ExternalCommandData commandData, Document document, RevitSettings settings, double vertexToleranceInternal)
+        ExternalCommandData commandData, Document document, RevitSettings settings, double vertexToleranceInternal,
+        Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? prepareTerrain = null)
     {
         ArgumentNullException.ThrowIfNull(commandData);
         ArgumentNullException.ThrowIfNull(document);
@@ -42,45 +50,113 @@ internal static class SolidGroundDialogHost
         // One shared HttpClient instance lives for the dialog's lifetime, disposed on close (design record
         // "Threading and the network bridge") -- the same HttpClient backs both the geocoder and any
         // county-registry parcel source, exactly as Stage 2 acquisition's own fetch-mode HttpClient is timed.
-        using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(settings.Request.NetworkTimeoutSeconds) };
-        IAddressGeocoder geocoder = AddressGeocoderFactory.Create(
-            new AddressGeocoderSettings { Provider = settings.AddressAndParcel.GeocoderProvider }, httpClient);
-        IParcelBoundarySource? parcelSource = BuildParcelSource(settings.AddressAndParcel, httpClient);
-
+        // Each lookup applies its snapshot's configured timeout through a linked CancellationTokenSource.
+        // Keep the shared client unbounded so a Settings edit can change that timeout before the next lookup.
+        using HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
+        using HttpClient outlineClient = MicrosoftGlobalMlBuildingOutlineSource.CreateHttpClient();
         (RevitIniToposolidThresholds.Thresholds thresholds, string revitIniPath) = ReadRevitIniThresholds(commandData);
+        DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
 
-        // A settings-file override wins when configured (already validated finite/positive at decode time,
-        // RevitSettingsIo.ParseAddressAndParcel); otherwise Core's own documented default (SolidGround Issue
-        // #31 follow-up's nearby-parcel fallback tier).
-        double nearbySearchRadiusMeters = settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters;
-
-        SolidGroundDialogInputs inputs = new(
-            geocoder,
-            settings.AddressAndParcel.GeocoderProvider,
-            parcelSource,
+        SolidGroundDialog? dialogOwner = null;
+        SolidGroundDialogInputs inputs = BuildInputs(
+            settings,
+            httpClient,
             LevelAndTypeResolver.ListLevels(document),
             LevelAndTypeResolver.ListToposolidTypes(document),
+            SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal),
+            thresholds,
+            revitIniPath,
+            current => RevitSettingsIo.Edit(dialogOwner, current, palette),
+            prepareTerrain,
+            new MicrosoftGlobalMlBuildingOutlineSource(outlineClient));
+
+        SolidGroundDialogViewModel viewModel = new(inputs);
+        // Revit theme access remains in the Revit-only host. The palette-injected dialog constructor is kept
+        // free of UIThemeManager so the local WPF test lane can render it without loading RevitAPIUI.
+        dialogOwner = new SolidGroundDialog(viewModel, palette);
+        _ = new WindowInteropHelper(dialogOwner) { Owner = commandData.Application.MainWindowHandle };
+
+        AddInLog.Info("Showing the SolidGround interactive dialog.");
+        dialogOwner.ShowDialog();
+
+        return viewModel.Result;
+    }
+
+    /// <summary>
+    /// Builds the dialog's immutable preference input and the initial immutable lookup-services snapshot. The
+    /// callback deliberately creates a fresh snapshot from the post-save settings instead of retaining the
+    /// source objects assembled at dialog-open time: configuring a previously missing county registry, changing
+    /// provider, or entering a session-only keyed-provider value must work without closing and reopening the
+    /// guided dialog. <see cref="SessionApiKeyOverrides"/> stays process/session scoped and is never written to
+    /// <paramref name="settings"/>.
+    /// </summary>
+    private static SolidGroundDialogInputs BuildInputs(
+        RevitSettings settings,
+        HttpClient httpClient,
+        IReadOnlyList<NamedElevationCandidate> levelCandidates,
+        IReadOnlyList<NamedCandidate> toposolidTypeCandidates,
+        bool documentAlreadyHasSharedCoordinates,
+        RevitIniToposolidThresholds.Thresholds thresholds,
+        string revitIniPath,
+        Func<RevitSettings, RevitSettings?> editSettings,
+        Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? prepareTerrain,
+        IBuildingOutlineSource? buildingOutlineSource)
+    {
+        SolidGroundDialogLookupServices initialServices = BuildLookupServices(settings, httpClient);
+        return new SolidGroundDialogInputs(
+            initialServices.Geocoder,
+            initialServices.GeocoderProvider,
+            initialServices.ParcelSource,
+            levelCandidates,
+            toposolidTypeCandidates,
             settings.Target.LevelName,
             settings.Target.ToposolidTypeName,
             settings.Request.OutputUnit,
             settings.Request.Simplification.PointBudget,
             settings.SharedCoordinates.WriteIfAbsent,
-            SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal),
+            documentAlreadyHasSharedCoordinates,
             thresholds,
             revitIniPath,
             settings.Request.NetworkTimeoutSeconds,
             settings.Request.AreaOfInterest,
+            initialServices.NearbySearchRadiusMeters,
+            settings.Request.Mode,
+            InitialCredentialRevision: initialServices.CredentialRevision,
+            Settings: settings,
+            EditSettings: editSettings,
+            ReconfigureLookupServices: updated => BuildLookupServices(updated, httpClient),
+            PrepareTerrain: prepareTerrain,
+            BuildingOutlineSource: buildingOutlineSource);
+    }
+
+    /// <summary>
+    /// Creates one lookup snapshot from the actual post-save settings. Keyed geocoders intentionally use the
+    /// Revit session override providers, whose current value wins over an environment value without persisting
+    /// the key. County authorization is enforced by <see cref="BuildParcelSource"/> for every snapshot.
+    /// </summary>
+    private static SolidGroundDialogLookupServices BuildLookupServices(RevitSettings settings, HttpClient httpClient)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(httpClient);
+
+        IAddressGeocoder geocoder = settings.AddressAndParcel.GeocoderProvider switch
+        {
+            AddressGeocoderProvider.Census => new CensusGeocoder(httpClient),
+            AddressGeocoderProvider.Geocodio => new GeocodioGeocoder(httpClient, SessionApiKeyOverrides.GeocodioProvider()),
+            AddressGeocoderProvider.Esri => new EsriGeocoder(httpClient, SessionApiKeyOverrides.EsriProvider()),
+            _ => throw new ArgumentOutOfRangeException(nameof(settings), settings.AddressAndParcel.GeocoderProvider, "Unsupported address geocoder provider."),
+        };
+
+        // A settings-file override wins when configured (already validated finite/positive at decode time,
+        // RevitSettingsIo.ParseAddressAndParcel); otherwise Core's documented default applies.
+        double nearbySearchRadiusMeters = settings.AddressAndParcel.NearbySearchRadiusMeters ?? NearbyParcelBoundaryFinder.DefaultRadiusMeters;
+        return new SolidGroundDialogLookupServices(
+            geocoder,
+            settings.AddressAndParcel.GeocoderProvider,
+            BuildParcelSource(settings.AddressAndParcel, httpClient),
             nearbySearchRadiusMeters,
-            settings.Request.Mode);
-
-        SolidGroundDialogViewModel viewModel = new(inputs);
-        SolidGroundDialog dialog = new(viewModel);
-        _ = new WindowInteropHelper(dialog) { Owner = commandData.Application.MainWindowHandle };
-
-        AddInLog.Info("Showing the SolidGround interactive dialog.");
-        dialog.ShowDialog();
-
-        return viewModel.Result;
+            settings.Request.NetworkTimeoutSeconds,
+            SessionApiKeyOverrides.Revision);
     }
 
     /// <summary>
@@ -103,6 +179,10 @@ internal static class SolidGroundDialogHost
     {
         if (!string.IsNullOrWhiteSpace(settings.CountyRegistryPath))
         {
+            if (!settings.CountyServiceAuthorizedUseAcknowledged)
+            {
+                return new FailedParcelSource("County parcel service use has not been acknowledged. Open Settings, confirm you are authorized to use this service, and save before searching.");
+            }
             try
             {
                 CountyParcelRegistry registry = CountyParcelRegistry.Load(settings.CountyRegistryPath);
@@ -117,12 +197,18 @@ internal static class SolidGroundDialogHost
 
         if (!string.IsNullOrWhiteSpace(settings.LocalParcelFilePath))
         {
+            if (string.IsNullOrWhiteSpace(settings.LocalParcelFileSourceLabel) ||
+                string.IsNullOrWhiteSpace(settings.LocalParcelFileLicenseDisclaimerText))
+            {
+                return new FailedParcelSource(
+                    "The local parcel source requires its actual source label and license/disclaimer text. Open Settings, provide both values, and save before searching.");
+            }
+
             return new LocalParcelFileSource(new LocalParcelFileOptions
             {
                 Path = settings.LocalParcelFilePath,
-                SourceLabel = settings.LocalParcelFileSourceLabel ?? "Local parcel file",
-                LicenseDisclaimerText = settings.LocalParcelFileLicenseDisclaimerText
-                    ?? "No license/disclaimer text was configured for this local parcel file.",
+                SourceLabel = settings.LocalParcelFileSourceLabel,
+                LicenseDisclaimerText = settings.LocalParcelFileLicenseDisclaimerText,
             });
         }
 
@@ -130,9 +216,8 @@ internal static class SolidGroundDialogHost
     }
 
     /// <summary>
-    /// A deferred stand-in <see cref="IParcelBoundarySource"/>, returned only when
-    /// <see cref="CountyParcelRegistry.Load"/> fails inside <see cref="BuildParcelSource"/> (review finding,
-    /// major, fixed). Carries the captured failure message and raises it as an
+    /// A deferred stand-in <see cref="IParcelBoundarySource"/> for an invalid county registry or incomplete
+    /// local-file provenance. Carries the captured failure message and raises it as an
     /// <see cref="AutoGeoidCountyParcelSourceException"/> -- a <see cref="ParcelBoundarySourceException"/>
     /// subtype -- the first (and every) time <see cref="FindAsync"/> is actually called, so
     /// <see cref="SolidGroundDialogViewModel.FindParcel"/>'s existing, unchanged

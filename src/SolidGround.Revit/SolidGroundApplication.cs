@@ -3,6 +3,7 @@ using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.UI;
 using SolidGround.Revit.Commands;
 using SolidGround.Revit.Diagnostics;
+using SolidGround.Revit.Settings;
 
 namespace SolidGround.Revit;
 
@@ -33,19 +34,19 @@ public sealed class SolidGroundApplication : IExternalApplication
     private const string TabName = "SolidGround";
     private const string PanelName = "SolidGround";
     private const string CommandName = "CreateToposolidCommand";
+    private const string SettingsCommandName = "SettingsCommand";
     private const string SmallIconResourceName = "SolidGround.Revit.Resources.SolidGround.16.png";
     private const string LargeIconResourceName = "SolidGround.Revit.Resources.SolidGround.32.png";
 
     private const string ButtonToolTip =
-        "Create a native Revit toposolid from a settings-file-configured area of interest, using either a live OpenTopography fetch or a local raster.";
+        "Find a parcel and create a native Revit toposolid using live USGS elevation or a local raster.";
+
+    private const string SettingsToolTip = "Set SolidGround terrain, source, export, and advanced preferences without modifying this Revit document.";
 
     private const string ButtonLongDescription =
-        "Reads %ProgramData%\\SolidGround\\Revit\\settings.json to acquire USGS 1-meter bare-earth elevation " +
-        "(live from OpenTopography, or from a local AAIGrid .asc/.prj pair), clips it to the configured area " +
-        "of interest, simplifies it to the configured point budget, and creates one native Revit Toposolid " +
-        "inside a single transaction that is provably unchanged on any rejected path. The OPENTOPOGRAPHY_API_KEY " +
-        "environment variable's value is never read, displayed, or logged. SolidGround is a site-form tool, not " +
-        "a survey instrument, and never claims suitability for foundation-perimeter grading.";
+        "Enter an address or coordinates, confirm the parcel, and create native Revit terrain. " +
+        "Use Settings for elevation access, parcel sources, units, terrain extension, and export preferences. " +
+        "SolidGround is a site-form tool, not a survey instrument.";
 
     public Result OnStartup(UIControlledApplication application)
     {
@@ -68,6 +69,7 @@ public sealed class SolidGroundApplication : IExternalApplication
 
     public Result OnShutdown(UIControlledApplication application)
     {
+        SessionApiKeyOverrides.ClearAll();
         AddInLog.Shutdown();
         return Result.Succeeded;
     }
@@ -121,6 +123,18 @@ public sealed class SolidGroundApplication : IExternalApplication
         };
 
         panel.AddItem(buttonData);
+        PushButtonData settingsButton = new(
+            SettingsCommandName,
+            "Settings",
+            assemblyPath,
+            typeof(SettingsCommand).FullName!)
+        {
+            ToolTip = SettingsToolTip,
+            LongDescription = "Choose terrain preferences, configure an elevation or parcel source, and manage keys for this Revit session. Save settings to use these preferences on future runs.",
+            Image = LoadIcon(SmallIconResourceName),
+            LargeImage = LoadIcon(LargeIconResourceName),
+        };
+        panel.AddItem(settingsButton);
     }
 
     /// <summary>

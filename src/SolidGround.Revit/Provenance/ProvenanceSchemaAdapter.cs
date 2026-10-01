@@ -166,6 +166,8 @@ internal static class ProvenanceSchemaAdapter
     /// fail-loud precedent a related internal project adopted after its own experience trusting an
     /// unvalidated predecessor read).
     /// </summary>
+    internal static void RequireSchema(Schema schema) => RequireExactSchema(schema);
+
     private static void RequireExactSchema(Schema schema)
     {
         string guidText = ExtensibleStorageProvenanceSchema.SchemaGuidText;

@@ -69,6 +69,9 @@ public static class PlacementRecordRenderer
             writer.WritePropertyName("sharedCoordinatesWrite");
             WriteSharedCoordinatesWrite(writer, record.SharedCoordinatesWrite);
 
+            writer.WritePropertyName("floorReference");
+            WriteFloorReference(writer, record.FloorReference);
+
             writer.WriteEndObject();
         }
 
@@ -214,5 +217,16 @@ public static class PlacementRecordRenderer
         if (sharedCoordinatesWrite.Verified is { } verified) { writer.WriteBoolean("verified", verified); } else { writer.WriteNull("verified"); }
 
         writer.WriteEndObject();
+    }
+
+    private static void WriteFloorReference(Utf8JsonWriter writer, BuildingFloorReference? floorReference)
+    {
+        if (floorReference is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        BuildingFloorReferenceJson.Write(writer, floorReference);
     }
 }

@@ -126,6 +126,7 @@ public sealed class ContractModelTests
         ElevationSourceMetadata metadata = new("OpenTopography", "USGS1m", period, "QL2");
 
         Assert.Equal(period, metadata.CollectionPeriod);
+        Assert.Equal(CollectionPeriodAvailability.Reported, metadata.CollectionPeriodAvailability);
         Assert.Throws<ArgumentException>(() => new CollectionPeriod(new DateOnly(2017, 2, 27), new DateOnly(2017, 2, 17)));
         Assert.Throws<ArgumentException>(() => new ElevationSourceMetadata("source", "dataset", period, " "));
     }
@@ -136,6 +137,7 @@ public sealed class ContractModelTests
         ElevationSourceMetadata metadata = new("OpenTopography", "USGS1m", null, null);
 
         Assert.Null(metadata.CollectionPeriod);
+        Assert.Equal(CollectionPeriodAvailability.NotReportedBySource, metadata.CollectionPeriodAvailability);
         Assert.Null(metadata.QualityLevel);
 
         ElevationSourceMetadata defaulted = new("OpenTopography", "USGS1m");

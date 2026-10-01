@@ -1,6 +1,7 @@
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.BuildingOutlines;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
@@ -18,8 +19,11 @@ public sealed record TerrainProvenance
     /// Version 3 (SolidGround Issue #33) added <see cref="AddressParcel"/>; see "Export document manifest,
     /// schema version 3". Version 4 (SolidGround Issue #35) added
     /// <see cref="ElevationSourceMetadata.Attribution"/>; see "Export document manifest, schema version 4".
+    /// Version 5 (SolidGround Issue #47) added collection-period availability and coverage-floor provenance.
+    /// Version 6 adds an optional, explicit building-floor reference without assigning a floor meaning to
+    /// historical terrain records.
     /// </summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 6;
 
     public TerrainProvenance(
         int schemaVersion,
@@ -33,7 +37,9 @@ public sealed record TerrainProvenance
         int originalPointCount,
         int retainedPointCount,
         ElevationRange? elevationRange,
-        AddressParcelProvenance? addressParcel = null)
+        AddressParcelProvenance? addressParcel = null,
+        BuildingFloorReference? floorReference = null,
+        BuildingOutlineProvenance? buildingOutline = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(schemaVersion);
 
@@ -57,6 +63,16 @@ public sealed record TerrainProvenance
 
         ArgumentNullException.ThrowIfNull(localFrame);
         ArgumentNullException.ThrowIfNull(simplificationRequest);
+
+        if (schemaVersion == CurrentSchemaVersion && source.CollectionPeriodAvailability is null)
+        {
+            throw new ArgumentException("Current-schema provenance requires an explicit collection-period availability.", nameof(source));
+        }
+
+        if (schemaVersion == CurrentSchemaVersion && simplificationRequest.CoverageFloorFraction is null)
+        {
+            throw new ArgumentException("Current-schema provenance requires the actual coverage floor fraction.", nameof(simplificationRequest));
+        }
         if (retainedPointCount > simplificationRequest.PointBudget)
         {
             throw new ArgumentOutOfRangeException(
@@ -85,6 +101,22 @@ public sealed record TerrainProvenance
             throw new ArgumentException("Elevation range unit must match the source vertical reference.", nameof(elevationRange));
         }
 
+        if (floorReference is not null && floorReference.SourceReference != sourceVerticalReference)
+        {
+            throw new ArgumentException("A building floor reference must use the terrain source vertical reference.", nameof(floorReference));
+        }
+
+        // Trusted in-memory composition may retain an outline only on the floor reference; the canonical
+        // writer emits the effective value in both schema-6 locations. The strict export reader rejects a
+        // missing or conflicting serialized counterpart before it reaches this convenience fallback.
+        if (buildingOutline is not null && floorReference?.BuildingOutline is { } floorOutline &&
+            !BuildingOutlineProvenanceJson.HasSameValue(buildingOutline, floorOutline))
+        {
+            throw new ArgumentException(
+                "The explicit building-outline provenance must equal the floor reference's building-outline provenance.",
+                nameof(buildingOutline));
+        }
+
         SchemaVersion = schemaVersion;
         Source = source;
         HorizontalTransformation = horizontalTransformation;
@@ -97,6 +129,8 @@ public sealed record TerrainProvenance
         RetainedPointCount = retainedPointCount;
         ElevationRange = elevationRange;
         AddressParcel = addressParcel;
+        FloorReference = floorReference;
+        ExplicitBuildingOutline = buildingOutline;
     }
 
     public int SchemaVersion { get; }
@@ -119,6 +153,17 @@ public sealed record TerrainProvenance
 
     /// <summary>How this export's area of interest was located via an address/parcel lookup, or null when it was not (SolidGround Issue #33). Always null in a schema version 1 or 2 document.</summary>
     public AddressParcelProvenance? AddressParcel { get; }
+
+    /// <summary>Optional operator-selected datum evidence; null preserves the historical source-elevation interpretation.</summary>
+    public BuildingFloorReference? FloorReference { get; }
+
+    /// <summary>
+    /// Building-outline acquisition attribution retained even when the operator keeps the historical
+    /// source-elevation placement and therefore supplies no floor reference.
+    /// </summary>
+    public BuildingOutlineProvenance? BuildingOutline => ExplicitBuildingOutline ?? FloorReference?.BuildingOutline;
+
+    private BuildingOutlineProvenance? ExplicitBuildingOutline { get; }
 }
 
 /// <summary>Finite minimum and maximum elevations expressed in an explicit vertical unit.</summary>

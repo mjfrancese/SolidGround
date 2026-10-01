@@ -93,11 +93,11 @@ public sealed class TerrainExportBundleRendererTests
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
-                "addressParcel",
+                "addressParcel", "floorReference", "buildingOutline",
             ],
             PropertyNames(provenance));
 
-        Assert.Equal(["sourceName", "datasetIdentifier", "collectionPeriod", "qualityLevel", "attribution"], PropertyNames(provenance.GetProperty("source")));
+        Assert.Equal(["sourceName", "datasetIdentifier", "collectionPeriod", "collectionPeriodAvailability", "qualityLevel", "attribution"], PropertyNames(provenance.GetProperty("source")));
 
         JsonElement horizontalTransformation = provenance.GetProperty("horizontalTransformation");
         Assert.Equal(
@@ -115,7 +115,7 @@ public sealed class TerrainExportBundleRendererTests
         Assert.Equal(["origin", "projectedHorizontalReference", "verticalReference", "outputUnit"], PropertyNames(localFrame));
         Assert.Equal(["x", "y", "elevation"], PropertyNames(localFrame.GetProperty("origin")));
 
-        Assert.Equal(["pointBudget", "method"], PropertyNames(provenance.GetProperty("simplification")));
+        Assert.Equal(["pointBudget", "method", "coverageFloorFraction"], PropertyNames(provenance.GetProperty("simplification")));
         Assert.Equal(["minimum", "maximum", "unit"], PropertyNames(provenance.GetProperty("elevationRange")));
 
         foreach (JsonElement unitDefinition in root.GetProperty("unitDefinitions").EnumerateArray())
@@ -151,7 +151,7 @@ public sealed class TerrainExportBundleRendererTests
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
-                "addressParcel",
+                "addressParcel", "floorReference", "buildingOutline",
             ],
             PropertyNames(provenanceElement));
         Assert.Equal("SourceMetadataResponse", provenanceElement.GetProperty("sourceHorizontalReferenceOrigin").GetString());
@@ -172,6 +172,22 @@ public sealed class TerrainExportBundleRendererTests
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("source").GetProperty("attribution").ValueKind);
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("sourceVerticalReference").GetProperty("geoidModel").ValueKind);
         Assert.Equal(JsonValueKind.Null, provenance.GetProperty("localFrame").GetProperty("verticalReference").GetProperty("geoidModel").ValueKind);
+    }
+
+    [Fact]
+    public void CurrentExportsStateTheActualDefaultCoverageFloorAndAnUnreportedCollectionPeriod()
+    {
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(CreatePayload(), "renderer-coverage-and-collection-status");
+
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        JsonElement provenance = document.RootElement.GetProperty("provenance");
+
+        Assert.Equal(
+            BitConverter.DoubleToInt64Bits(GridTerrainSimplifier.DefaultCoverageFloorFraction),
+            BitConverter.DoubleToInt64Bits(provenance.GetProperty("simplification").GetProperty("coverageFloorFraction").GetDouble()));
+        Assert.Equal(
+            "NotReportedBySource",
+            provenance.GetProperty("source").GetProperty("collectionPeriodAvailability").GetString());
     }
 
     [Fact]

@@ -384,6 +384,19 @@ public sealed class TerrainRequestSettingsTests
     }
 
     [Fact]
+    public void ValidateRejectsAnUnrecognizedLocalOriginKind()
+    {
+        TerrainRequestSettings settings = MinimalFetch() with
+        {
+            LocalOrigin = new LocalOriginRequest((LocalOriginKind)99, 0d, 0d, 0d),
+        };
+
+        IReadOnlyList<string> problems = settings.Validate();
+
+        Assert.Contains("localOrigin.kind has an unrecognized value.", problems);
+    }
+
+    [Fact]
     public void ValidateReportsAProblemInsteadOfThrowingWhenSimplificationIsNull()
     {
         TerrainRequestSettings settings = MinimalFetch() with { Simplification = null! };
@@ -508,6 +521,7 @@ public sealed class TerrainRequestSettingsTests
             ("southwest", LocalOriginKind.Southwest),
             ("centroid", LocalOriginKind.Centroid),
             ("explicit", LocalOriginKind.Explicit),
+            ("areaCentroid", LocalOriginKind.AreaCentroid),
         })
         {
             Assert.Equal(expected, DecodeMinimal(localOriginKind: token).LocalOrigin.Kind);

@@ -14,7 +14,10 @@ public enum SimplificationMethod
 /// <summary>Defines the requested output budget and selection strategy.</summary>
 public sealed record SimplificationRequest
 {
-    public SimplificationRequest(int pointBudget = 15000, SimplificationMethod method = SimplificationMethod.CurvatureAware)
+    public SimplificationRequest(
+        int pointBudget = 15000,
+        SimplificationMethod method = SimplificationMethod.CurvatureAware,
+        double? coverageFloorFraction = GridTerrainSimplifier.DefaultCoverageFloorFraction)
     {
         if (pointBudget <= 0)
         {
@@ -26,12 +29,24 @@ public sealed record SimplificationRequest
             throw new ArgumentOutOfRangeException(nameof(method), method, "Unsupported simplification method.");
         }
 
+        if (coverageFloorFraction is { } fraction && (!double.IsFinite(fraction) || fraction < 0d || fraction > 1d))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(coverageFloorFraction), fraction, "Coverage floor fraction must be finite and within [0, 1] when it is known.");
+        }
+
         PointBudget = pointBudget;
         Method = method;
+        CoverageFloorFraction = coverageFloorFraction;
     }
 
     public int PointBudget { get; }
     public SimplificationMethod Method { get; }
+    /// <summary>
+    /// The fraction of post-structural budget reserved for spatial coverage by the simplifier that produced this
+    /// result. Null is retained only when reading a schema version 4 export, which did not record the value.
+    /// </summary>
+    public double? CoverageFloorFraction { get; }
 }
 
 /// <summary>Algorithm seam for retaining terrain samples within a requested point budget.</summary>

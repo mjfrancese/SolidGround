@@ -1075,6 +1075,18 @@ public sealed class GridTerrainSimplifierTests
     }
 
     [Fact]
+    public async Task SimplificationResultRecordsTheSimplifiersActualCoverageFloorInsteadOfTheIncomingRequestValue()
+    {
+        ElevationGrid grid = BuildGrid(3, 3, (row, column) => (row * 10d) + column);
+        GridTerrainSimplifier simplifier = new(coverageFloorFraction: 0.3d);
+        SimplificationRequest incoming = new(pointBudget: 9, coverageFloorFraction: 0.2d);
+
+        SimplificationResult result = await simplifier.SimplifyAsync(grid, incoming, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0.3d, result.Request.CoverageFloorFraction);
+    }
+
+    [Fact]
     public async Task EachRetainedSampleCoordinateMatchesTheGridsOwnGetCellCenterCalculation()
     {
         ElevationGrid grid = BuildGrid(

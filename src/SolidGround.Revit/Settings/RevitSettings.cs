@@ -1,4 +1,5 @@
 using SolidGround.Core.Processing;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Revit.Settings;
 
@@ -15,4 +16,6 @@ internal sealed record RevitSettings(
     TerrainRequestSettings Request,
     RevitTargetSettings Target,
     RevitSharedCoordinatesSettings SharedCoordinates,
-    RevitAddressAndParcelSettings AddressAndParcel);
+    RevitAddressAndParcelSettings AddressAndParcel,
+    double TerrainExtensionMeters = 0d,
+    DistanceDisplayFormat DistanceDisplayFormat = DistanceDisplayFormat.UsSurveyFeet);

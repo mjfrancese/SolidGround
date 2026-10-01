@@ -1,11 +1,12 @@
 {
   "schema": "solidground.terrain-export",
-  "schemaVersion": 4,
+  "schemaVersion": 6,
   "provenance": {
     "source": {
       "sourceName": "OpenTopography",
       "datasetIdentifier": "USGS1m",
       "collectionPeriod": null,
+      "collectionPeriodAvailability": "NotReportedBySource",
       "qualityLevel": null,
       "attribution": "Data source: U.S. Geological Survey (USGS) 3D Elevation Program (3DEP), 1-meter Digital Elevation Model, accessed through the OpenTopography Facility. This work is based on API services provided by the OpenTopography Facility with support from the National Science Foundation under NSF Award Numbers 2410799, 2410800 \u0026 2410801."
     },
@@ -73,7 +74,8 @@
     },
     "simplification": {
       "pointBudget": 500,
-      "method": "CurvatureAware"
+      "method": "CurvatureAware",
+      "coverageFloorFraction": 0.2
     },
     "originalPointCount": 7,
     "retainedPointCount": 7,
@@ -82,7 +84,9 @@
       "maximum": 184.2,
       "unit": "Meter"
     },
-    "addressParcel": null
+    "addressParcel": null,
+    "floorReference": null,
+    "buildingOutline": null
   },
   "unitDefinitions": [
     {

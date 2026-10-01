@@ -551,7 +551,7 @@ public sealed class CliProcessCommandTests
     }
 
     [Fact]
-    public async Task CoverageFloorIsAcceptedAndPrintedButNeverRecordedInTheDocument()
+    public async Task CoverageFloorIsAcceptedPrintedAndRecordedInTheDocument()
     {
         DirectoryInfo tempDirectory = Directory.CreateTempSubdirectory();
         try
@@ -565,8 +565,14 @@ public sealed class CliProcessCommandTests
             Assert.Equal(CliExitCodes.Success, exitCode);
             Assert.Contains("0.5", stdout, StringComparison.Ordinal);
 
-            string documentText = File.ReadAllText(Path.Combine(tempDirectory.FullName, "terrain" + TerrainExportBundleRenderer.DocumentFileSuffix));
-            Assert.DoesNotContain("coverageFloor", documentText, StringComparison.Ordinal);
+            using JsonDocument document = ReadDocument(tempDirectory.FullName, "terrain");
+            Assert.Equal(
+                0.5d,
+                document.RootElement
+                    .GetProperty("provenance")
+                    .GetProperty("simplification")
+                    .GetProperty("coverageFloorFraction")
+                    .GetDouble());
         }
         finally
         {

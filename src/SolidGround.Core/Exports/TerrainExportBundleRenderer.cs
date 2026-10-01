@@ -164,6 +164,12 @@ public static class TerrainExportBundleRenderer
             writer.WriteNullValue();
         }
 
+        writer.WritePropertyName("floorReference");
+        BuildingFloorReferenceJson.Write(writer, provenance.FloorReference);
+
+        writer.WritePropertyName("buildingOutline");
+        BuildingOutlineProvenanceJson.Write(writer, provenance.BuildingOutline);
+
         writer.WriteEndObject();
     }
 
@@ -185,6 +191,13 @@ public static class TerrainExportBundleRenderer
         {
             writer.WriteNullValue();
         }
+
+        if (source.CollectionPeriodAvailability is not { } collectionPeriodAvailability)
+        {
+            throw new TerrainExportException("Current exports require an explicit collection-period availability.");
+        }
+
+        writer.WriteString("collectionPeriodAvailability", collectionPeriodAvailability.ToString());
 
         if (source.QualityLevel is { } qualityLevel)
         {
@@ -311,6 +324,12 @@ public static class TerrainExportBundleRenderer
         writer.WriteStartObject();
         writer.WriteNumber("pointBudget", request.PointBudget);
         writer.WriteString("method", request.Method.ToString());
+        if (request.CoverageFloorFraction is not { } coverageFloorFraction)
+        {
+            throw new TerrainExportException("Current exports require the actual coverage floor fraction.");
+        }
+
+        writer.WriteNumber("coverageFloorFraction", coverageFloorFraction);
         writer.WriteEndObject();
     }
 
@@ -431,6 +450,14 @@ public static class TerrainExportBundleRenderer
         if (provenance.ElevationRange is { } range)
         {
             distinct.Add(range.Unit);
+        }
+        if (provenance.FloorReference is { } floor)
+        {
+            distinct.Add(LengthUnit.InternationalFoot); // target level project elevation is Revit internal international feet.
+            if (floor.Rise is { } rise)
+            {
+                distinct.Add(rise.Unit);
+            }
         }
 
         return [.. distinct.OrderBy(unit => (int)unit)];

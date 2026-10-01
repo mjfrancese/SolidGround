@@ -35,4 +35,5 @@ internal sealed record RevitAddressAndParcelSettings(
     string? LocalParcelFilePath,
     string? LocalParcelFileSourceLabel,
     string? LocalParcelFileLicenseDisclaimerText,
-    double? NearbySearchRadiusMeters);
+    double? NearbySearchRadiusMeters,
+    bool CountyServiceAuthorizedUseAcknowledged = false);

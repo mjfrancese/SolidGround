@@ -2,19 +2,27 @@ using SolidGround.Core.Hosting;
 using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Units;
+using SolidGround.Revit.Settings;
+using SolidGround.Revit.Processing;
+using SolidGround.Core.Sources.BuildingOutlines;
 
 namespace SolidGround.Revit.Dialog;
 
-/// <summary>
-/// Every input <see cref="SolidGroundDialogViewModel"/> needs at construction time, gathered by
-/// <see cref="SolidGroundDialogHost.ShowModal"/> (SolidGround Issue #31, PH3-4, Stage D: see
-/// docs/architecture/revit-interactive-dialog.md "Flow/state model"). Every field here is a plain Core type
-/// or primitive -- none is Revit-API-typed -- so the view-model itself never depends on <c>Document</c>,
-/// <c>Level</c>, <c>ToposolidType</c>, or any other Revit API type: whatever constructs this record is
-/// responsible for resolving those against a real, open <c>Document</c> first (mirroring how
-/// <c>LevelAndTypeResolver</c> already separates "project a Revit element into a Revit-free candidate" from
-/// "let a Core selector choose one").
-/// </summary>
+/// <summary>One immutable lookup-service snapshot for the guided dialog.</summary>
+/// <remarks>
+/// A new snapshot is built after Settings closes so a newly selected geocoder, parcel source, or session
+/// credential is used by the next lookup. The view model captures the snapshot member before it awaits I/O.
+/// </remarks>
+internal sealed record SolidGroundDialogLookupServices(
+    IAddressGeocoder Geocoder,
+    AddressGeocoderProvider GeocoderProvider,
+    IParcelBoundarySource? ParcelSource,
+    double NearbySearchRadiusMeters,
+    int NetworkTimeoutSeconds,
+    long CredentialRevision);
+
+/// <summary>Immutable host-resolved dependencies and preferences for one guided dialog run.</summary>
+/// <remarks>All lookup work copies the relevant values into a revision ticket before awaiting I/O.</remarks>
 internal sealed record SolidGroundDialogInputs(
     IAddressGeocoder Geocoder,
     AddressGeocoderProvider GeocoderProvider,
@@ -32,4 +40,10 @@ internal sealed record SolidGroundDialogInputs(
     int NetworkTimeoutSeconds,
     AoiSettings ConfiguredAreaOfInterest,
     double NearbySearchRadiusMeters,
-    TerrainAcquisitionMode Mode);
+    TerrainAcquisitionMode Mode,
+    long InitialCredentialRevision = 0,
+    RevitSettings? Settings = null,
+    Func<RevitSettings, RevitSettings?>? EditSettings = null,
+    Func<RevitSettings, SolidGroundDialogLookupServices>? ReconfigureLookupServices = null,
+    Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? PrepareTerrain = null,
+    IBuildingOutlineSource? BuildingOutlineSource = null);
