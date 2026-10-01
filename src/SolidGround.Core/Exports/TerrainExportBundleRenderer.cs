@@ -164,6 +164,12 @@ public static class TerrainExportBundleRenderer
             writer.WriteNullValue();
         }
 
+        writer.WritePropertyName("floorReference");
+        BuildingFloorReferenceJson.Write(writer, provenance.FloorReference);
+
+        writer.WritePropertyName("buildingOutline");
+        BuildingOutlineProvenanceJson.Write(writer, provenance.BuildingOutline);
+
         writer.WriteEndObject();
     }
 
@@ -444,6 +450,14 @@ public static class TerrainExportBundleRenderer
         if (provenance.ElevationRange is { } range)
         {
             distinct.Add(range.Unit);
+        }
+        if (provenance.FloorReference is { } floor)
+        {
+            distinct.Add(LengthUnit.InternationalFoot); // target level project elevation is Revit internal international feet.
+            if (floor.Rise is { } rise)
+            {
+                distinct.Add(rise.Unit);
+            }
         }
 
         return [.. distinct.OrderBy(unit => (int)unit)];

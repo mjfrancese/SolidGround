@@ -7,6 +7,7 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.BuildingOutlines;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
@@ -109,11 +110,11 @@ public static class TerrainExportBundleReader
             }
 
             int schemaVersion = RequireInt(top["schemaVersion"], "$.schemaVersion");
-            if (schemaVersion is not 4 and not TerrainProvenance.CurrentSchemaVersion)
+            if (schemaVersion is not 4 and not 5 and not TerrainProvenance.CurrentSchemaVersion)
             {
                 throw new TerrainExportException(
                     $"'$.schemaVersion' is {schemaVersion.ToString(CultureInfo.InvariantCulture)}, but this reader " +
-                    $"implements schema versions 4 and {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}.");
+                    $"implements schema versions 4, 5, and {TerrainProvenance.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}.");
             }
 
             TerrainProvenance provenance = ParseProvenance(top["provenance"], "$.provenance", schemaVersion);
@@ -128,11 +129,17 @@ public static class TerrainExportBundleReader
     {
         RequireObject(obj, path);
         Dictionary<string, JsonElement> props = ReadObjectProperties(obj, path,
-            [
-                "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
-                "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
-                "addressParcel",
-            ]);
+            schemaVersion == TerrainProvenance.CurrentSchemaVersion
+                ? [
+                    "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                    "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                    "addressParcel", "floorReference", "buildingOutline",
+                ]
+                : [
+                    "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
+                    "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
+                    "addressParcel",
+                ]);
 
         ElevationSourceMetadata source = ParseSource(props["source"], $"{path}.source", schemaVersion);
         HorizontalTransformationDefinition horizontalTransformation = ParseHorizontalTransformation(props["horizontalTransformation"], $"{path}.horizontalTransformation");
@@ -145,6 +152,19 @@ public static class TerrainExportBundleReader
         int retainedPointCount = RequireInt(props["retainedPointCount"], $"{path}.retainedPointCount");
         ElevationRange elevationRange = ParseElevationRange(props["elevationRange"], $"{path}.elevationRange");
         AddressParcelProvenance? addressParcel = ParseAddressParcelProvenance(props["addressParcel"], $"{path}.addressParcel");
+        BuildingFloorReference? floorReference = schemaVersion == TerrainProvenance.CurrentSchemaVersion
+            ? ParseBuildingFloorReference(props["floorReference"], $"{path}.floorReference")
+            : null;
+        BuildingOutlineProvenance? buildingOutline = schemaVersion == TerrainProvenance.CurrentSchemaVersion
+            ? ParseBuildingOutlineProvenance(props["buildingOutline"], $"{path}.buildingOutline")
+            : null;
+
+        if (floorReference?.BuildingOutline is { } embeddedOutline &&
+            !BuildingOutlineProvenanceJson.HasSameValue(embeddedOutline, buildingOutline))
+        {
+            throw new TerrainExportException(
+                $"'{path}.buildingOutline' must exactly match the building-outline context embedded in '{path}.floorReference'.");
+        }
 
         try
         {
@@ -160,11 +180,37 @@ public static class TerrainExportBundleReader
                 originalPointCount,
                 retainedPointCount,
                 elevationRange,
-                addressParcel);
+                addressParcel,
+                floorReference,
+                buildingOutline);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is ArgumentException or FormatException)
         {
             throw new TerrainExportException($"'{path}' is not a valid provenance record.", ex);
+        }
+    }
+
+    private static BuildingFloorReference? ParseBuildingFloorReference(JsonElement obj, string path)
+    {
+        try
+        {
+            return BuildingFloorReferenceJson.Deserialize(obj.GetRawText());
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException or JsonException)
+        {
+            throw new TerrainExportException($"'{path}' is not a valid building floor reference.", ex);
+        }
+    }
+
+    private static BuildingOutlineProvenance? ParseBuildingOutlineProvenance(JsonElement obj, string path)
+    {
+        try
+        {
+            return BuildingOutlineProvenanceJson.Deserialize(obj.GetRawText());
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException or JsonException)
+        {
+            throw new TerrainExportException($"'{path}' is not valid building-outline provenance.", ex);
         }
     }
 

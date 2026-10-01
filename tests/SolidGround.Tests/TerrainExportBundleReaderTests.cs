@@ -7,6 +7,7 @@ using SolidGround.Core.Metadata;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.BuildingOutlines;
 using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
@@ -65,6 +66,43 @@ public sealed class TerrainExportBundleReaderTests
 
         Assert.Equal(OpenTopographyUsgs1mSource.AttributionNotice, roundTripped.Provenance.Source.Attribution);
         Assert.Equal(payload.Provenance, roundTripped.Provenance);
+    }
+
+    [Fact]
+    public void ReadRoundTripsStandaloneBuildingOutlineAttributionWithoutChangingTheSourceFrame()
+    {
+        BuildingOutlineProvenance outline = new(
+            "Synthetic Provider", "test-release", "MIT", new Uri("https://example.test/license"), "Synthetic MIT license text", "Synthetic attribution",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ["023111113"], new DateOnly(2026, 10, 1));
+        TerrainExportPayload payload = CreatePayload(buildingOutline: outline);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-standalone-outline");
+
+        TerrainExportPayload parsed = TerrainExportBundleReader.Read(bundle.DocumentBytes.Span, bundle.PointsBytes.Span);
+
+        Assert.Null(parsed.Provenance.FloorReference);
+        Assert.Equal(BuildingOutlineProvenanceJson.Serialize(outline), BuildingOutlineProvenanceJson.Serialize(parsed.Provenance.BuildingOutline));
+        Assert.Equal(payload.Provenance.LocalFrame, parsed.Provenance.LocalFrame);
+    }
+
+    [Fact]
+    public void ReadRejectsAFloorReferenceWhoseEmbeddedOutlineDoesNotMatchTheExplicitSchemaSixOutline()
+    {
+        BuildingOutlineProvenance outline = new(
+            "Synthetic Provider", "test-release", "MIT", new Uri("https://example.test/license"), "Synthetic MIT license text", "Synthetic attribution",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ["023111113"], new DateOnly(2026, 10, 1));
+        BuildingFloorReference floor = BuildingFloorReference.KnownElevation(
+            10d, VerticalReference(), new TargetProjectLevel(1, "level-1", "Level 1", 0d), "survey note", outline);
+        TerrainExportPayload payload = CreatePayload(floorReference: floor);
+        TerrainExportBundle bundle = TerrainExportBundleRenderer.Render(payload, "reader-floor-outline-mismatch");
+        string documentText = Encoding.UTF8.GetString(bundle.DocumentBytes.Span);
+        using JsonDocument document = JsonDocument.Parse(bundle.DocumentBytes);
+        string explicitOutline = document.RootElement.GetProperty("provenance").GetProperty("buildingOutline").GetRawText();
+        string tampered = ReplaceExactlyOnce(documentText, $"\"buildingOutline\": {explicitOutline}", "\"buildingOutline\": null");
+
+        TerrainExportException exception = Assert.Throws<TerrainExportException>(
+            () => TerrainExportBundleReader.ReadProvenance(Encoding.UTF8.GetBytes(tampered)));
+
+        Assert.Contains("must exactly match", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -208,9 +246,13 @@ public sealed class TerrainExportBundleReaderTests
         string documentText = Encoding.UTF8.GetString(current.DocumentBytes.Span);
         using JsonDocument document = JsonDocument.Parse(current.DocumentBytes);
 
+        JsonElement provenanceElement = document.RootElement.GetProperty("provenance");
         JsonElement source = document.RootElement.GetProperty("provenance").GetProperty("source");
         JsonElement simplification = document.RootElement.GetProperty("provenance").GetProperty("simplification");
-        string legacyText = RemoveTrailingJsonProperty(documentText, simplification, "coverageFloorFraction");
+        string legacyText = RemoveTrailingJsonProperty(documentText, provenanceElement, "buildingOutline");
+        using JsonDocument noOutlineDocument = JsonDocument.Parse(legacyText);
+        legacyText = RemoveTrailingJsonProperty(legacyText, noOutlineDocument.RootElement.GetProperty("provenance"), "floorReference");
+        legacyText = RemoveTrailingJsonProperty(legacyText, simplification, "coverageFloorFraction");
         legacyText = RemoveJsonProperty(legacyText, source, "collectionPeriodAvailability");
         legacyText = ReplaceExactlyOnce(
             legacyText,
@@ -234,9 +276,13 @@ public sealed class TerrainExportBundleReaderTests
         string documentText = Encoding.UTF8.GetString(current.DocumentBytes.Span);
         using JsonDocument document = JsonDocument.Parse(current.DocumentBytes);
 
+        JsonElement provenanceElement = document.RootElement.GetProperty("provenance");
         JsonElement source = document.RootElement.GetProperty("provenance").GetProperty("source");
         JsonElement simplification = document.RootElement.GetProperty("provenance").GetProperty("simplification");
-        string legacyText = RemoveTrailingJsonProperty(documentText, simplification, "coverageFloorFraction");
+        string legacyText = RemoveTrailingJsonProperty(documentText, provenanceElement, "buildingOutline");
+        using JsonDocument noOutlineDocument = JsonDocument.Parse(legacyText);
+        legacyText = RemoveTrailingJsonProperty(legacyText, noOutlineDocument.RootElement.GetProperty("provenance"), "floorReference");
+        legacyText = RemoveTrailingJsonProperty(legacyText, simplification, "coverageFloorFraction");
         legacyText = RemoveJsonProperty(legacyText, source, "collectionPeriodAvailability");
         legacyText = ReplaceExactlyOnce(
             legacyText,
@@ -858,6 +904,8 @@ public sealed class TerrainExportBundleReaderTests
         ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
         ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator,
         AddressParcelProvenance? addressParcel = null,
+        BuildingOutlineProvenance? buildingOutline = null,
+        BuildingFloorReference? floorReference = null,
         double coverageFloorFraction = GridTerrainSimplifier.DefaultCoverageFloorFraction)
     {
         IReadOnlyList<LocalTerrainSample> effectiveSamples = samples ?? DefaultSamples(retainedPointCount);
@@ -876,6 +924,8 @@ public sealed class TerrainExportBundleReaderTests
             horizontalReferenceOrigin,
             verticalReferenceOrigin,
             addressParcel,
+            buildingOutline,
+            floorReference,
             coverageFloorFraction);
 
         return new TerrainExportPayload(effectiveSamples, provenance);
@@ -896,6 +946,8 @@ public sealed class TerrainExportBundleReaderTests
         ReferenceOrigin horizontalReferenceOrigin = ReferenceOrigin.Operator,
         ReferenceOrigin verticalReferenceOrigin = ReferenceOrigin.Operator,
         AddressParcelProvenance? addressParcel = null,
+        BuildingOutlineProvenance? buildingOutline = null,
+        BuildingFloorReference? floorReference = null,
         double coverageFloorFraction = GridTerrainSimplifier.DefaultCoverageFloorFraction)
     {
         VerticalReference vertical = VerticalReference(verticalUnit, geoidModel);
@@ -912,7 +964,9 @@ public sealed class TerrainExportBundleReaderTests
             originalPointCount,
             retainedPointCount,
             elevationRange ?? new ElevationRange(1.5d, 3.75d, verticalUnit),
-            addressParcel);
+            addressParcel,
+            floorReference,
+            buildingOutline);
     }
 
     private static ElevationSourceMetadata Source(CollectionPeriod? collectionPeriod = null, string? qualityLevel = null, string? attribution = null) =>

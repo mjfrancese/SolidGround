@@ -34,7 +34,8 @@ internal static class LevelAndTypeResolver
         {
             if (element is Level level)
             {
-                candidates.Add(new NamedElevationCandidate(level.Id.Value, level.Name, level.Elevation));
+                // ProjectElevation is independent of the level type's displayed elevation base (2027 SDK).
+                candidates.Add(new NamedElevationCandidate(level.Id.Value, level.Name, level.ProjectElevation, level.UniqueId));
             }
         }
 

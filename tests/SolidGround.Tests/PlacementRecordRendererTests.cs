@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
+using SolidGround.Core.Metadata;
 using SolidGround.Core.Provenance;
+using SolidGround.Core.Units;
 
 namespace SolidGround.Tests;
 
@@ -76,7 +78,7 @@ public sealed class PlacementRecordRendererTests
             [
                 "schema", "schemaVersion", "createdUtc", "exportDocument", "exportPoints", "toposolid", "unitConversion",
                 "localOrigin", "boundaryPlaneElevation", "revitCoordinates", "sharedCoordinatesStatement", "pointCounts",
-                "extensibleStorage", "propertyLine", "sharedCoordinatesWrite",
+                "extensibleStorage", "propertyLine", "sharedCoordinatesWrite", "floorReference",
             ],
             PropertyNames(root));
 
@@ -139,17 +141,13 @@ public sealed class PlacementRecordRendererTests
     }
 
     [Fact]
-    public void SchemaVersionIsNowThree()
+    public void SchemaVersionIsNowFour()
     {
-        // SolidGround Issue #30 (PH3-3): the placement record's own required shape changed again with the
-        // addition of PlacementPropertyLineRecord/PlacementSharedCoordinatesWriteRecord, so
-        // PlacementRecordDraft.SchemaVersion (and therefore every rendered record's own "schemaVersion"
-        // property) bumps 2 -> 3.
-        Assert.Equal(3, PlacementRecordDraft.SchemaVersion);
+        Assert.Equal(4, PlacementRecordDraft.SchemaVersion);
 
         byte[] bytes = PlacementRecordRenderer.Render(CreateRecord());
         using JsonDocument document = JsonDocument.Parse(bytes);
-        Assert.Equal(3, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(4, document.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -233,6 +231,33 @@ public sealed class PlacementRecordRendererTests
     }
 
     [Fact]
+    public void FloorReferenceIsWrittenAsAnExplicitNullWhenNoBuildingDatumWasSelected()
+    {
+        byte[] bytes = PlacementRecordRenderer.Render(CreateRecord());
+
+        using JsonDocument document = JsonDocument.Parse(bytes);
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("floorReference").ValueKind);
+    }
+
+    [Fact]
+    public void FloorReferenceIsWrittenInItsCanonicalStructuredForm()
+    {
+        VerticalReference vertical = new("NAVD88", LengthUnit.Meter);
+        BuildingFloorReference floorReference = BuildingFloorReference.KnownElevation(
+            183.1d, vertical, new TargetProjectLevel(111L, "level-unique-id", "Level 1", 0d), "site survey");
+        PlacementRecord record = CreateRecord(floorReference: floorReference);
+
+        using JsonDocument document = JsonDocument.Parse(PlacementRecordRenderer.Render(record));
+        JsonElement floor = document.RootElement.GetProperty("floorReference");
+
+        Assert.Equal("KnownElevation", floor.GetProperty("mode").GetString());
+        Assert.Equal("NAVD88", floor.GetProperty("sourceReference").GetProperty("datum").GetString());
+        Assert.Equal(111L, floor.GetProperty("targetLevel").GetProperty("id").GetInt64());
+        Assert.Equal(183.1d, floor.GetProperty("physicalFloorElevation").GetDouble());
+        Assert.Equal(floorReference, BuildingFloorReferenceJson.Deserialize(floor.GetRawText()));
+    }
+
+    [Fact]
     public void CreatedUtcIsWrittenAsAnIso8601UtcStringWithSecondPrecision()
     {
         DateTime createdUtc = new(2026, 9, 21, 13, 5, 9, DateTimeKind.Utc);
@@ -277,7 +302,8 @@ public sealed class PlacementRecordRendererTests
         DateTime? createdUtc = null,
         string? geoidModel = "Geoid12B",
         PlacementPropertyLineRecord? propertyLine = null,
-        PlacementSharedCoordinatesWriteRecord? sharedCoordinatesWrite = null) => new(
+        PlacementSharedCoordinatesWriteRecord? sharedCoordinatesWrite = null,
+        BuildingFloorReference? floorReference = null) => new(
         Schema: PlacementRecordDraft.Schema,
         SchemaVersion: PlacementRecordDraft.SchemaVersion,
         CreatedUtc: createdUtc ?? new DateTime(2026, 9, 21, 12, 0, 0, DateTimeKind.Utc),
@@ -319,7 +345,8 @@ public sealed class PlacementRecordRendererTests
             SchemaGuid: ExtensibleStorageProvenanceSchema.SchemaGuidText,
             SchemaVersion: ExtensibleStorageProvenanceSchema.CurrentVersion),
         PropertyLine: propertyLine ?? new PlacementPropertyLineRecord(false, null, null),
-        SharedCoordinatesWrite: sharedCoordinatesWrite ?? new PlacementSharedCoordinatesWriteRecord(false, null, null, null, null, null, null, null));
+        SharedCoordinatesWrite: sharedCoordinatesWrite ?? new PlacementSharedCoordinatesWriteRecord(false, null, null, null, null, null, null, null),
+        FloorReference: floorReference);
 
     private static List<string> PropertyNames(JsonElement obj) => [.. obj.EnumerateObject().Select(property => property.Name)];
 }

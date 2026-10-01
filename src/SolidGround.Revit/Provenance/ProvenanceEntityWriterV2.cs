@@ -80,7 +80,7 @@ internal static class ProvenanceEntityWriterV2
         AddInLog.Info($"Attached SolidGround v2 provenance to element {elementId}.");
     }
 
-    private static object ValueFor(ExtensibleStorageProvenanceValuesV2 values, string fieldName)
+    internal static object ValueFor(ExtensibleStorageProvenanceValuesV2 values, string fieldName)
     {
         if (fieldName == "schemaVersion")
         {
@@ -112,7 +112,7 @@ internal static class ProvenanceEntityWriterV2
         return baseProperty?.GetValue(values.BaseValues) ?? throw new ProvenanceAttachmentException($"No v2 provenance value maps to field '{fieldName}'.");
     }
 
-    private static void Set(Entity entity, ProvenanceFieldDefinition field, object value)
+    internal static void Set(Entity entity, ProvenanceFieldDefinition field, object value)
     {
         switch (value)
         {
@@ -125,13 +125,13 @@ internal static class ProvenanceEntityWriterV2
         }
     }
 
-    private static object Get(Entity entity, ProvenanceFieldDefinition field) => field.ClrType == typeof(int) ? entity.Get<int>(field.Name)
+    internal static object Get(Entity entity, ProvenanceFieldDefinition field) => field.ClrType == typeof(int) ? entity.Get<int>(field.Name)
         : field.ClrType == typeof(bool) ? entity.Get<bool>(field.Name)
         : field.ClrType == typeof(string) ? entity.Get<string>(field.Name)
         : field.Spec == ProvenanceFieldSpec.Length ? entity.Get<double>(field.Name, UnitTypeId.Meters)
         : entity.Get<double>(field.Name, UnitTypeId.General);
 
-    private static bool ValuesMatch(object expected, object actual, ProvenanceFieldDefinition field)
+    internal static bool ValuesMatch(object expected, object actual, ProvenanceFieldDefinition field)
     {
         if (expected is not double expectedNumber || actual is not double actualNumber)
         {

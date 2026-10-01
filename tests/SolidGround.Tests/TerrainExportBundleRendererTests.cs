@@ -93,7 +93,7 @@ public sealed class TerrainExportBundleRendererTests
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
-                "addressParcel",
+                "addressParcel", "floorReference", "buildingOutline",
             ],
             PropertyNames(provenance));
 
@@ -151,7 +151,7 @@ public sealed class TerrainExportBundleRendererTests
             [
                 "source", "horizontalTransformation", "sourceVerticalReference", "sourceHorizontalReferenceOrigin",
                 "sourceVerticalReferenceOrigin", "localFrame", "simplification", "originalPointCount", "retainedPointCount", "elevationRange",
-                "addressParcel",
+                "addressParcel", "floorReference", "buildingOutline",
             ],
             PropertyNames(provenanceElement));
         Assert.Equal("SourceMetadataResponse", provenanceElement.GetProperty("sourceHorizontalReferenceOrigin").GetString());

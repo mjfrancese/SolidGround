@@ -12,6 +12,7 @@ using SolidGround.Core.Sources.OpenTopography;
 using SolidGround.Core.Units;
 using SolidGround.Core.Workflow;
 using SolidGround.Revit.Settings;
+using SolidGround.Revit.Processing;
 
 namespace SolidGround.Revit.Dialog;
 
@@ -59,6 +60,18 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         SelectedOutputUnit = Enum.IsDefined(inputs.PrefilledOutputUnit) ? inputs.PrefilledOutputUnit : LengthConverter.DefaultOutputUnit;
         // This is deliberately a current-run decision, never restored from old settings.
         WriteSharedCoordinatesIfAbsent = false;
+        if (inputs.PrepareTerrain is not null)
+        {
+            FloorReferenceTask = new BuildingFloorReferenceViewModel(
+                PrepareFloorTerrainAsync,
+                GetTargetProjectLevel,
+                () => EffectiveDistanceDisplayFormat,
+                inputs.BuildingOutlineSource,
+                inputs.DocumentAlreadyHasSharedCoordinates);
+            FloorReferenceTask.Edited += OnFloorReferenceTaskChanged;
+            FloorReferenceTask.ConfirmationChanged += OnFloorReferenceTaskChanged;
+            FloorReferenceTask.PreparedChanged += OnFloorReferenceTaskChanged;
+        }
         RefreshEstimate();
     }
 
@@ -123,6 +136,21 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     public string? NativePointBudgetWarning => RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds)
         ? RevitIniToposolidThresholds.DescribeExceedance(PointBudget, _inputs.RevitIniThresholds.NativeToposolidMaxPointThreshold!.Value, _inputs.RevitIniPath)
         : null;
+    /// <summary>The optional floor workflow is absent for existing callers that do not provide terrain preparation.</summary>
+    public BuildingFloorReferenceViewModel? FloorReferenceTask { get; }
+    public bool HasFloorReferenceTask => FloorReferenceTask is not null;
+    public bool IsEditingFloorReference => FloorReferenceTask?.IsEditing == true;
+    public bool NeedsFloorReferenceConfirmation => FloorReferenceTask is { IsConfirmed: false };
+    public bool ShowReviewDetails => !IsEditingFloorReference;
+    public bool ShowFloorReferenceSummary => HasFloorReferenceTask && !IsEditingFloorReference;
+    public string FloorReferenceSummary => FloorReferenceTask is { IsConfirmed: true } task
+        ? task.Summary
+        : "Choose a floor reference before creating terrain.";
+    public string FloorReferencePrimaryLabel => FloorReferenceTask?.PrimaryLabel ?? string.Empty;
+    public IAsyncRelayCommand? FloorReferencePrimaryCommand => FloorReferenceTask?.PrimaryCommand;
+    public bool CanWriteSharedCoordinates => FloorReferenceTask?.Reference?.Mode != FloorReferenceMode.ProvisionalGround;
+    public bool RequiresEstimatedSharedCoordinatesAcknowledgement =>
+        WriteSharedCoordinatesIfAbsent && FloorReferenceTask?.Reference?.Mode == FloorReferenceMode.EstimatedGradeRise;
 
     private TerrainAcquisitionMode EffectiveMode => _effectiveSettings?.Request.Mode ?? _inputs.Mode;
 
@@ -197,7 +225,13 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SettingsSummary))]
     private LengthUnit _selectedOutputUnit;
-    [ObservableProperty] private bool _writeSharedCoordinatesIfAbsent;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RequiresEstimatedSharedCoordinatesAcknowledgement))]
+    [NotifyCanExecuteChangedFor(nameof(CreateCommand))]
+    private bool _writeSharedCoordinatesIfAbsent;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CreateCommand))]
+    private bool _estimatedSharedCoordinatesAcknowledged;
     [ObservableProperty] private SolidGroundDialogResult? _result;
 
     partial void OnAddressTextChanged(string value) => InvalidateInput();
@@ -216,12 +250,24 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         }
     }
     partial void OnLocalGeometryTextChanged(string value) => InvalidateInput();
+    partial void OnSelectedLevelChanged(NamedElevationCandidate? value) => InvalidateFloorReference();
+    partial void OnSelectedToposolidTypeChanged(NamedCandidate? value) => InvalidateFloorReference();
+    partial void OnPointBudgetChanged(int value) => InvalidateFloorReference();
+    partial void OnSelectedOutputUnitChanged(LengthUnit value) => InvalidateFloorReference();
+    partial void OnWriteSharedCoordinatesIfAbsentChanged(bool value)
+    {
+        if (!value)
+        {
+            EstimatedSharedCoordinatesAcknowledged = false;
+        }
+    }
     partial void OnLocalGeometryFormatChanged(string value) => InvalidateInput();
 
     private void InvalidateInput()
     {
         FindCancelCommand.Execute(null);
         InvalidateCurrentOperation();
+        InvalidateFloorReference();
         _addressWasGeocoded = false;
         _geocodedAddress = null;
         _explicitAreaOfInterest = null;
@@ -389,6 +435,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     {
         if (SelectedParcelCandidate is not null && _flow.TryUseParcel(SelectedParcelCandidate))
         {
+            InvalidateFloorReference();
             RefreshEstimate();
             NotifyFlowChanged();
         }
@@ -397,6 +444,12 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
     [RelayCommand]
     private void Back()
     {
+        if (IsEditingFloorReference)
+        {
+            FloorReferenceTask?.CancelEdit();
+            return;
+        }
+
         FindCancelCommand.Execute(null);
         InvalidateCurrentOperation();
         if (CurrentStep == SolidGroundDialogStep.Review)
@@ -420,6 +473,9 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             return;
         }
 
+        // A cancelled Settings dialog must not discard an already completed preview, but a running request
+        // cannot be allowed to complete behind that modal edit.
+        FloorReferenceTask?.CancelPendingPreparation();
         RevitSettings? edited;
         try
         {
@@ -453,6 +509,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             ApplySettingsPresentation(edited, radiusMetersBeforeEdit);
+            InvalidateFloorReference();
             FindCancelCommand.Execute(null);
             InvalidateCurrentOperation();
             _flow.ChangeSource();
@@ -472,6 +529,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         ApplySettingsPresentation(edited, radiusMetersBeforeEdit);
         if (lookupConfigurationChanged)
         {
+            InvalidateFloorReference();
             // The revision is the authority for non-cooperative requests. Cancellation is best-effort only.
             FindCancelCommand.Execute(null);
             InvalidateCurrentOperation();
@@ -509,6 +567,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
+            InvalidateFloorReference();
             FindCancelCommand.Execute(null);
             InvalidateCurrentOperation();
             _flow.ChangeSource();
@@ -525,6 +584,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         _nearbySearchRadiusMeters = services.NearbySearchRadiusMeters;
         _networkTimeoutSeconds = services.NetworkTimeoutSeconds;
         _credentialRevision = SessionApiKeyOverrides.Revision;
+        InvalidateFloorReference();
         FindCancelCommand.Execute(null);
         InvalidateCurrentOperation();
         _flow.ChangeSource();
@@ -537,17 +597,78 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         NotifyFlowChanged();
     }
 
-    private bool CanCreate() => !IsBusy && CurrentStep == SolidGroundDialogStep.Review && SelectedLevel is not null && SelectedToposolidType is not null &&
+    private bool CanCreate() => !IsBusy && !IsEditingFloorReference && CurrentStep == SolidGroundDialogStep.Review && SelectedLevel is not null && SelectedToposolidType is not null &&
         PointBudget is >= SimplificationSettings.MinPointBudget and <= SimplificationSettings.MaxPointBudget &&
         !RevitIniToposolidThresholds.ExceedsNativeThreshold(PointBudget, _inputs.RevitIniThresholds) &&
-        (_flow.SelectedParcel is not null || _explicitAreaOfInterest is not null);
+        (_flow.SelectedParcel is not null || _explicitAreaOfInterest is not null) &&
+        (FloorReferenceTask is null || FloorReferenceTask.IsConfirmed) &&
+        (!RequiresEstimatedSharedCoordinatesAcknowledgement || EstimatedSharedCoordinatesAcknowledged);
 
     [RelayCommand(CanExecute = nameof(CanCreate))]
     private void Create()
     {
-        if (SelectedLevel is null || SelectedToposolidType is null)
+        if (!CanCreate() || BuildDraftResult() is not { } draft)
         {
             return;
+        }
+
+        BuildingFloorReferenceViewModel? task = FloorReferenceTask;
+        bool provisional = task?.Reference?.Mode == FloorReferenceMode.ProvisionalGround;
+        Result = draft with
+        {
+            WriteSharedCoordinatesIfAbsent = provisional ? false : WriteSharedCoordinatesIfAbsent,
+            PreparedTerrain = task?.PreparedTerrain,
+            FloorReference = task?.Reference,
+            BuildingOutlineContext = task?.OutlineProvenance,
+            EstimatedSharedCoordinatesAcknowledged = task?.Reference?.Mode == FloorReferenceMode.EstimatedGradeRise && EstimatedSharedCoordinatesAcknowledged,
+        };
+        CloseRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void Cancel()
+    {
+        FindCancelCommand.Execute(null);
+        FloorReferenceTask?.CancelAll();
+        Result = null;
+        CloseRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanChangeFloorReference))]
+    private void ChangeFloorReference()
+    {
+        FloorReferenceTask?.BeginEdit();
+    }
+
+    private bool CanChangeFloorReference() => !IsBusy && CurrentStep == SolidGroundDialogStep.Review &&
+        FloorReferenceTask is { IsEditing: false };
+
+    /// <summary>Called by the WPF shell for Alt+F4 and other window-close paths.</summary>
+    internal void CancelPendingFloorPreparation() => FloorReferenceTask?.CancelAll();
+
+    private async Task<PreparedTerrainSnapshot> PrepareFloorTerrainAsync(CancellationToken cancellationToken)
+    {
+        Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? prepare = _inputs.PrepareTerrain;
+        SolidGroundDialogResult? draft = BuildDraftResult();
+        if (prepare is null || draft is null)
+        {
+            throw new InvalidOperationException("Confirm the current location, parcel, level, and terrain type before loading a ground preview.");
+        }
+
+        // Preparation runs the host's existing Preflight on this exact draft. Preview preparation never carries
+        // a floor decision, a snapshot, or a shared-coordinate request into that authoritative host callback.
+        return await prepare(draft, cancellationToken).ConfigureAwait(true);
+    }
+
+    private TargetProjectLevel? GetTargetProjectLevel() => SelectedLevel is { } level
+        ? new TargetProjectLevel(level.Id, level.UniqueId, level.Name, level.Elevation)
+        : null;
+
+    private SolidGroundDialogResult? BuildDraftResult()
+    {
+        if (SelectedLevel is null || SelectedToposolidType is null)
+        {
+            return null;
         }
 
         AreaOfInterest? aoi = null;
@@ -567,17 +688,55 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
             aoi = _explicitAreaOfInterest;
         }
 
-        Result = new SolidGroundDialogResult(source, aoi, SelectedLevel, SelectedToposolidType, SelectedOutputUnit,
-            PointBudget, WriteSharedCoordinatesIfAbsent, provenance, _effectiveSettings);
-        CloseRequested?.Invoke(this, EventArgs.Empty);
+        if (aoi is null)
+        {
+            return null;
+        }
+
+        return new SolidGroundDialogResult(source, aoi, SelectedLevel, SelectedToposolidType, SelectedOutputUnit,
+            PointBudget, false, provenance, _effectiveSettings);
     }
 
-    [RelayCommand]
-    private void Cancel()
+    private void InvalidateFloorReference()
     {
-        FindCancelCommand.Execute(null);
-        Result = null;
-        CloseRequested?.Invoke(this, EventArgs.Empty);
+        FloorReferenceTask?.Invalidate();
+        EstimatedSharedCoordinatesAcknowledged = false;
+        NotifyFloorReferenceChanged();
+    }
+
+    private void OnFloorReferenceTaskChanged(object? sender, EventArgs e)
+    {
+        if (FloorReferenceTask is not { } task)
+        {
+            return;
+        }
+
+        if (task.Reference?.Mode == FloorReferenceMode.ProvisionalGround)
+        {
+            WriteSharedCoordinatesIfAbsent = false;
+        }
+
+        if (!task.IsConfirmed)
+        {
+            EstimatedSharedCoordinatesAcknowledged = false;
+        }
+
+        NotifyFloorReferenceChanged();
+    }
+
+    private void NotifyFloorReferenceChanged()
+    {
+        OnPropertyChanged(nameof(IsEditingFloorReference));
+        OnPropertyChanged(nameof(NeedsFloorReferenceConfirmation));
+        OnPropertyChanged(nameof(ShowReviewDetails));
+        OnPropertyChanged(nameof(ShowFloorReferenceSummary));
+        OnPropertyChanged(nameof(FloorReferenceSummary));
+        OnPropertyChanged(nameof(FloorReferencePrimaryLabel));
+        OnPropertyChanged(nameof(FloorReferencePrimaryCommand));
+        OnPropertyChanged(nameof(CanWriteSharedCoordinates));
+        OnPropertyChanged(nameof(RequiresEstimatedSharedCoordinatesAcknowledgement));
+        ChangeFloorReferenceCommand.NotifyCanExecuteChanged();
+        CreateCommand.NotifyCanExecuteChanged();
     }
 
     private AddressGeocodeCandidate? TryGetDirectCoordinates(out string? error)
@@ -700,6 +859,7 @@ internal sealed partial class SolidGroundDialogViewModel : ObservableObject
         OnPropertyChanged(nameof(RadiusLabel));
         RefreshEstimate();
         OnPropertyChanged(nameof(NativePointBudgetWarning));
+        InvalidateFloorReference();
     }
 
     private static readonly HorizontalReference Wgs84Reference = new(

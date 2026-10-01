@@ -4,6 +4,7 @@ using SolidGround.Core.Geometry;
 using SolidGround.Core.Metadata;
 using SolidGround.Core.Simplification;
 using SolidGround.Core.Sources;
+using SolidGround.Core.Sources.BuildingOutlines;
 using SolidGround.Core.Transformations;
 using SolidGround.Core.Units;
 
@@ -87,10 +88,23 @@ public sealed class ExistingTerrainDecisionTests
         Assert.NotEqual(first.ContentSignature, changed.ContentSignature);
     }
 
+    [Fact]
+    public void StandaloneBuildingOutlineContextUsesV2ButLeavesTheLegacyIdentityContractUntouched()
+    {
+        TerrainIdentity bare = TerrainIdentity.Create(Payload(new DateOnly(2026, 9, 1)), TerrainIdentityKind.Polygon, "aoi", "topology", 0d);
+        TerrainIdentity first = TerrainIdentity.Create(Payload(new DateOnly(2026, 9, 1), buildingOutline: Outline(new DateOnly(2026, 9, 1))), TerrainIdentityKind.Polygon, "aoi", "topology", 0d);
+        TerrainIdentity sameMetadataDifferentRetrievalDate = TerrainIdentity.Create(Payload(new DateOnly(2026, 9, 1), buildingOutline: Outline(new DateOnly(2026, 10, 1))), TerrainIdentityKind.Polygon, "aoi", "topology", 0d);
+
+        Assert.Equal(TerrainIdentity.CurrentVersion, bare.Version);
+        Assert.Equal(TerrainIdentity.FloorReferenceVersion, first.Version);
+        Assert.NotEqual(bare.ContentSignature, first.ContentSignature);
+        Assert.Equal(first.ContentSignature, sameMetadataDifferentRetrievalDate.ContentSignature);
+    }
+
     private static ExistingTerrainRecord Record(string elementId = "42", TerrainIdentity? identity = null) =>
         new(elementId, identity ?? Proposed, "UID", "UID", "DOC");
 
-    private static TerrainExportPayload Payload(DateOnly retrievalDate, double secondPointX = 1d, double? coverageFloor = null)
+    private static TerrainExportPayload Payload(DateOnly retrievalDate, double secondPointX = 1d, double? coverageFloor = null, BuildingOutlineProvenance? buildingOutline = null)
     {
         HorizontalReference geographic = new("EPSG:4326", "WGS84", HorizontalReferenceKind.Geographic, HorizontalUnit.DecimalDegrees, HorizontalAxisOrder.LongitudeLatitude);
         HorizontalReference projected = new("EPSG:26915", "NAD83", HorizontalReferenceKind.Projected, HorizontalUnit.Linear(LengthUnit.Meter), HorizontalAxisOrder.EastingNorthing);
@@ -101,7 +115,11 @@ public sealed class ExistingTerrainDecisionTests
         AddressParcelProvenance addressParcel = new(retrievalDate, null, parcel);
         TerrainProvenance provenance = new(4, new ElevationSourceMetadata("Synthetic", "synthetic"), transform, vertical,
             ReferenceOrigin.Operator, ReferenceOrigin.Operator, frame, new SimplificationRequest(2, SimplificationMethod.CurvatureAware, coverageFloorFraction: coverageFloor), 2, 2,
-            new ElevationRange(10d, 11d, LengthUnit.Meter), addressParcel);
+            new ElevationRange(10d, 11d, LengthUnit.Meter), addressParcel, null, buildingOutline);
         return new TerrainExportPayload([new(new LocalCoordinate(0d, 0d, 0d)), new(new LocalCoordinate(secondPointX, 1d, 1d))], provenance);
     }
+
+    private static BuildingOutlineProvenance Outline(DateOnly retrievedDate) => new(
+        "Synthetic Provider", "test-release", "MIT", new Uri("https://example.test/license"), "Synthetic MIT license text", "Synthetic attribution",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ["023111113"], retrievedDate);
 }

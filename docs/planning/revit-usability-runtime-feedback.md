@@ -49,6 +49,10 @@ Acceptance includes keyboard/coordinate alternatives, pan/zoom/resize stability,
 
 The extension changes only terrain acquisition, support, and its outer profile. The legal property line is invariant. Automatic subdivision and hiding have not shipped: the owner's manual method remains a separate native experiment. Validate whether hiding the host preserves the subdivision, whether view-specific hiding survives save/reopen, and whether subdivision changes the retained terrain surface before exposing a one-click parcel-only display option.
 
-## Verification boundary
+## Authorized floor-reference implementation
+
+The owner subsequently authorized implementation. The [reviewed plan](prd-building-floor-reference.md) and [implementation record](../architecture/revit-building-floor-reference.md) now cover the focused Review editor, movable exterior-ground pin, required measured rise, known-floor input, provisional legal-ground median, cached terrain reuse, optional automatic Microsoft outlines and reversible floor/context provenance. Original source elevations remain an explicit alternative and retain any requested outline attribution without inventing a floor claim. Native annotation, transaction/save-reopen and human-usability acceptance remain open. Post-creation correction and automatic subdivision remain separate validation gates.
+
+## Current verification boundary
 
 Computer Use is now authorized by the owner. The Windows native helper could not connect: its pipe was unavailable after initialization and one reset/retry. No Revit GUI inspection has therefore been performed for this follow-up. Local WPF arrangement and control tests do not establish native Revit, pixel-render, accessibility, or human usability acceptance. Keep those checks open and bind any later runtime session to the signed build identity.

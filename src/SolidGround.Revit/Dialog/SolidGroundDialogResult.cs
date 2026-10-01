@@ -3,6 +3,8 @@ using SolidGround.Core.Processing;
 using SolidGround.Core.Provenance;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Settings;
+using SolidGround.Revit.Processing;
+using SolidGround.Core.Sources.BuildingOutlines;
 
 namespace SolidGround.Revit.Dialog;
 
@@ -16,4 +18,8 @@ internal sealed record SolidGroundDialogResult(
     int PointBudget,
     bool WriteSharedCoordinatesIfAbsent,
     AddressParcelProvenance? AddressParcel,
-    RevitSettings? EffectiveSettings = null);
+    RevitSettings? EffectiveSettings = null,
+    PreparedTerrainSnapshot? PreparedTerrain = null,
+    BuildingFloorReference? FloorReference = null,
+    bool EstimatedSharedCoordinatesAcknowledged = false,
+    BuildingOutlineProvenance? BuildingOutlineContext = null);

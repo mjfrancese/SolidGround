@@ -1,6 +1,6 @@
 {
   "schema": "solidground.terrain-export",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "provenance": {
     "source": {
       "sourceName": "OpenTopography",
@@ -84,7 +84,9 @@
       "maximum": 184.2,
       "unit": "Meter"
     },
-    "addressParcel": null
+    "addressParcel": null,
+    "floorReference": null,
+    "buildingOutline": null
   },
   "unitDefinitions": [
     {

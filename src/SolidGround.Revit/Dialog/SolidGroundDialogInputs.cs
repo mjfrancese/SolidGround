@@ -3,6 +3,8 @@ using SolidGround.Core.Processing;
 using SolidGround.Core.Sources;
 using SolidGround.Core.Units;
 using SolidGround.Revit.Settings;
+using SolidGround.Revit.Processing;
+using SolidGround.Core.Sources.BuildingOutlines;
 
 namespace SolidGround.Revit.Dialog;
 
@@ -42,4 +44,6 @@ internal sealed record SolidGroundDialogInputs(
     long InitialCredentialRevision = 0,
     RevitSettings? Settings = null,
     Func<RevitSettings, RevitSettings?>? EditSettings = null,
-    Func<RevitSettings, SolidGroundDialogLookupServices>? ReconfigureLookupServices = null);
+    Func<RevitSettings, SolidGroundDialogLookupServices>? ReconfigureLookupServices = null,
+    Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? PrepareTerrain = null,
+    IBuildingOutlineSource? BuildingOutlineSource = null);

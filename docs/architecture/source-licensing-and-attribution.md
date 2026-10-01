@@ -48,6 +48,7 @@ where applicable, the dialog text (see "Dialog: attribution shown once per run")
 | Source | Attribution text origin | Carried by (Core type/field) | Rendered at |
 | --- | --- | --- | --- |
 | OpenTopography USGS 1 m DEM | Fixed constant `OpenTopographyUsgs1mSource.AttributionNotice` | `ElevationSourceMetadata.Attribution` | `provenance.source.attribution`; dialog fetch-mode `TextBlock` |
+| Microsoft Global ML Building Footprints, release 2026-08-13 | Reviewed upstream CDLA Permissive 2.0 notice and release metadata; see [outline research](../research/building-outlines-and-grade-point-selection.md) | `BuildingOutlineProvenance`, independently retained as `TerrainProvenance.BuildingOutline` and optionally in the floor record | Schema-6 `provenance.buildingOutline`, native v3 `buildingOutlineJson`, and ground-preview attribution; retained even after choosing original source elevations |
 | Census Geocoder | Fixed constant `CensusGeocoder.AttributionNotice` (`src/SolidGround.Core/Sources/Census/CensusGeocoder.cs:31`) | `AddressGeocodeCandidate.Attribution` -> `GeocodeProvenance.Attribution` | `provenance.addressParcel.geocode.attribution`; dialog `geocodeAttribution` |
 | Geocodio | Wire-sourced per-candidate `source` field, no fallback constant (`src/SolidGround.Core/Sources/Geocodio/GeocodioGeocoder.cs:202-224`) | same path | same path |
 | Esri | Fixed constant `EsriGeocoder.AttributionNotice` = `"Powered by Esri"` (`src/SolidGround.Core/Sources/Esri/EsriGeocoder.cs:29`) | same path | same path |

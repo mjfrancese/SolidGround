@@ -25,6 +25,8 @@ internal sealed class SolidGroundDialog : Window
     private readonly Button _useLocationButton;
     private readonly Button _useParcelButton;
     private readonly Button _createButton;
+    private readonly Button _startFloorReferenceButton;
+    private readonly Button _floorReferenceButton;
 
     /// <summary>Actual panel and shell roots used only by the local WPF binding lane.</summary>
     internal IEnumerable<FrameworkElement> BindingRootsForTesting => _panels.Values.Append((FrameworkElement)Content);
@@ -70,6 +72,9 @@ internal sealed class SolidGroundDialog : Window
         _useLocationButton = Primary("Use this location", nameof(SolidGroundDialogViewModel.UseLocationCommand), palette, "Use selected location");
         _useParcelButton = Primary("Use this parcel", nameof(SolidGroundDialogViewModel.UseParcelCommand), palette, "Use selected parcel");
         _createButton = Primary("Create toposolid", nameof(SolidGroundDialogViewModel.CreateCommand), palette, "Create toposolid");
+        _startFloorReferenceButton = Primary("Set floor reference", nameof(SolidGroundDialogViewModel.ChangeFloorReferenceCommand), palette, "Set building floor reference");
+        _floorReferenceButton = Primary("", nameof(SolidGroundDialogViewModel.FloorReferencePrimaryCommand), palette, "Use this floor reference");
+        _floorReferenceButton.SetBinding(Button.ContentProperty, new Binding(nameof(SolidGroundDialogViewModel.FloorReferencePrimaryLabel)));
 
         Content = BuildShell(palette);
         UpdateParcelLayouts();
@@ -77,6 +82,7 @@ internal sealed class SolidGroundDialog : Window
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
         Closed += (_, _) =>
         {
+            viewModel.CancelPendingFloorPreparation();
             viewModel.CloseRequested -= OnCloseRequested;
             viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         };
@@ -223,38 +229,70 @@ internal sealed class SolidGroundDialog : Window
         return panel;
     }
 
-    private static StackPanel BuildReviewPanel(DialogPalette palette)
+    private StackPanel BuildReviewPanel(DialogPalette palette)
     {
         StackPanel panel = new();
-        panel.Children.Add(Text("Review and create", palette, FontWeights.Bold));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.SettingsSummary), palette));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.ExtensionSummary), palette));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.EstimateSummary), palette));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.SourceSummary), palette));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.LocationAttribution), palette));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.ContainmentLabel), palette));
-        panel.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.AccuracyDisclaimer), palette));
+        StackPanel details = new();
+        details.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowReviewDetails)) { Converter = BooleanToVisibilityConverter.Instance });
+        details.Children.Add(Text("Review and create", palette, FontWeights.Bold));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.SettingsSummary), palette));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.ExtensionSummary), palette));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.EstimateSummary), palette));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.SourceSummary), palette));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.LocationAttribution), palette));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.ContainmentLabel), palette));
+        details.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.AccuracyDisclaimer), palette));
         TextBlock budgetWarning = BoundText(nameof(SolidGroundDialogViewModel.NativePointBudgetWarning), palette);
         budgetWarning.Foreground = palette.Error;
         budgetWarning.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.NativePointBudgetWarning)) { Converter = TextPresenceVisibilityConverter.Instance });
-        panel.Children.Add(budgetWarning);
+        details.Children.Add(budgetWarning);
         Button portal = Secondary("Request OpenTopography access", null, palette, "Open OpenTopography access portal");
         portal.ToolTip = "Opens OpenTopography in your default browser to request or manage access. SolidGround does not send your settings.";
         portal.Click += (_, _) => OpenExternal("https://portal.opentopography.org/");
-        panel.Children.Add(portal);
+        details.Children.Add(portal);
 
         ComboBox level = new() { DisplayMemberPath = "Name", Margin = new Thickness(0, 8, 0, 0) };
         level.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.LevelCandidates)));
         level.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedLevel)) { Mode = BindingMode.TwoWay });
-        AutomationProperties.SetName(level, "Level"); panel.Children.Add(Field("Level", level, palette));
+        AutomationProperties.SetName(level, "Level"); details.Children.Add(Field("Level", level, palette));
         ComboBox type = new() { DisplayMemberPath = "Name", Margin = new Thickness(0, 8, 0, 0) };
         type.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(SolidGroundDialogViewModel.ToposolidTypeCandidates)));
         type.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(SolidGroundDialogViewModel.SelectedToposolidType)) { Mode = BindingMode.TwoWay });
-        AutomationProperties.SetName(type, "Toposolid type"); panel.Children.Add(Field("Toposolid type", type, palette));
+        AutomationProperties.SetName(type, "Toposolid type"); details.Children.Add(Field("Toposolid type", type, palette));
         CheckBox shared = new() { Content = "Write shared coordinates if none exist", Margin = new Thickness(0, 12, 0, 0) };
         shared.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(SolidGroundDialogViewModel.WriteSharedCoordinatesIfAbsent)) { Mode = BindingMode.TwoWay });
-        AutomationProperties.SetName(shared, "Write shared coordinates if none exist"); panel.Children.Add(shared);
-        panel.Children.Add(Text("SolidGround is a site-form tool, not a survey instrument.", palette));
+        shared.SetBinding(IsEnabledProperty, new Binding(nameof(SolidGroundDialogViewModel.CanWriteSharedCoordinates)));
+        AutomationProperties.SetName(shared, "Write shared coordinates if none exist"); details.Children.Add(shared);
+        CheckBox estimatedAcknowledgement = new()
+        {
+            Content = "I understand this shared-coordinate mapping is estimated.",
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+        estimatedAcknowledgement.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(SolidGroundDialogViewModel.EstimatedSharedCoordinatesAcknowledged)) { Mode = BindingMode.TwoWay });
+        estimatedAcknowledgement.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.RequiresEstimatedSharedCoordinatesAcknowledgement)) { Converter = BooleanToVisibilityConverter.Instance });
+        AutomationProperties.SetName(estimatedAcknowledgement, "Acknowledge estimated shared-coordinate mapping");
+        details.Children.Add(estimatedAcknowledgement);
+        details.Children.Add(Text("SolidGround is a site-form tool, not a survey instrument.", palette));
+        panel.Children.Add(details);
+
+        if (_viewModel.FloorReferenceTask is { } floorTask)
+        {
+            StackPanel card = new() { Margin = new Thickness(0, 12, 0, 0) };
+            card.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.ShowFloorReferenceSummary)) { Converter = BooleanToVisibilityConverter.Instance });
+            card.Children.Add(Text("Building floor reference", palette, FontWeights.SemiBold));
+            card.Children.Add(BoundText(nameof(SolidGroundDialogViewModel.FloorReferenceSummary), palette));
+            Button change = Secondary("Change", nameof(SolidGroundDialogViewModel.ChangeFloorReferenceCommand), palette, "Change building floor reference");
+            card.Children.Add(change);
+            panel.Children.Add(card);
+
+            BuildingFloorReferencePanel editor = new(floorTask, palette);
+            editor.SetBinding(VisibilityProperty, new Binding(nameof(SolidGroundDialogViewModel.IsEditingFloorReference))
+            {
+                Source = _viewModel,
+                Converter = BooleanToVisibilityConverter.Instance,
+            });
+            panel.Children.Add(editor);
+        }
         return panel;
     }
 
@@ -263,7 +301,7 @@ internal sealed class SolidGroundDialog : Window
         Button cancel = Secondary("Cancel", nameof(SolidGroundDialogViewModel.CancelCommand), palette, "Cancel"); cancel.IsCancel = true;
         Button back = Secondary("Back", nameof(SolidGroundDialogViewModel.BackCommand), palette, "Back");
         StackPanel right = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        right.Children.Add(_findButton); right.Children.Add(_useLocationButton); right.Children.Add(_useParcelButton); right.Children.Add(_createButton);
+        right.Children.Add(_findButton); right.Children.Add(_useLocationButton); right.Children.Add(_useParcelButton); right.Children.Add(_createButton); right.Children.Add(_startFloorReferenceButton); right.Children.Add(_floorReferenceButton);
         DockPanel footer = new() { Height = 64, Margin = new Thickness(24, 8, 24, 8), LastChildFill = false };
         DockPanel.SetDock(cancel, Dock.Left); DockPanel.SetDock(back, Dock.Left); DockPanel.SetDock(right, Dock.Right);
         footer.Children.Add(cancel); footer.Children.Add(back); footer.Children.Add(right);
@@ -310,11 +348,15 @@ internal sealed class SolidGroundDialog : Window
         _findButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Location ? Visibility.Visible : Visibility.Collapsed;
         _useLocationButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Parcel && _viewModel.HasMultipleLocations ? Visibility.Visible : Visibility.Collapsed;
         _useParcelButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Parcel && !_viewModel.HasMultipleLocations ? Visibility.Visible : Visibility.Collapsed;
-        _createButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Review ? Visibility.Visible : Visibility.Collapsed;
+        _createButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Review && !_viewModel.IsEditingFloorReference && !_viewModel.NeedsFloorReferenceConfirmation ? Visibility.Visible : Visibility.Collapsed;
+        _startFloorReferenceButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Review && !_viewModel.IsEditingFloorReference && _viewModel.NeedsFloorReferenceConfirmation ? Visibility.Visible : Visibility.Collapsed;
+        _floorReferenceButton.Visibility = _viewModel.CurrentStep == SolidGroundDialogStep.Review && _viewModel.IsEditingFloorReference ? Visibility.Visible : Visibility.Collapsed;
         _findButton.IsDefault = _findButton.Visibility == Visibility.Visible;
         _useLocationButton.IsDefault = _useLocationButton.Visibility == Visibility.Visible;
         _useParcelButton.IsDefault = _useParcelButton.Visibility == Visibility.Visible;
         _createButton.IsDefault = _createButton.Visibility == Visibility.Visible;
+        _startFloorReferenceButton.IsDefault = _startFloorReferenceButton.Visibility == Visibility.Visible;
+        _floorReferenceButton.IsDefault = _floorReferenceButton.Visibility == Visibility.Visible;
     }
 
     private static StackPanel Field(string caption, Control control, DialogPalette palette)

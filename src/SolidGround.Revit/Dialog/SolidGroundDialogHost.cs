@@ -14,6 +14,8 @@ using SolidGround.Revit.Diagnostics;
 using SolidGround.Revit.Elements;
 using SolidGround.Revit.Settings;
 using SolidGround.Revit.Transactions;
+using SolidGround.Revit.Processing;
+using SolidGround.Core.Sources.BuildingOutlines;
 
 namespace SolidGround.Revit.Dialog;
 
@@ -38,7 +40,8 @@ internal static class SolidGroundDialogHost
     /// commits to a "the caller already reads this once" contract.
     /// </summary>
     internal static SolidGroundDialogResult? ShowModal(
-        ExternalCommandData commandData, Document document, RevitSettings settings, double vertexToleranceInternal)
+        ExternalCommandData commandData, Document document, RevitSettings settings, double vertexToleranceInternal,
+        Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? prepareTerrain = null)
     {
         ArgumentNullException.ThrowIfNull(commandData);
         ArgumentNullException.ThrowIfNull(document);
@@ -50,6 +53,7 @@ internal static class SolidGroundDialogHost
         // Each lookup applies its snapshot's configured timeout through a linked CancellationTokenSource.
         // Keep the shared client unbounded so a Settings edit can change that timeout before the next lookup.
         using HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
+        using HttpClient outlineClient = MicrosoftGlobalMlBuildingOutlineSource.CreateHttpClient();
         (RevitIniToposolidThresholds.Thresholds thresholds, string revitIniPath) = ReadRevitIniThresholds(commandData);
         DialogPalette palette = DialogTheme.Resolve(UIThemeManager.CurrentTheme, SystemParameters.HighContrast);
 
@@ -62,7 +66,9 @@ internal static class SolidGroundDialogHost
             SharedCoordinatesDetector.LooksAlreadyCoordinated(document, vertexToleranceInternal),
             thresholds,
             revitIniPath,
-            current => RevitSettingsIo.Edit(dialogOwner, current, palette));
+            current => RevitSettingsIo.Edit(dialogOwner, current, palette),
+            prepareTerrain,
+            new MicrosoftGlobalMlBuildingOutlineSource(outlineClient));
 
         SolidGroundDialogViewModel viewModel = new(inputs);
         // Revit theme access remains in the Revit-only host. The palette-injected dialog constructor is kept
@@ -92,7 +98,9 @@ internal static class SolidGroundDialogHost
         bool documentAlreadyHasSharedCoordinates,
         RevitIniToposolidThresholds.Thresholds thresholds,
         string revitIniPath,
-        Func<RevitSettings, RevitSettings?> editSettings)
+        Func<RevitSettings, RevitSettings?> editSettings,
+        Func<SolidGroundDialogResult, CancellationToken, Task<PreparedTerrainSnapshot>>? prepareTerrain,
+        IBuildingOutlineSource? buildingOutlineSource)
     {
         SolidGroundDialogLookupServices initialServices = BuildLookupServices(settings, httpClient);
         return new SolidGroundDialogInputs(
@@ -116,7 +124,9 @@ internal static class SolidGroundDialogHost
             InitialCredentialRevision: initialServices.CredentialRevision,
             Settings: settings,
             EditSettings: editSettings,
-            ReconfigureLookupServices: updated => BuildLookupServices(updated, httpClient));
+            ReconfigureLookupServices: updated => BuildLookupServices(updated, httpClient),
+            PrepareTerrain: prepareTerrain,
+            BuildingOutlineSource: buildingOutlineSource);
     }
 
     /// <summary>
